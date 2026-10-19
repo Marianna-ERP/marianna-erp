@@ -110,7 +110,15 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         const inMove = { id: deps.nextId(), date, type: "IN", qtyKg: qty, fromId, toId: fromId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — direct flow (ownership at handover)` };
         const soLineGrade = gradeOfGoodsForLot(sh, lot);   // v6.99.22 (G-2): the movement records WHICH GRADE left the lot
       const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, grade: soLineGrade, fromId, toId: destIdFinal, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — client collection / direct pass-through` };
-        return { ...lot, receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000, physicalKg: currentPhysical, status: "Delivered (direct)", arrivalDate: lot.arrivalDate || date, movements: [...(lot.movements || []), inMove, outMove] };
+        // v7.27.6 (FZ-31): a groupage truck taking one direct lot for SEVERAL sales posts one SHIP_OUT per sale (its goods row's kilos,
+        // scaled to the client's reported kilos when there is one) — as the stock branch has done since v6.99.100 — so each sale's
+        // shipped kilos (revenue, the producer's statement, claims) name the right order; a lot for one sale posts exactly as before
+        const perSaleD = relatedGoods.filter((g: any) => num(g.qtyKg) > 0 && g.soRef);
+        const loadedD = perSaleD.reduce((a: number, g: any) => a + num(g.qtyKg), 0);
+        const outMoves = new Set(perSaleD.map((g: any) => String(g.soRef))).size > 1 && loadedD > 0
+          ? perSaleD.map((g: any) => ({ ...outMove, id: deps.nextId(), qtyKg: Math.round(num(g.qtyKg) * (qty / loadedD) * 1000) / 1000, grade: g.quality || soLineGrade, soRef: String(g.soRef), note: `SHIP_OUT via ${sh.number} for ${g.soRef} — client collection / direct pass-through` }))
+          : [outMove];
+        return { ...lot, receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000, physicalKg: currentPhysical, status: "Delivered (direct)", arrivalDate: lot.arrivalDate || date, movements: [...(lot.movements || []), inMove, ...outMoves] };
       }
       const nextPhysical = Math.max(0, currentPhysical - qty);
       // v6.30.1 (Safeguards 7a parity): the movement reducer accumulates and the
@@ -169,6 +177,12 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       const soRef = goodsSoRef || (sh.soRefs || [])[0] || (String(sh.governingSoRef || "").trim() || null);
       const inMove = { id: deps.nextId(), date, type: "IN", qtyKg: qty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — direct flow (ownership at handover)` };
       const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, grade: gradeOfGoodsForLot(sh, lot), fromId: destId, toId: destId, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — direct pass-through to client` };
+      // v7.27.6 (FZ-31): one SHIP_OUT per sale on a groupage truck, as on the outbound branch
+      const perSaleI = (sh.goods || []).filter((g: any) => g.lotRef === lot.number && num(g.qtyKg) > 0 && g.soRef);
+      const loadedI = perSaleI.reduce((a: number, g: any) => a + num(g.qtyKg), 0);
+      const outMovesI = new Set(perSaleI.map((g: any) => String(g.soRef))).size > 1 && loadedI > 0
+        ? perSaleI.map((g: any) => ({ ...outMove, id: deps.nextId(), qtyKg: Math.round(num(g.qtyKg) * (qty / loadedI) * 1000) / 1000, grade: g.quality || outMove.grade, soRef: String(g.soRef), note: `SHIP_OUT via ${sh.number} for ${g.soRef} — direct pass-through to client` }))
+        : [outMove];
       return {
         ...lot,
         baseLocationId: baseAnchor,
@@ -177,7 +191,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         locationId: destId,
         status: "Delivered (direct)",
         arrivalDate: sh.actualDeliveryDate || lot.arrivalDate || date,
-        movements: [...(lot.movements || []), inMove, outMove],
+        movements: [...(lot.movements || []), inMove, ...outMovesI],
       };
     }
     if (notYetReceived) {
@@ -275,7 +289,7 @@ export function buildCollectionShipment(so: any, lots: any[], shipments: any[], 
   const firstLot = goods.length ? (lots || []).find(l => l.number === goods[0].lotRef) : null;
   return {
     id: deps.nextId(),
-    number: nextShipmentNumberPure(shipments, year),
+    number: (info && info.number) || nextShipmentNumberPure(shipments, year),   // v7.27.8 (A-W5): the counter's number when the caller took one
     transportOrderNo: "",
     mode: "Client pickup",
     purpose: "OUTBOUND",

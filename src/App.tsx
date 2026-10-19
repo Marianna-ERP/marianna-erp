@@ -55,6 +55,7 @@ import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
 import { shapingSetter, shapeWritten } from "./storeShapes";   // v7.24.3 (FZ-01 step 2): a save writes the clean shape
 import { withLiveCompanies } from "./counterparty.domain";   // v7.25.0 (A-RV-13 / FZ-02)
+import { ScreenBoundary } from "./ErrorBoundary";   // v7.26.2 (A-UI-3)
 
 // Batch 5: migrate older-version stored data forward BEFORE any hook reads it
 // (module scope — runs before the App component's hooks read the stores).
@@ -551,7 +552,7 @@ export default function App() {
         </div>
       )}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <DocNavContext.Provider value={docNav}>{renderActive()}</DocNavContext.Provider>
+        <DocNavContext.Provider value={docNav}><ScreenBoundary screen={activeModule}>{renderActive()}</ScreenBoundary></DocNavContext.Provider>   {/* v7.26.2 (A-UI-3): one screen's error never blocks the others */}
       </div>
     </div>
   );

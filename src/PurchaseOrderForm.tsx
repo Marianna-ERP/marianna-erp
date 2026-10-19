@@ -9,12 +9,12 @@ import { cnCodeForItem } from "./productCatalog";
 import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES, copyPOLine } from "./po.domain";
 import { documentTotals, totalsLine, effectiveCounts } from "./pricingUnit.domain";
 import { isEstimatedLine } from "./so.domain";
-import { localTodayISO } from "./dates";
+import { localTodayISO , formatDMY } from "./dates";
 import { nextId } from "./ids";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
 import { readCountries } from "./Contacts";
 import { recordAudit } from "./audit";
-import { warehouseAddressLocations, unifiedLocations, locationById, counterpartyLocations } from "./locations";
+import { warehouseAddressLocations, unifiedLocations, locationById, counterpartyLocations, placeGroup } from "./locations";
 import { CURRENCIES, FlowBadge, Inp, PO_STATUSES, QUALITY_GRADES, SUPPLIERS, Sel, StatusBadge, fmtMoney, fmtNum, netTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
 import { nbpRateBefore, orderBufferPct, orderRateFrom } from "./fx";   // v7.13.4 (A-AU-2)
 import { parseNum } from "./numbers";
@@ -110,11 +110,11 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
     }
     sf("status", newStatus);
   };
-  const WAREHOUSE_ADDRESS = ((unifiedLocations(contacts || []).find((l: any) => ["WAREHOUSE", "OWN"].includes(String(l.legacyType))) || {}) as any).address || (warehouseAddressLocations(contacts || [])[0] || {}).name || "";
+  const WAREHOUSE_ADDRESS = ((unifiedLocations(contacts || []).find((l: any) => placeGroup(l) === "OWN") || {}) as any).address || (warehouseAddressLocations(contacts || [])[0] || {}).name || "";
   const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const copyItem = (idx) => setOrder(o => ({ ...o, items: copyPOLine(o.items, idx, nextId()) }));   // v6.99.77 (A-POL-1)
-  const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
+  const sSupplier = (id) => sf("supplier", suppliers.find(s => String(s.id) === String(id)) || null);   // v7.27.1 (FZ-24): chosen by id — two companies of one name never swap
 
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
@@ -194,9 +194,9 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
               </div>
               <div>
                 <Lbl>Supplier</Lbl>
-                <Sel disabled={isLocked} value={order.supplier?.name || ""} onChange={e => sSupplier(e.target.value)}>
+                <Sel disabled={isLocked} value={order.supplier?.id != null ? String(order.supplier.id) : ""} onChange={e => sSupplier(e.target.value)}>
                   <option value="">— select —</option>
-                  {suppliers.map(s => <option key={s.id} value={s.name}>{s.name} {s.country ? `· ${s.country}` : ""} {s.nip ? `(NIP ${s.nip})` : ""}</option>)}
+                  {suppliers.map(s => <option key={s.id} value={String(s.id)}>{s.name} {s.country ? `· ${s.country}` : ""} {s.nip ? `(NIP ${s.nip})` : ""}</option>)}
                 </Sel>
               </div>
               <div>
@@ -358,7 +358,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                 <Lbl>FX rate to PLN {isLocked && <span style={{ color: "#888", fontWeight: 400 }}>(locked)</span>}</Lbl>
                 <Inp type="number" value={order.fxRate ?? ""} onChange={() => {}} disabled title="NBP of the day before the order date, with the safety buffer — filled automatically (A-AU-2)" />
                 {!isLocked && String(order.currency || "PLN").toUpperCase() !== "PLN" && <div data-fx-order="1" style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{fxNoteO} {order.fxAgreedReason ? <button onClick={() => setOrder((o: any) => ({ ...o, fxAgreedReason: "" }))} style={{ fontSize: 10, border: "none", background: "none", color: "#2563EB", cursor: "pointer" }}>use NBP</button> : <button onClick={agreeRate} style={{ fontSize: 10, border: "none", background: "none", color: "#2563EB", cursor: "pointer" }}>agreed rate…</button>}</div>}
-                {order.fxLockedAt && <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>Locked on {order.fxLockedAt}</div>}
+                {order.fxLockedAt && <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>Locked on {formatDMY(order.fxLockedAt)}</div>}
               </div>
             </div>
           </Card>

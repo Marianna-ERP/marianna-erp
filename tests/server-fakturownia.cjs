@@ -71,5 +71,15 @@ const fkt = () => calls.filter(c => /fakturownia\.pl/.test(c.url));
     const src = ["fakturownia.ts", "invoicing.ts", "Invoices.tsx", "Settings.tsx", "SalesOrders.tsx"].map(f => fs.readFileSync(path.resolve("./src/" + f), "utf8")).join("\n");
     ok(!/apiToken:|\.apiToken|fktToken|paste API token/.test(src), "the browser code still handles a token");   // only the clean-up of an old one names it ok(!/fakturowniaBase\(/.test(src), "the browser still calls Fakturownia directly");
   });
+  await t("A-INV-2 (v7.26.6): an invoice's PDF is read with the server's token and handed back as a PDF — only for a numeric Fakturownia id; the token never comes back; the browser asks through the server part", async () => {
+    setEnv({ ...SUPA, FAKTUROWNIA_API_TOKEN: "SECRET", FAKTUROWNIA_SUBDOMAIN: "acme", REACT_APP_ENV_LABEL: "TEST" }); calls.length = 0;
+    mockFetch((u, i) => session(u, i) || { ok: true, status: 200, arrayBuffer: async () => Buffer.from("%PDF-1.4 test"), text: async () => "%PDF-1.4 test" });
+    const r = await run({ query: { op: "pdf", id: "1234" }, headers: { authorization: "Bearer good" } });
+    eq(r.status, 200); eq(r.headers["content-type"], "application/pdf"); ok(/%PDF/.test(r.raw), "not the PDF"); ok(!/SECRET/.test(r.raw), "the token came back");
+    const u = new URL(fkt()[0].url); eq(u.origin + u.pathname, "https://acme.fakturownia.pl/invoices/1234.pdf"); eq(u.searchParams.get("api_token"), "SECRET");
+    const bad = await run({ query: { op: "pdf", id: "1234/../clients" }, headers: { authorization: "Bearer good" } }); eq(bad.status, 400);
+    const anon = await run({ query: { op: "pdf", id: "1234" }, headers: {} }); eq(anon.status, 401);
+  });
+
   console.log(`SERVER PART: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);
 })();

@@ -22,11 +22,12 @@ import { renameCatalogItem } from "./productCatalog";
 import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
 import { DEFAULT_SEASON, seasonsPresent, currentSeason, docSeason, sliceSeason, removeSeason, appendArchive, STORE_KIND } from "./season.domain";
 import { recordAudit } from "./audit";
-import { localTodayISO } from "./dates";
+import { localTodayISO , formatDMY } from "./dates";
 import { packagingUsers, catalogUsers, namedList, softDeleteCatalogItem, restoreCatalogItem, softDeleteVariety, catalogValueUsers, softDeleteCatalogValue, valuesInUse } from "./masterData.domain";   // v7.17.1 (A-RV-07) · v7.18.3 (A-AU-5)
 import { parseNum } from "./numbers";
 import { typedPackagingSpellings } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { readCountries } from "./Contacts";   // v7.19.6 (A-TD-5): the company's country from the one country list
+import { counterInstalled } from "./numbering";   // v7.27.8 (A-W5)
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -285,7 +286,7 @@ function ManageCard({ title, summary, buttonLabel, onManage }: any) {
 // panel maintains that table; shipments derive gross from it.
 export function PackagingPanel({ types, setTypes, refStores = {}, onLinkSpelling = null }: any) {   // v7.18.0: exported for the screen check   // v7.17.1: refStores — who uses a packaging type
   const { confirm: pkConfirm, alert: pkAlert, dialogNode: pkNode } = useConfirm(); // P2-6
-  const blank = { id: "", label: "", capacityKg: "", tareKg: "", boxesPerPallet: "", palletTareKg: "", appliesTo: "" };
+  const blank = { id: "", label: "", capacityKg: "", tareKg: "", boxesPerPallet: "", palletTareKg: "", palletType: "", appliesTo: "" };
   const [form, setForm] = React.useState<any>(blank);
   const list = types || [];
   // v7.18.0 (A-AU-1, owner 9 Oct): the spellings typed on order lines before the picker — each linked to its type ONCE.
@@ -313,11 +314,11 @@ export function PackagingPanel({ types, setTypes, refStores = {}, onLinkSpelling
     if (!(tare >= 0)) { await pkAlert({ tone: "warn", title: "Tare required", message: "How much does the empty unit weigh?" }); return; }
     const id = String(form.id || "").trim() || label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const appliesTo = String(form.appliesTo || "").split(",").map((x: string) => x.trim()).filter(Boolean);
-    const next = [...list.filter((t: any) => t.id !== id), { id, label, capacityKg: cap, tareKg: tare, boxesPerPallet: parseFloat(form.boxesPerPallet) || 0, palletTareKg: parseFloat(form.palletTareKg) || 0, appliesTo }];
+    const next = [...list.filter((t: any) => t.id !== id), { id, label, capacityKg: cap, tareKg: tare, boxesPerPallet: parseFloat(form.boxesPerPallet) || 0, palletTareKg: parseFloat(form.palletTareKg) || 0, ...(form.palletType ? { palletType: form.palletType } : {}), appliesTo }];   // v7.27.9 (FZ-29): the pallet
     setTypes(next); setForm(blank);
     recordAudit({ module: "Settings", docType: "Packaging", docNumber: label, action: "updated", summary: `Packaging type "${label}" saved — ${cap} kg per box, tare ${tare} kg` });   // v7.17.4 (A-RV-12)
   };
-  const edit = (t: any) => setForm({ id: t.id, label: t.label, capacityKg: t.capacityKg, tareKg: t.tareKg, boxesPerPallet: t.boxesPerPallet ?? "", palletTareKg: t.palletTareKg ?? "", appliesTo: (t.appliesTo || []).join(", ") });
+  const edit = (t: any) => setForm({ id: t.id, label: t.label, capacityKg: t.capacityKg, tareKg: t.tareKg, boxesPerPallet: t.boxesPerPallet ?? "", palletTareKg: t.palletTareKg ?? "", palletType: t.palletType || "", appliesTo: (t.appliesTo || []).join(", ") });
   const del = async (t: any) => {
     // v7.17.1 (A-RV-07): blocked while a document uses it (box-priced POs take their kilos from it) — the documents named;
     // otherwise marked Deleted: kept on record, struck through, out of every packaging list (App passes the live ones)
@@ -356,7 +357,7 @@ export function PackagingPanel({ types, setTypes, refStores = {}, onLinkSpelling
               <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.palletTareKg || "—"}</td>
               <td style={{ padding: "7px 9px", color: "#64748B" }}>{(t.appliesTo || []).join(", ") || "—"}</td>
               <td style={{ padding: "7px 9px", textAlign: "right", whiteSpace: "nowrap" }}>
-                {t.deleted ? <span style={{ fontSize: 11, color: "#9CA3AF" }}>Deleted {t.deletedAt || ""}</span> : <><SmallButton onClick={() => edit(t)}>Edit</SmallButton>{" "}
+                {t.deleted ? <span style={{ fontSize: 11, color: "#9CA3AF" }}>Deleted {formatDMY(t.deletedAt) || ""}</span> : <><SmallButton onClick={() => edit(t)}>Edit</SmallButton>{" "}
                 <SmallButton kind="red" onClick={() => del(t)}>Delete</SmallButton></>}
               </td>
             </tr>
@@ -384,6 +385,7 @@ export function PackagingPanel({ types, setTypes, refStores = {}, onLinkSpelling
           <div><Lbl>Holds (kg)</Lbl><input type="number" value={form.capacityKg} onChange={e => sf("capacityKg", e.target.value)} placeholder="13" style={INP} /></div>
           <div><Lbl>Empty (kg)</Lbl><input type="number" value={form.tareKg} onChange={e => sf("tareKg", e.target.value)} placeholder="1.4" style={INP} /></div>
           <div><Lbl>Boxes / pallet</Lbl><input type="number" value={form.boxesPerPallet} onChange={e => sf("boxesPerPallet", e.target.value)} placeholder="72" style={INP} /></div>
+          <div><Lbl>Pallet</Lbl><select value={form.palletType || ""} onChange={e => sf("palletType", e.target.value)} style={INP} title="v7.27.9 (FZ-29): the pallet these boxes go on — a truck's pallet type is read from it"><option value="">— not set —</option><option value="standard">Standard · 26 per truck</option><option value="euro">Euro · 33 per truck</option></select></div>
           <div><Lbl>Pallet (kg)</Lbl><input type="number" value={form.palletTareKg} onChange={e => sf("palletTareKg", e.target.value)} placeholder="25" style={INP} /></div>
           <div><Lbl>Applies to (comma separated)</Lbl><input value={form.appliesTo} onChange={e => sf("appliesTo", e.target.value)} placeholder="Apples, Pears" style={INP} /></div>
           <div style={{ display: "flex", gap: 6 }}>
@@ -403,6 +405,13 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
   const cnSaved: any = (catalog || []).reduce((o: any, c: any) => { o[c.item] = c.defaultCnCode || ""; return o; }, {});
   const { draft: cnDraft, setDraft: setCnDraft, bar: cnBar } = useSectionDraft(cnSaved, (next: any) => setCatalog((cat: any) =>
     Object.keys(next || {}).reduce((acc: any, item: string) => String(next[item] ?? "") !== String(cnSaved[item] ?? "") ? setCatalogCnCode(acc, item, String(next[item] ?? "")) : acc, cat || [])), "catalog-cn", "CN codes");
+  // v7.27.9 (FZ-29, RM-2 F-5): each item's travel range, typed in a draft and saved with its own Save — shipments read it
+  const tSaved: any = (catalog || []).reduce((o: any, c: any) => { o[c.item] = `${c.temperatureMinC ?? ""}|${c.temperatureMaxC ?? ""}`; return o; }, {});
+  const { draft: tDraft, setDraft: setTDraft, bar: tBar } = useSectionDraft(tSaved, (next: any) => setCatalog((cat: any) => (cat || []).map((c: any) => {
+  const v = next?.[c.item]; if (v == null || String(v) === String(tSaved[c.item])) return c;
+  const [lo, hi] = String(v).split("|"); const n = (x: string) => (String(x ?? "").trim() === "" ? undefined : parseNum(x));
+  const out: any = { ...c, temperatureMinC: n(lo), temperatureMaxC: n(hi) }; if (out.temperatureMinC === undefined) delete out.temperatureMinC; if (out.temperatureMaxC === undefined) delete out.temperatureMaxC; return out;
+  })), "catalog-temp", "Temperatures");
   const { confirm: pcConfirm, alert: pcAlert, dialogNode: pcNode , prompt: uiPrompt } = useConfirm(); // P2-6
   const [newItem, setNewItem] = useState("");
   const [vDraft, setVDraft] = useState<Record<string, string>>({});
@@ -531,6 +540,8 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
           <div key={c.item} style={{ padding: "12px 14px", borderBottom: "1px solid #F5F5F5" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{c.item} <span style={{ fontSize: 11, fontWeight: 400, color: "#AAA" }}>· {c.varieties.length} {c.varieties.length === 1 ? "variety" : "varieties"}</span></div>
+              {(() => { const cur = String((tDraft || {})[c.item] ?? tSaved[c.item] ?? "|").split("|"); const put = (k: 0 | 1, v: string) => setTDraft((d: any) => { const now = String((d || {})[c.item] ?? tSaved[c.item] ?? "|").split("|"); now[k] = v; return { ...(d || {}), [c.item]: now.join("|") }; });
+                return <span title="v7.27.9 (FZ-29): the range this item travels at — every shipment carrying it reads it" style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 11, color: "#64748B" }}>°C<input type="number" value={cur[0]} onChange={e => put(0, e.target.value)} placeholder="min" style={{ width: 52, border: "1px solid #E5E7EB", borderRadius: 6, padding: "3px 5px", fontSize: 11 }} />–<input type="number" value={cur[1]} onChange={e => put(1, e.target.value)} placeholder="max" style={{ width: 52, border: "1px solid #E5E7EB", borderRadius: 6, padding: "3px 5px", fontSize: 11 }} /></span>; })()}
               <input value={(cnDraft || {})[c.item] ?? (c.defaultCnCode || "")} onChange={e => { const v = e.target.value; setCnDraft((d: any) => ({ ...(d || {}), [c.item]: v })); }} placeholder="CN/HS" title="Default CN/HS customs code for this item — auto-fills new PO lines. v6.99.3: suggestions from the built-in produce table (chapter 07/08); you confirm." list="cn-suggest" style={{ ...inp, padding: "3px 8px", fontSize: 12, width: 90, marginRight: 8 }} />
               {/* v7.21.6 (owner ruling A-RV-15: connect what is built and tested): an item with no CN code is offered the built-in table's suggestion — one click fills the draft, Save keeps it */}
               {!String((cnDraft || {})[c.item] ?? (c.defaultCnCode || "")).trim() && (() => { const s = suggestCN(c.item, (c.varieties || [])[0])[0]; return s ? <button data-cn-suggest={s.code} onClick={() => setCnDraft((d: any) => ({ ...(d || {}), [c.item]: s.code }))} title={`${s.description} — a suggestion from the built-in table: check it, then Save`} style={{ border: "1px dashed #93C5FD", color: "#1D4ED8", background: "#EFF6FF", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600, marginRight: 6, fontFamily: "inherit" }}>Suggested: {s.code}</button> : null; })()}
@@ -560,6 +571,7 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
       </div>
       {deletedItems.length > 0 && <div data-deleted-items="1" style={{ marginTop: 10, fontSize: 12, color: "#9CA3AF" }}>Deleted: {deletedItems.map((c: any) => <span key={c.item} style={{ textDecoration: "line-through", marginRight: 10 }}>{c.item}</span>)}</div>}{/* v7.17.1 (A-RV-07) */}
       {cnBar}{/* v7.16.11 (A-RV-04): Save / Discard for the CN codes */}
+      {tBar}{/* v7.27.9 (FZ-29): Save / Discard for the temperatures */}
     </Card>
   );
 }
@@ -743,6 +755,13 @@ function CompanyPanel({ company: savedCompany = {}, setCompany: saveCompany = nu
   );
 }
 // ── v6.99.3 (SE-3): NUMBERING — prefixes per document type; the DDL replaces the year-scan with sequences ──
+// v7.27.8 (A-W5): whether this copy's database has the shared counter — the numbers come from it only when it is installed
+function CounterStatus() {
+  const [st, setSt] = React.useState<boolean | null | undefined>(undefined);
+  React.useEffect(() => { let off = false; counterInstalled().then(v => { if (!off) setSt(v); }); return () => { off = true; }; }, []);
+  const txt = st === undefined ? "Checking the shared counter…" : st === null ? "This copy runs without the shared database — numbers are the highest in use + 1." : st ? "✓ The shared counter is installed — every new number comes from the database." : "The shared counter is not installed in this copy's database — run supabase/numbering.sql in Supabase (see HOW_TO_DEPLOY.md); until then numbers are the highest in use + 1.";
+  return <div style={{ fontSize: 11, marginBottom: 8, color: st ? "#166534" : st === false ? "#92400E" : "#64748B" }}>{txt}</div>;
+}
 function NumberingPanel({ numbering: savedNumbering = {}, setNumbering: saveNumbering = null }: any) {
   const { draft: numbering, setDraft: setNumbering, bar } = useSectionDraft(savedNumbering, saveNumbering, "numbering", "Numbering");   // v7.2.1
   if (typeof saveNumbering !== "function") return null;
@@ -750,7 +769,8 @@ function NumberingPanel({ numbering: savedNumbering = {}, setNumbering: saveNumb
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🔢 Numbering</div>
-      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Prefix per document type — numbers are PREFIX-YYYY-NNNN, sequence resets each year. Existing documents keep their numbers. On Supabase the sequence is issued by the database (no collisions across browsers).</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Numbers are PREFIX-YYYY-NNNN and start again each year; existing documents keep their numbers. Each new number is taken from the shared counter in the database, so two browsers never give out the same one. The prefixes below are not yet used by the numbers (they keep the built-in ones).</div>
+      <CounterStatus />
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>{kinds.map(([k, label]) => <label key={k} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{label}<input value={numbering?.[k] ?? k} onChange={e => setNumbering((prev: any) => ({ ...(prev || {}), [k]: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || k }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 70, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }} /></label>)}</div>
       {bar}{/* v7.2.1 (A-SET-1) */}
     </div>

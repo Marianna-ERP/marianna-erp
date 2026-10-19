@@ -65,7 +65,10 @@ export interface CatalogItem {
   colorations?: string[];
   deletedCalibres?: string[];
   deletedColorations?: string[];
-}
+  /** v7.27.9 (FZ-29, RM-2 F-5): the range the item travels at — a shipment's temperature is read from its goods' items. */
+  temperatureMinC?: number;
+  temperatureMaxC?: number;
+  }
 
 // ── Purchase Orders ──────────────────────────────────────────────────────────
 export interface POLine {

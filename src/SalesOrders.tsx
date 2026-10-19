@@ -28,6 +28,8 @@ import { companyProfile } from "./useLocalStoredState";
 import { OrderForm } from "./SalesOrderForm";
 import { InvoiceCreationModal, OrderDetail } from "./SalesOrderDetail";
 import { SODoc } from "./SalesOrderDocument";
+import { exportNotesForSale, isFromPoland } from "./invoiceNotes.domain";   // v7.26.4 (A-INV-4)
+import { issueNumber } from "./numbering";   // v7.27.8 (A-W5)
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 export const COMPANY: any = companyProfile();   // v6.99.67 (A-AUD-1): the company block comes from Settings (defaults = the former literal)
@@ -39,16 +41,8 @@ const LOGO_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAlgAAADQCAI
 // ─── CLIENTS STUB ─────────────────────────────────────────────────────────
 // Same pattern as PO's getSuppliersStub — to be replaced when integrated with Contacts.tsx
 // (which exports getCounterpartiesByType(counterparties, "Client")).
-function getClientsStub() {
-  return [
-    { id: 1, name: "Biedronka",          country: "Poland",  nip: "7792308495", address: "ul. Polska 1, Poznań",       contact: "zakupy@biedronka.pl" },
-    { id: 2, name: "Lidl Polska",        country: "Poland",  nip: "6272685925", address: "ul. Logistyczna 5, Chorzów", contact: "zakupy@lidl.pl" },
-    { id: 3, name: "Metro Cash & Carry", country: "Poland",  nip: "5210088510", address: "ul. Aleja Krakowska 61, Warszawa", contact: "fresh@metro.pl" },
-    { id: 4, name: "Fresco Import GmbH", country: "Germany", nip: "DE234567890", address: "Hafenstrasse 12, Hamburg",  contact: "einkauf@fresco-import.de" },
-    { id: 5, name: '"Euro-Papryka" Paweł Myziak', country: "Poland", nip: "7981158890", address: "Tarczyn, ul. Warszawska 12", contact: "biuro@europapryka.pl" },
-  ];
-}
-export const CLIENTS = getClientsStub();
+
+export const CLIENTS: any[] = [];   // v7.27.12 (A-RV-39): no company is written into the code — the forms read the directory
 
 function primaryContactValue(counterparty) {
   const contacts = counterparty.contacts || [];
@@ -907,6 +901,8 @@ function SalesOrdersScreen({ archive = null,
     }
 
     // Duplicate number guard
+    // v7.27.8 (A-W5): a NEW order takes its number from the shared counter when it is saved — the form showed a provisional one
+    if (o.id == null) { const yr = parseInt(String(o.orderDate || localTodayISO()).slice(0, 4), 10) || new Date().getFullYear(); o = { ...o, number: await issueNumber("SO", yr, (orders || []).map((x: any) => x.number)) }; }
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
     if (dup) { await uiAlert({ tone: "warn", title: "Duplicate SO number", message: `SO number ${o.number} already exists.` }); return; }
     // v6.3.0: import-document duplicate guard. Import permits and ACID numbers are
@@ -1009,7 +1005,7 @@ function SalesOrdersScreen({ archive = null,
   // v6.36.2 (P3): client claim recorded FROM THE SO — appends a CLAIM movement to the
   // sourced lot (stock untouched; those kg already left) and drafts an outgoing credit
   // note, exactly like the Inventory quality-flow path.
-  function saveClientClaim() {
+  async function saveClientClaim() {   // v7.27.8 (A-W5): async — the claim number comes from the counter
     const soDoc = clientClaimFor; if (!soDoc) return;
     const lotsAll = extInvLots || [];
     const lot = lotsAll.find((l: any) => String(l.id) === String(cc.lotId));
@@ -1022,10 +1018,11 @@ function SalesOrdersScreen({ archive = null,
     // v6.48.0 (Phase 1): a client claim is now a numbered DOCUMENT, not just a
     // movement. Previously it had no number, no status and nothing to cite in
     // correspondence — half the claim population was invisible as documents.
+    const clmNo = await issueNumber("CLM", new Date(localTodayISO()).getFullYear() || new Date().getFullYear(), (extClaims || []).map((x: any) => x.number));   // v7.27.8 (A-W5)
     if (typeof extSetClaims === "function") {
       extSetClaims((prev: any[]) => {
         const list = prev || [];
-        const number = nextClaimNumber(list, new Date(today).getFullYear() || 2026);
+        const number = clmNo || nextClaimNumber(list, new Date(today).getFullYear() || 2026);
         return [...list, {
           ...blankClaim(),
           id: nextId(), number,
@@ -1062,7 +1059,8 @@ function SalesOrdersScreen({ archive = null,
 
   async function recordCollection(info) {
     if (!extSetShipments) { await uiAlert({ tone: "warn", title: "Unavailable", message: "Shipments store not available." }); return; }
-    const built = buildCollectionShipment(collectionFor, extInvLots || [], extShipments, info, { todayISO: domainToday, nextId });
+    const number = await issueNumber("SHP", new Date().getFullYear(), (extShipments || []).map((x: any) => x.number));   // v7.27.8 (A-W5)
+    const built = buildCollectionShipment(collectionFor, extInvLots || [], extShipments, { ...info, number }, { todayISO: domainToday, nextId });
     if (!built.goods.length) { await uiAlert({ tone: "warn", title: "Nothing to collect", message: "No sourced lines found — source the SO lines from stock or a PO first, then record the collection." }); return; }
     extSetShipments(prev => [built, ...(prev || [])]);
     setOrders(prev => prev.map(o => o.id === collectionFor.id ? { ...o, linkedShipments: Array.from(new Set([...(o.linkedShipments || []), built.number])) } : o));
@@ -1094,7 +1092,10 @@ function SalesOrdersScreen({ archive = null,
   // advances to Invoiced.
   function confirmInvoiceCreation(draft) {
     const targetId = invoiceOrder.id;
-    const canonical = salesInvoiceFromSODraft(invoiceOrder, draft);
+    // v7.26.4 (A-INV-4): the invoice's notes filled from the sale, its shipments and lots (editable in Invoices before it is issued)
+    const notes = exportNotesForSale(invoiceOrder, { shipments: sd.shipments, lots: sd.rawLots && sd.rawLots.length ? sd.rawLots : sd.lots, deliveryPlace: destinationDisplay(invoiceOrder),
+    fromPoland: isFromPoland(invoiceOrder, sd.shipments, (id: any, custom: any) => String((locationById(id, sd.contacts) as any)?.country || custom?.country || "")) });
+    const canonical = { ...salesInvoiceFromSODraft(invoiceOrder, draft), invoiceNotes: notes };
     setInvoices((prev: any[]) => [...(prev || []), canonical]);
     // #4: issuing the invoice advances the SO to "Invoiced" (from Shipped/Delivered).
     // Closed stays Closed; earlier stages aren't forced forward.

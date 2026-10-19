@@ -1,4 +1,5 @@
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22): the second exported reader is gone — one reader for every number
+import { placeGroup } from "./locations";   // v7.27.3 (FZ-26)
 // ─────────────────────────────────────────────────────────────────────────────
 // inventory.domain.ts — pure inventory engine (Consolidation Batch 1)
 //
@@ -11,7 +12,7 @@ import { parseNum } from "./numbers";   // v7.22.2 (FZ-22): the second exported 
 
 export { parseNum };
 
-export interface LocResolved { type?: string; legacyType?: string; [k: string]: any }
+export interface LocResolved { type?: string; placeType?: string; [k: string]: any }   // v7.27.3 (FZ-26): no old place code
 export type LocByIdFn = (id: any) => LocResolved | null | undefined;
 
 /**
@@ -60,16 +61,17 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
     }
   });
   const loc = locById ? locById(locationId) : null;
-  const legacyLocType = (loc as any)?.legacyType || loc?.type;
+  // v7.27.3 (FZ-26): the place's group from its TYPE (placeType where a screen shows the group in type) — never the old code
   // v7.21.14 (A-RV-37 · FZ-05): "Customs" only at a port, a port warehouse or an airport — by the place's TYPE (a place of type Other
   // also carries the old word "PORT"); the real type is placeType where a screen replaced type with the old word
   const realType = String((loc as any)?.placeType ?? loc?.type ?? "");
-  const atPort = ["Port", "PortWarehouse", "Airport", "PORT"].includes(realType);
+  const atPort = ["Port", "PortWarehouse", "Airport"].includes(realType);
+  const group = placeGroup({ type: realType });
   if (sawShipOut && physicalKg === 0) status = "Shipped Out";
   else if (sawIn || physicalKg > 0) {
-    if (legacyLocType === "OWN") status = "In Stock";
+    if (group === "OWN") status = "In Stock";
     else if (atPort) status = "Customs";
-    else if (legacyLocType === "CLIENT") status = "Shipped Out";
+    else if (group === "CLIENT") status = "Shipped Out";
     else status = "In Transit";
   } else if (ordered.length === 0 && lot.expectedKg) {
     status = "Expected";

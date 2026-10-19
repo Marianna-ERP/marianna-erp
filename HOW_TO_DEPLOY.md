@@ -117,6 +117,24 @@ removed from it the first time that browser opens the new version.
 
 ---
 
+## One-time database step — the shared numbering counter (v7.27.8)
+
+From v7.27.8 every new PO, SO, shipment, lot, claim, loading protocol and settlement takes its number from one
+counter in the database, so two browsers can never give out the same number. The counter has to be installed
+ONCE in each Supabase project the app uses — first TEST, then the real copy. It is safe to run again.
+
+1. Open supabase.com → your project (TEST first) → **SQL Editor** → **New query**.
+2. Open the file **supabase/numbering.sql** from this zip, copy all of it, paste it into the editor.
+3. Click **Run**. It should say "Success. No rows returned".
+4. In the app (that copy), open **Settings → Numbering**: it should say
+   "✓ The shared counter is installed — every new number comes from the database."
+5. Create one test document on TEST (a draft PO is enough) and check its number follows the last one.
+6. Repeat steps 1–4 on the real copy's project.
+
+Nothing has to be migrated: the first time a document type is numbered in a year, the counter starts above the
+highest number the app already holds. Until the script is installed, the app keeps numbering as before (the
+highest in use + 1) and Settings → Numbering says the counter is not installed.
+
 ## Why this zip already works (so you don't doubt it)
 
 This package includes the three things that previously caused build failures —

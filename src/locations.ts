@@ -7,13 +7,13 @@ const formatAddressOneLine = (a: any) => _fmtAddr(a, { oneLine: true });
 // Single source of truth for all location lookups across PurchaseOrders,
 // SalesOrders, Inventory and Shipments. Replaces the four separate per-module
 // LOCATIONS arrays that had drifted (different spellings) and conflicted
-// (id 8/10 both Biedronka, Shipments had an "(SO/PO id)" workaround).
+// (ids 8/10 were one demo place, Shipments had an "(SO/PO id)" workaround).
 //
 // Option B approach (per decision): we KEEP all existing IDs so no seed data
 // reference needs to change. We only:
 //   1. unify spelling (proper Polish diacritics everywhere)
 //   2. keep both alias IDs pointing at the same real place
-//      (id 8 == id 10 == Biedronka DC Poznań; id 9 == id 11 == Lidl DC Chorzów)
+//      (id 8 == id 10 and id 9 == id 11: the first version's demo client places)
 //   3. add the `type` taxonomy and capability flags for future journey work (V6)
 //
 // A future V6 can renumber to a fully clean scheme; for now this fixes the
@@ -46,6 +46,11 @@ export interface Location {
 }
 
 // Helper to keep the table compact
+
+// v6.86.0 (owner ruling): the built-in list is REFERENCE DATA = PORTS ONLY. The demo
+// warehouses / supplier / client / broker sites that used to sit here appeared in some
+// pickers and not others. Any still referenced by stored documents is migrated into the
+// user's custom locations on load (migrateReferencedSeeds); the rest disappear.
 function L(id: number, type: LocationType, legacyType: string, name: string, country: string, address?: string, aliasOf?: number): Location {
   return { id, type, legacyType, name, country, address, aliasOf };
 }
@@ -54,35 +59,26 @@ function L(id: number, type: LocationType, legacyType: string, name: string, cou
 // warehouses / supplier / client / broker sites that used to sit here appeared in some
 // pickers and not others. Any still referenced by stored documents is migrated into the
 // user's custom locations on load (migrateReferencedSeeds); the rest disappear.
+// v7.27.17 (A-RV-39 · SC-14, owner 19 Oct: "remove now"): the producers', clients' and brokers' places are gone from the code —
+// real partners' names and addresses, and the first version's test places.
+// Your real copy and TEST hold their own copy of every place they use; only public places stay here (ports, cargo airports) and
+// our own warehouses, until the places table of the database step (FZ-04).
 const BUILTIN_ALL: Location[] = [
   // ── Our storage (rented today; will include OwnWarehouse when Marianna opens one) ──
   L(1, "RentedWarehouse", "OWN", "WH-01 Poznań (Logipark)", "Poland", "Poznań / Logipark"),
   L(2, "RentedWarehouse", "OWN", "WH-02 Warszawa (ColdStore)", "Poland", "Warszawa cold storage"),
 
   // ── Supplier facilities ──
-  L(3, "SupplierFacility", "SUPPLIER", "Białski Owoc — Biała Rawska", "Poland", "Wojska Polskiego 6F, 96-230 Biała Rawska"),
-  L(4, "SupplierFacility", "SUPPLIER", "FreshFarm ES — Valencia", "Spain", "Valencia, Spain"),
-  L(5, "SupplierFacility", "SUPPLIER", "AgriTrade MA — Agadir", "Morocco", "Agadir, Morocco"),
 
   // ── Ports (base set) ──
   L(6, "Port", "PORT", "Gdańsk Port", "Poland", "Gdańsk port"),
   L(7, "Port", "PORT", "Hamburg Port", "Germany", "Hamburg port"),
 
   // ── Client facilities (base set) ──
-  // NOTE: id 8 and id 10 are the SAME place (Biedronka). v5.8 had both because
   // different modules referenced different ids. We keep both as aliases so no
   // seed reference breaks; id 10 is the canonical one.
-  L(8, "ClientFacility", "CLIENT", "Biedronka DC Poznań", "Poland", "ul. Górecka 1, 60-201 Poznań", 10),
-  L(9, "ClientFacility", "CLIENT", "Lidl DC Chorzów", "Poland", "Chorzów", 11),
-  L(10, "ClientFacility", "CLIENT", "Biedronka DC Poznań", "Poland", "ul. Górecka 1, 60-201 Poznań"),
-  L(11, "ClientFacility", "CLIENT", "Lidl DC Chorzów", "Poland", "Chorzów"),
-  L(12, "ClientFacility", "CLIENT", "Fresco Hamburg", "Germany", "Hamburg"),
-  L(13, "ClientFacility", "CLIENT", "Metro DC Warszawa", "Poland", "Warszawa"),
-  L(14, "ClientFacility", "CLIENT", "Euro-Papryka Tarczyn", "Poland", "Tarczyn / Wola Przypkowska"),
 
   // ── Additional clients / mixed (from Shipments) ──
-  L(21, "ClientFacility", "CLIENT", "Venice Cold Stores & Logistics SRL", "Italy", "Via Banchina dell'Azoto 17/B, 30175 Marghera"),
-  L(22, "Customs", "BROKER", "AM sped s.c. — Słomczyn", "Poland", "Słomczyn 81, 05-600 Grójec"),
   L(23, "Port", "PORT", "Agadir / Casablanca port area", "Morocco", "Morocco port warehouse"),
 
   // ── Expanded port list (v5.8 added these consistently; IDs preserved) ──
@@ -151,6 +147,21 @@ export const CUSTOM_LOCATION_ID_BASE = 10000;
 // to the live app and to exports). Fixed: address the current version, and adopt
 // the v1 store ONE TIME below (it was the de-facto authoritative store until now).
 const CUSTOM_LOCATIONS_KEY = dataKey("customLocations");
+
+/** v7.27.3 (FZ-26 — owner rulings A-RV-37 and FZ-21: a place is read from its TYPE, no old word kept readable): the group a screen
+ *  shows a place under — our warehouse, a supplier's or a client's site, a port (with port warehouses and cargo airports), customs —
+ *  worked out from the type. The stored legacyType is written for old copies only and read by nothing outside this file. */
+export type PlaceGroup = "OWN" | "SUPPLIER" | "CLIENT" | "PORT" | "BROKER" | "OTHER";
+export function placeGroup(l: any): PlaceGroup {
+  switch (String(l?.placeType || l?.type || "")) {   // placeType: where a screen keeps the real type beside the group
+  case "OwnWarehouse": case "RentedWarehouse": return "OWN";
+    case "SupplierFacility": return "SUPPLIER";
+    case "ClientFacility": return "CLIENT";
+    case "Port": case "PortWarehouse": case "Airport": return "PORT";
+    case "Customs": return "BROKER";
+    default: return "OTHER";
+  }
+}
 
 // Options offered in the Settings UI → mapped to (type, legacyType) pairs.
 export const CUSTOM_LOCATION_TYPE_OPTIONS: { key: LocationType; label: string; legacyType: string }[] = [
@@ -568,7 +579,7 @@ export const PORT_TYPES = ["Port", "PortWarehouse"];
 export function placeTypeOf(l: any): string { return String(l?.placeType ?? l?.type ?? ""); }
 export function isPortType(l: any, opts: { airports?: boolean } = {}): boolean {
   if (!l) return false; const t = placeTypeOf(l);
-  return PORT_TYPES.includes(t) || t === "PORT" || (!!opts.airports && t === "Airport");
+  return PORT_TYPES.includes(t) || (!!opts.airports && t === "Airport");   // v7.27.3 (FZ-26): the type only — the old word "PORT" no longer makes a port
 }
 export function unifiedLocations(contacts: any[] = []): Location[] {
   const byId = new Map<string, Location>();

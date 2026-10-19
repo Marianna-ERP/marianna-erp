@@ -1,6 +1,6 @@
 // ShipmentCreate.tsx — v6.99.68 (A-AUD-2, owner): moved out of Shipments.tsx unchanged; the module's shared helpers are imported from it.
 import React, { useState } from "react";
-import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
+import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection , salesOfPO, posOfSale } from "./tradeFlow.domain";
 import { SmallButton, ActionButton, useConfirm } from "./ui";
 import { isCancelled } from "./cancellation.domain";
 import { formatDMY, localTodayISO } from "./dates";
@@ -12,6 +12,8 @@ import { placeForPrint } from "./locations";
 import { catalogItems } from "./productCatalog";   // v7.18.4 (A-AU-9)
 import { Card, HEADER_MODES, Inp, Lbl, SectionTitle, Sel, buildManualShipment, buildShipmentFromPO, buildShipmentFromSO, countryOfLocation, fmtNum, locById, locText, mergedLocations, modeChangePatch, parseNum, todayISO } from "./Shipments";
 import { overReceiptCheck, receiptWarningText } from "./receipts.domain";   // v7.11.0 (A-RV-23)
+import { issueNumber } from "./numbering";   // v7.27.8 (A-W5)
+import { applyDerivedTravel } from "./shipmentDerived.domain";   // v7.27.9 (FZ-29)
 
 export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel, onCreate, productCatalog = [] }: any) {
   const { alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's   // v7.18.4: + productCatalog
@@ -139,14 +141,14 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
   // when the reference changes (in-between dates are set per leg later).
   React.useEffect(() => {
     if (sourceType === "PO" && selectedPO) {
-      const linkedSO = (orders || []).find((o: any) => (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selectedPO.number));
+      const linkedSO = salesOfPO(selectedPO, orders || [], lots || [], { includeDrafts: true })[0];   // v7.27.0 (FZ-23): through the PO's lots
       setForm(prev => ({
         ...prev,
         loadingDate: selectedPO.loadingDate || prev.loadingDate,
         expectedDeliveryDate: (linkedSO && (linkedSO.expectedDeliveryDate || linkedSO.deliveryDate)) || selectedPO.expectedDeliveryDate || prev.expectedDeliveryDate,   // v6.99.59 (A-OW-2)
       }));
     } else if (sourceType === "SO" && selectedSO) {
-      const linkedPO = (pos || []).find((p: any) => (selectedSO.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === p.number));
+      const linkedPO = posOfSale(selectedSO, pos || [], lots || [])[0];   // v7.27.0 (FZ-23): through the lots the sale's lines name
       setForm(prev => ({
         ...prev,
         loadingDate: selectedSO.expectedLoadingDate || (linkedPO && (linkedPO.expectedDeliveryDate || linkedPO.loadingDate)) || prev.loadingDate,   // v6.99.59 (A-OW-2): the SO's expected loading, else where its PO delivers
@@ -182,8 +184,7 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
       // ask which SO/client this truck is for (mirrors the physical split at the
       // port) rather than silently attributing the wrong one — direction depends
       // on it. One SO → use it. None → unsold portion to our warehouse.
-      const linkedSOList = (orders || [])
-        .filter(o => o.status !== "Cancelled" && (o.items || []).some(it => it.sourceType === "PO" && it.sourceRef === selectedPO.number));
+      const linkedSOList = salesOfPO(selectedPO, orders || [], lots || [], { includeDrafts: true });   // v7.27.0 (FZ-23): the sales of the PO's lots — the choice works again
       if (linkedSOList.length > 1 && !governingSoRef && !isDRule) {   // v7.19.2: the supplier's truck delivers to the PO's named place — no sale governs it
         setGoverningSoPrompt({ po: selectedPO, sos: linkedSOList });
         return; // wait for the pick; the picker calls create(chosenRef) to resume
@@ -192,10 +193,12 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
         ? linkedSOList.find(o => o.number === governingSoRef)
         : (governingSoRef === "__none__" ? null : (linkedSOList[0] || null));
       const soRefs = governing ? [governing.number] : [];
-      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds, lineQtys }, shipments, lots, governing, contacts);
+      const number = await issueNumber("SHP", new Date().getFullYear(), (shipments || []).map((x: any) => x.number));   // v7.27.8 (A-W5)
+      sh = buildShipmentFromPO(selectedPO, { ...form, number, soRefs, governingSoRef: governing?.number || "", selectedItemIds, lineQtys }, shipments, lots, governing, contacts);
     }
-    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, selectedItemIds, lineQtys, governingSoRef: selectedSO.number }, shipments, lots, contacts); // v6.82.0 (Round 6): the chosen SO IS the governing sale
-    else sh = buildManualShipment(form, shipments);
+    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, number: await issueNumber("SHP", new Date().getFullYear(), (shipments || []).map((x: any) => x.number)), selectedItemIds, lineQtys, governingSoRef: selectedSO.number }, shipments, lots, contacts); // v6.82.0 (Round 6): the chosen SO IS the governing sale
+    else sh = buildManualShipment({ ...form, number: await issueNumber("SHP", new Date().getFullYear(), (shipments || []).map((x: any) => x.number)) }, shipments);   // v7.27.8 (A-W5)
+    sh = applyDerivedTravel(sh, { catalog: productCatalog, packagingTypes: [], contacts });   // v7.27.9 (FZ-29, RM-2 F-5): from the catalogue and the carrier
     // v7.19.2 (A-INC-1, 3/5): a DAP / DPU / DDP purchase comes on the supplier's truck — no carrier, freight or transport order of ours
     if (isDRule && sh) sh = asSuppliersTruck(sh, selectedPO);
     // v6.99.94 (A-GR-2): a groupage takes every ticked order's goods; no single governing order — each goods row keeps its own SO / PO / lot

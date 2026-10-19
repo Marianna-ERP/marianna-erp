@@ -26,6 +26,7 @@ import { resolveFxRate } from "./fx";   // v6.99.133 (AUD-36): one FX fallback �
 import { nextId } from "./ids";
 import { localTodayISO } from "./dates";
 import { defaultFxRate } from "./fx";
+import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6)
 
 export const IMPORT_TAGS = ["GOODS", "FREIGHT", "CUSTOMS", "WAREHOUSE", "OVERHEAD", "SKIP"] as const;
 export type ImportTag = typeof IMPORT_TAGS[number];
@@ -201,11 +202,20 @@ export function suggestForRow(row: StagedRow, contacts: any[], shipments: any[],
   return { tag: "OVERHEAD", contactId: c?.id, reason: c ? "no operational match — overhead" : "unknown seller — overhead" };
 }
 
-/** Build the register COST invoice for a posted row (money recomputed by the caller). */
+/** v7.26.0 (A-INV-1): the VAT rate an invoice's two amounts say, precise enough that net + VAT gives back its gross to the grosz
+*  (a rate rounded to whole percent turned 1 234,56 into 1 230,00); 0 when either amount is missing. */
+export function vatRateOf(net: any, gross: any): number {
+const a = num(net), b = num(gross); if (!a || !b) return 0;
+return Math.round(((b / a) - 1) * 100 * 1e6) / 1e6;
+}
+
+/** Build the register COST invoice for a posted row (money recomputed by the caller).
+*  v7.26.0 (A-INV-1): the net is never taken for the gross (nor the other way round) — a row missing one is posted only when the
+*  user ticks it, and carries amountsIncomplete so the data checks name it. */
 export function buildCostInvoice(row: StagedRow, tag: ImportTag, link: { shipmentNumber?: string; poNumber?: string }, contact: any | null): any {
-  const net = row.net || row.gross;
-  const gross = row.gross || row.net;
-  const vatRate = net > 0 && gross > net ? Math.round(((gross / net) - 1) * 100) : 0;
+const incomplete = !num(row.net) || !num(row.gross);
+const net = num(row.net) || num(row.gross);
+const vatRate = vatRateOf(row.net, row.gross);
   const links: any[] = [];
   if ((tag === "FREIGHT" || tag === "CUSTOMS") && link.shipmentNumber) links.push({ type: "Shipment", number: link.shipmentNumber });
   if (tag === "GOODS" && link.poNumber) links.push({ type: "PO", number: link.poNumber });
@@ -213,13 +223,13 @@ export function buildCostInvoice(row: StagedRow, tag: ImportTag, link: { shipmen
     id: nextId(),
     kind: "COST",
     category: (tag === "FREIGHT" ? "FREIGHT" : tag === "CUSTOMS" ? "CUSTOMS" : tag === "WAREHOUSE" ? "WAREHOUSE" : tag === "GOODS" ? "PURCHASE" : "OTHER") as any,   // v6.99.120 (AUD-18): the tag names the category
-    costScope: tag === "FREIGHT" || tag === "CUSTOMS" ? "SHIPMENT" : tag === "OVERHEAD" ? "OVERHEAD" : undefined,
+    costScope: scopeOf(tag === "FREIGHT" ? "FREIGHT" : tag === "CUSTOMS" ? "CUSTOMS" : tag === "WAREHOUSE" ? "WAREHOUSE" : tag === "GOODS" ? "PURCHASE" : "OTHER"),   // v7.26.1 (A-INV-6)
     number: row.number,
     counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller },
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "",
     paymentMethod: "Transfer",
     currency: row.currency, fxRate: resolveFxRate(row.fxRate, row.currency),
-    netAmount: net, vatRate,
+    netAmount: net, vatRate, ...(incomplete ? { amountsIncomplete: true } : {}),
     positions: [], links,
     paymentStatus: "Issued", paidAmount: 0,   // v6.99.120 (AUD-18, owner rule 11): a received invoice, open until the BANK clears it — Fakturownia's paid flag is never read
     notes: `Imported from Fakturownia${row.description ? ` — ${row.description}` : ""}`,
@@ -243,7 +253,8 @@ export function applyReceivedCostLine(sh: any, costLineId: any, invoiceNumber: s
 
 /** Operational-cost row for an OVERHEAD-tagged invoice (parity with the old import). */
 export function operationalCostFromRow(row: StagedRow, category: string): any {
-  const amount = row.net || row.gross;
+const amount = row.net || row.gross;   // the cost itself stays the net, as before (Finance's figures do not move)
+const vatRate = vatRateOf(row.net, row.gross);   // v7.26.0 (A-INV-1): the register invoice made from it keeps its VAT
   const fx = resolveFxRate(row.fxRate, row.currency);
   return {
     id: nextId(),
@@ -251,7 +262,7 @@ export function operationalCostFromRow(row: StagedRow, category: string): any {
     date: row.date || localTodayISO(),
     category, description: row.description || `${row.seller} ${row.number}`.trim(),
     supplierName: row.seller, invoiceNo: row.number,
-    amount, currency: row.currency, fxRate: fx,
+    amount, currency: row.currency, fxRate: fx, vatRate,
     amountPLN: Math.round(amount * fx * 100) / 100,
     costCenter: "general", allocationMethod: "by_revenue",
     status: "Received", notes: "Imported from Fakturownia (Invoices)",
@@ -373,4 +384,56 @@ export function learnFromRegister(row: { seller: string; sellerTaxNo?: string; n
   const recurring = sameSeller.length >= 2 && amt > 0 && lastAmt > 0 && Math.abs(amt - lastAmt) / lastAmt <= 0.10;
   const cat = String(last.category || ""); const tag = TAG_FROM_CATEGORY[cat];
   return { tag, category: cat || undefined, operationalCategory: last.operationalCategory || last.costCategory || undefined, warehouseId: cat === "WAREHOUSE" ? (last.warehouseId ?? last.counterparty?.id) : undefined, allocationPeriod: cat === "WAREHOUSE" && last.allocation ? "month" : undefined, recurring, from: `${last.number} (${String(last.issueDate || "").slice(0, 10)})${multiRole ? " · by content" : ""}` };
+}
+
+/** v7.26.0 (A-INV-1): an invoice already registered through the old overhead path (an operational cost turned into an invoice) carried
+ *  no VAT — its gross showed its net. Re-importing its month offers the correction: the rate Fakturownia's amounts say. A zero rate
+ *  that Fakturownia confirms is marked checked. Nothing else about the invoice changes. */
+export function vatFixFor(row: StagedRow, invoices: any[]): { invoiceId: any; opCostId: string; vatRate: number; confirmZero: boolean } | null {
+  if (!num(row.net) || !num(row.gross)) return null;
+  const inv = (invoices || []).find((i: any) => i && i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim() === String(row.number || "").trim());
+  if (!inv || !String(inv.source || "").startsWith("migrated:opCost:") || num(inv.vatRate) > 0 || inv.vatChecked) return null;
+  const rate = vatRateOf(row.net, row.gross);
+  return { invoiceId: inv.id, opCostId: String(inv.source).slice("migrated:opCost:".length), vatRate: rate, confirmZero: rate === 0 };
+}
+
+// ── v7.26.3 (A-INV-3, owner 17 Oct): SALES INVOICES ISSUED IN FAKTUROWNIA BELONG TO THEIR SO ───────────────────────────────────
+// While the team still issues some sales invoices in Fakturownia, each comes into the register linked to its SO, so the SO reads as
+// invoiced and is never invoiced twice. Its rate is the one printed on it (FZ-06: the invoice locks its rate); when Fakturownia sends
+// none, the register's NBP rule (the day before the issue date) fills it, as for every foreign invoice.
+export function salesRowFromMapped(m: any, idx: number): any {
+  return { key: `issued:${m.fktId ?? idx}`, number: String(m.number || ""), buyer: String(m.buyerName || ""), buyerTaxNo: String(m.buyerTaxNo || ""),
+    date: m.issueDate || m.sellDate || localTodayISO(), dueDate: m.dueDate || "", net: num(m.netTotal), gross: num(m.grossTotal),
+    currency: String(m.currency || "PLN").toUpperCase(), fxRate: num(m.exchangeRate), fktId: m.fktId, description: String(m.description || "") };
+}
+/** Already in the register (a sales invoice of the same number, not cancelled)? */
+export function isRegisteredSale(number: string, invoices: any[]): boolean {
+  const n = String(number || "").trim(); return !!n && (invoices || []).some((i: any) => i && i.kind === "SALES" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim() === n);
+}
+/** The SOs an issued invoice may belong to — of its client (by tax number), not yet invoiced; the SO named in the invoice first,
+ *  then the closest in amount. */
+export function soCandidatesForSale(row: any, orders: any[], invoices: any[], contacts: any[]): { companyId: any; list: Array<{ number: string; label: string }> } {
+  const company = contactForSeller({ seller: row.buyer, sellerTaxNo: row.buyerTaxNo }, contacts, { byName: false });
+  const invoiced = new Set<string>(); (invoices || []).forEach((i: any) => { if (i && i.kind === "SALES" && i.paymentStatus !== "Cancelled") (i.links || []).forEach((l: any) => { if (l && l.type === "SO") invoiced.add(String(l.number)); }); });
+  const text = `${row.description || ""} ${row.number || ""}`;
+  const net = (o: any) => (o.items || []).reduce((a: number, it: any) => a + num(it.qty) * num(it.unitPrice), 0);
+  const list = (orders || []).filter((o: any) => o && !/Cancelled|Draft/.test(String(o.status || "")) && !invoiced.has(String(o.number)) && (company ? String(o.client?.id) === String(company.id) : norm(o.client?.name) === norm(row.buyer)))
+    .map((o: any) => ({ o, named: text.includes(String(o.number)), gap: String(o.currency || "PLN").toUpperCase() === row.currency ? Math.abs(net(o) - num(row.net)) : Infinity }))
+    .sort((a: any, b: any) => (Number(b.named) - Number(a.named)) || (a.gap - b.gap))
+    .map((x: any) => ({ number: String(x.o.number), label: `${x.o.number}${x.named ? " · named on the invoice" : x.gap < Infinity ? ` · ${Math.round(net(x.o)).toLocaleString("pl-PL")} ${x.o.currency || "PLN"}` : ""}` }));
+  return { companyId: company ? company.id : null, list };
+}
+/** The register entry for a sales invoice issued in Fakturownia. */
+export function buildIssuedSalesInvoice(row: any, soNumber: string, contact: any | null): any {
+  const net = num(row.net) || num(row.gross); const own = num(row.fxRate) > 0 && String(row.currency).toUpperCase() !== "PLN";
+  return {
+    id: nextId(), kind: "SALES", category: "SALES", costScope: "SALES", number: row.number,
+    counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.buyer },
+    issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "", paymentMethod: "Transfer",
+    currency: row.currency, fxRate: own ? num(row.fxRate) : resolveFxRate(defaultFxRate(row.currency), row.currency), ...(own ? { fxTableDate: row.date, fxSource: "fakturownia" } : {}),
+    netAmount: net, vatRate: vatRateOf(row.net, row.gross), ...(!num(row.net) || !num(row.gross) ? { amountsIncomplete: true } : {}),
+    positions: [], links: soNumber ? [{ type: "SO", number: soNumber }] : [],
+    paymentStatus: "Issued", paidAmount: 0, notes: `Issued in Fakturownia${row.description ? ` — ${row.description}` : ""}`,
+    attachment: null, allocation: null, fakturownia: { exported: true, fktId: row.fktId ?? null }, source: "fakturownia-issued", createdAt: localTodayISO(),
+  };
 }

@@ -2,7 +2,7 @@
 // A small server part of the app, run by Vercel next to the pages. The token is a hidden Vercel setting (FAKTUROWNIA_API_TOKEN,
 // with FAKTUROWNIA_SUBDOMAIN = the account's address part); no browser ever holds it. Every request must carry the caller's
 // sign-in (the Supabase session token of the shared data), checked with Supabase before anything is forwarded. Only the calls
-// the app makes are allowed: read invoices, read departments (bank accounts), test, and create an invoice — never on the TEST
+// the app makes are allowed: read invoices, read departments (bank accounts), test, read an invoice's PDF (v7.26.6), and create an invoice — never on the TEST
 // copy (REACT_APP_ENV_LABEL=TEST). Answers never contain the token.
 const GET_PATHS = { invoices: "/invoices.json", departments: "/departments.json", test: "/invoices.json" };
 const PASS_PARAMS = ["page", "per_page", "period", "date_from", "date_to", "income", "search"];
@@ -41,6 +41,14 @@ module.exports = async function handler(req, res) {
       if (!r.ok) return send(res, r.status, { error: r.status === 401 ? "Fakturownia refused the token kept in Vercel — check FAKTUROWNIA_API_TOKEN." : `Fakturownia answered HTTP ${r.status}.` });
       if (op === "test") return send(res, 200, { count: Array.isArray(data) ? data.length : 0, account: `${sub}.fakturownia.pl` });
       return send(res, 200, data);
+    }
+    // v7.26.6 (A-INV-2, owner 17 Oct): an invoice's PDF, to keep in the company's folder -- read-only, so the TEST copy may ask too
+    if (req.method === "GET" && op === "pdf") {
+      const id = String(q.id || ""); if (!/^\d{1,12}$/.test(id)) return send(res, 400, { error: "No Fakturownia invoice id." });
+      const r = await fetch(`${base}/invoices/${id}.pdf?api_token=${encodeURIComponent(token)}`, { headers: { Accept: "application/pdf" } });
+      if (!r.ok) return send(res, r.status, { error: r.status === 401 ? "Fakturownia refused the token kept in Vercel -- check FAKTUROWNIA_API_TOKEN." : `Fakturownia answered HTTP ${r.status} for the PDF.` });
+      const buf = Buffer.from(await r.arrayBuffer());
+      res.statusCode = 200; res.setHeader("Content-Type", "application/pdf"); res.setHeader("Cache-Control", "no-store"); res.end(buf); return;
     }
     if (req.method === "POST" && op === "create") {
       if (testCopy) return send(res, 403, { error: "This is the TEST copy: invoices are never created in Fakturownia from here." });

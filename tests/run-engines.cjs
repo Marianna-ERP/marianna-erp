@@ -6,7 +6,7 @@ const assert = require("assert");
 const { recomputeLotFromMovements } = require("./build/inventory.domain.js");
 const { lotReservationsForPicker, lotReservationsForStock, poLineReservations, computeLineAvailability } = require("./build/salesOrders.domain.js");
 
-const locById = id => ({ 1:{type:"OWN"}, 2:{type:"CLIENT"}, 3:{type:"PORT"} }[id] || null);
+const locById = id => ({ 1:{type:"RentedWarehouse"}, 2:{type:"ClientFacility"}, 3:{type:"Port"} }[id] || null);   // v7.27.3 (FZ-26): places carry their type
 let pass = 0, fail = 0;
 function T(name, fn){ try { fn(); pass++; console.log("  ✓ " + name); } catch(e){ fail++; console.log("  ✗ " + name + " — " + e.message); } }
 
@@ -934,7 +934,7 @@ T("A3-6: SO draft → canonical register invoice (shape + source tag + SO link)"
   const so = { number: "SO-9", currency: "EUR", client: { name: "Client X" }, items: [{ product: "Apples", qty: 1000 }] };
   const inv = salesInvoiceFromSODraft(so, { number: "FV2026/07/01", netAmount: 2000, vatRate: 5, fxRate: 4.3, currency: "EUR", issueDate: "2026-07-12" });
   assert.equal(inv.kind, "SALES");
-  assert.equal(inv.category, "SINV");
+  assert.equal(inv.category, "SALES");   // v7.26.1 (A-INV-6): one category list
   assert.equal(inv.vatAmount, 100);
   assert.equal(inv.grossAmount, 2100);
   assert.equal(inv.grossPLN, 9030);
@@ -1086,7 +1086,7 @@ const { postShipmentToLots: postRev } = require("./build/shipments.domain.js");
 const { recomputeLotFromMovements: recompRev } = require("./build/inventory.domain.js");
 console.log("── shipment cancel reverses posted movements ──");
 T("post IN → void the shipment's movements → lot back to Expected/0", () => {
-  const locByIdT = (id) => ({ id, type: "OWN", legacyType: "OWN" });
+  const locByIdT = (id) => ({ id, type: "RentedWarehouse" });   // v7.27.3 (FZ-26): a place is its type
   const lot = { number: "LOT-R", product: "Apples", expectedKg: 20000, locationId: "wh", baseLocationId: "wh", physicalKg: 0, receivedKg: 0, movements: [] };
   const sh = { number: "SHP-C", purpose: "INBOUND", legs: [{ fromLocationId: "sup", toLocationId: "wh" }], goods: [{ lotRef: "LOT-R", qtyKg: 20000 }] };
   const deps = { todayISO: () => "2026-07-10", nextId: (() => { let n = 0; return () => ++n; })() };
@@ -1191,7 +1191,7 @@ T("posting flips the matched cost line to Received + ref; duplicates detected", 
   assert.ok(FKI.isDuplicateCostInvoice("FV/77", [{ kind: "COST", number: "fv/77", paymentStatus: "Draft" }]));
   assert.ok(!FKI.isDuplicateCostInvoice("FV/78", [{ kind: "COST", number: "FV/77", paymentStatus: "Draft" }]));
 });
-T("buildCostInvoice: freight → SHIPMENT scope + Shipment link; goods → PO link, no scope", () => {
+T("buildCostInvoice: freight → SHIPMENT scope + Shipment link; goods → PO link, charged to the PO's lots (v7.26.1: the scope follows the category)", () => {
   const row = { key: "k", number: "FV/77", seller: "TransPol", date: "2026-07-01", dueDate: "2026-07-15", net: 4500, gross: 5535, currency: "PLN", fxRate: 1 };
   const f = FKI.buildCostInvoice(row, "FREIGHT", { shipmentNumber: "SHP-9" }, { id: 5, name: "TransPol" });
   assert.equal(f.kind, "COST");
@@ -1199,7 +1199,7 @@ T("buildCostInvoice: freight → SHIPMENT scope + Shipment link; goods → PO li
   assert.deepEqual(f.links, [{ type: "Shipment", number: "SHP-9" }]);
   assert.equal(f.vatRate, 23);
   const g = FKI.buildCostInvoice(row, "GOODS", { poNumber: "PO-1" }, null);
-  assert.equal(g.costScope, undefined);
+  assert.equal(g.costScope, "PURCHASE");
   assert.deepEqual(g.links, [{ type: "PO", number: "PO-1" }]);
   assert.equal(g.counterparty.name, "TransPol");
 });

@@ -9,6 +9,7 @@ import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
 import { purchaseInvoiceVariance } from "./po.domain";
 import { claimNoteMismatches } from "./claimReadiness.domain";
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { lotSellableBasis, takenBySale } from "./salesOrders.domain";   // v7.27.7 (FZ-30)
 // ─── DATA INTEGRITY CHECKER ─────────────────────────────────────────────────
 //
 // A single pure function that scans the whole dataset for structural problems —
@@ -139,7 +140,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // Sum reserving-SO demand per lot and compare to availableKg. The SO form
   // blocks this at entry, but imported/edited data can still arrive oversold.
   lots.forEach((lot: any) => {
-    const avail = num(lot.availableKg ?? lot.physicalKg ?? lot.receivedKg);
+    const avail = lotSellableBasis(lot);   // v7.27.7 (FZ-30, P-12): the sales engine's own rule — a lot not yet received is sold on its expected kilos
     let reserved = 0;
     const claimers: string[] = [];
     orders.forEach((o: any) => {
@@ -148,7 +149,9 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
       if ((shipments || []).some((s: any) => s && String(s.status) !== "Cancelled" && String(s.purpose || "").toUpperCase() !== "INBOUND" && ["Loaded", "In transit", "Delivered", "Closed"].includes(String(s.status)) && ((s.soRefs || []).includes(o.number) || (s.goods || []).some((g: any) => g.soRef === o.number)))) return;
       arr(o.items).forEach((it: any) => {
         if (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number) && norm(it.product) === norm(lot.product)) {
-          const q = num(it.qty);
+          // v7.27.7 (FZ-30): what the sale already took from the lot is no longer committed against what is left in it
+          const sameLot = arr(o.items).filter((x: any) => x && x.sourceType === "STOCK" && String(x.sourceRef) === String(lot.number)); const all = sameLot.reduce((a: number, x: any) => a + num(x.qty), 0);
+          const q = Math.max(0, num(it.qty) - (all > 0 ? takenBySale(lot, o.number) * num(it.qty) / all : 0));
           if (q > 0) { reserved += q; claimers.push(o.number); }
         }
       });
@@ -740,6 +743,13 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     const lost = (s: any) => !!s && typeof s === "object" && s.id != null && !known.has(String(s.id));
     (inp.pos || []).filter((p: any) => p && p.status !== "Cancelled" && lost(p.supplier)).forEach((p: any) => add("warning", "COMPANY_UNKNOWN", "POs", String(p.number), `${p.number}: its supplier "${p.supplier.name || "?"}" is not in Counterparties (id ${p.supplier.id}) — choose the supplier again`));
     (inp.orders || []).filter((o: any) => o && o.status !== "Cancelled" && lost(o.client)).forEach((o: any) => add("warning", "COMPANY_UNKNOWN", "SOs", String(o.number), `${o.number}: its client "${o.client.name || "?"}" is not in Counterparties (id ${o.client.id}) — choose the client again`));
+  }
+  // v7.26.0 (A-INV-1, owner 17 Oct): invoices without their VAT — the old overhead path (an operational cost turned into an invoice)
+  // registered the net as the gross; an import that got no gross or no net from Fakturownia says so. Re-importing the month corrects them.
+  {
+    const noVat = (inp.invoices || []).filter((i: any) => i && i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.source || "").startsWith("migrated:opCost:") && /Imported from Fakturownia/.test(String(i.notes || "")) && !(Number(i.vatRate) > 0) && !i.vatChecked);
+    if (noVat.length) add("warning", "INVOICE_VAT_MISSING", "Invoices", noVat.slice(0, 12).map((i: any) => String(i.number)).join(", ") + (noVat.length > 12 ? ` +${noVat.length - 12}` : ""), `${noVat.length} cost invoice(s) registered through the old overhead path carry no VAT — their gross shows their net. Re-run the Fakturownia import for their months: it corrects each one (or confirms a true 0 %).`);
+    (inp.invoices || []).filter((i: any) => i && i.amountsIncomplete && i.paymentStatus !== "Cancelled").forEach((i: any) => add("warning", "INVOICE_AMOUNTS_INCOMPLETE", "Invoices", String(i.number), `${i.number}: Fakturownia sent no net or no gross amount — check the invoice there and correct it here`));
   }
   // v7.8.0 (A-PO-REF-1): the producer's reference used on more than one PO
   duplicateSupplierRefs(inp.pos || [], inp.shipments || []).forEach(d => add("warning", "SUPPLIER_REF_DUPLICATE", "POs", d.on.join(", "), `The producer's reference "${d.ref}" is used on ${d.on.join(" and ")} — each PO needs its own.`));

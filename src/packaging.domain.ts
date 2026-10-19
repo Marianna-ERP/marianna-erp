@@ -32,7 +32,9 @@ export interface PackagingType {
    *  must include it (21 wooden pallets ≈ 525 kg — material for axle limits). */
   palletTareKg?: number;
   appliesTo?: string[];    // product items this is the default for (e.g. ["Apples"])
-}
+  /** v7.27.9 (FZ-29, RM-2 F-5): the pallet the boxes go on — a truck's pallet type is read from its goods' packaging. */
+  palletType?: "standard" | "euro";
+  }
 
 export const PACKAGING_SEED: PackagingType[] = [
   // 13 kg wooden box, 1.4 kg empty, 72 to a pallet — the real figures from the

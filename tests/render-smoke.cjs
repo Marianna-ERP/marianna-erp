@@ -236,7 +236,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     rows[2].done = "SHP-2026-0040 · JSI 4708L";
     _where = "customs import";
     const html = renderToStaticMarkup(React.createElement(CIM.CustomsImportView, { rows, setRows: () => {}, onAttach: () => {}, onClose: () => {}, onFiles: () => {}, result: "" }));
-    const want = ["Import customs files", "Release for export (CC529C)", "Exit confirmation (CC599C)", "Declaration copy (SAD)", "Not a customs file", ">Confirm<", "leave this file out", "Not placed", "No shipment carries the plates", "✓ Attached to SHP-2026-0040", "left the EU <strong>2026-05-12</strong>", "MRN <strong>26PL445010188G5KO3</strong>", ">Close<"];
+    const want = ["Import customs files", "Release for export (CC529C)", "Exit confirmation (CC599C)", "Declaration copy (SAD)", "Not a customs file", ">Confirm<", "leave this file out", "Not placed", "No shipment carries the plates", "✓ Attached to SHP-2026-0040", "left the EU <strong>12/05/2026</strong>", "MRN <strong>26PL445010188G5KO3</strong>", ">Close<"];
     want.forEach(w => { if (!html.includes(w)) bad.push("import window lacks " + JSON.stringify(w)); });
     if (!/<button[^>]*#16A34A[^>]*>Attach \d+ files?<\/button>/.test(html)) bad.push("no green Attach button");
     // 2. the editor: an Exited line shows the exit and offers Detach; the status list has the fifth status
@@ -244,13 +244,13 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     let sh = C.applyCustomsFile(mk(), 11, C.parseCustomsFile(relX), "CC529C.xml", () => 90001); sh = C.applyCustomsFile(sh, 11, C.parseCustomsFile(exitX), "CC599C.xml", () => 90002);
     _where = "shipment editor · customs line";
     const eh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: [sh], setShipments: () => {}, contacts: [], lots: [], orders: [{ number: "SO-2026-0090", client: { name: "Al Baraka For Import & Export" }, sellIncoterm: "CFR" }], pos: [], invoices, initialEdit: true, initialSelectedNumber: sh.number }));
-    [">Exited<", "left the EU 2026-05-12", "IT137103", ">Detach file<", "Import customs files"].forEach(w => { if (!eh.includes(w)) bad.push("editor lacks " + JSON.stringify(w)); });
+    [">Exited<", "left the EU 12/05/2026", "IT137103", ">Detach file<", "Import customs files"].forEach(w => { if (!eh.includes(w)) bad.push("editor lacks " + JSON.stringify(w)); });
     if (!/<button[^>]*>Detach file<\/button>/.test(eh) || !/<button[^>]*#DC2626[^>]*>Detach file<\/button>/.test(eh)) bad.push("Detach is not the white/red remove button");
     // 3. the invoice: the CUSTOMS card reads the shipment
     const Inv = require(path.resolve("./src/Invoices")).default;
     _where = "invoice detail · customs";
     const ih = renderToStaticMarkup(React.createElement(Inv, { ...common, invoices, shipments: [sh], initialSelectedNumber: "FV2026/05/1" }));
-    ["CUSTOMS", "SHP-2026-0040", "exit confirmed 2026-05-12", "MRN 26PL445010188G5KO3"].forEach(w => { if (!ih.includes(w)) bad.push("invoice detail lacks " + JSON.stringify(w)); });
+    ["CUSTOMS", "SHP-2026-0040", "exit confirmed 12/05/2026", "MRN 26PL445010188G5KO3"].forEach(w => { if (!ih.includes(w)) bad.push("invoice detail lacks " + JSON.stringify(w)); });
     const ih2 = renderToStaticMarkup(React.createElement(Inv, { ...common, invoices, shipments: [C.applyCustomsFile(mk(), 11, C.parseCustomsFile(relX), "CC529C.xml", () => 90003)], initialSelectedNumber: "FV2026/05/1" }));
     if (!ih2.includes("exit not confirmed yet")) bad.push("invoice detail: a release without exit must say so");
     if (!bad.length) { passed++; console.log("  \u2713 customs files: the import window in 5 states, the Exited line with Detach, the invoice's CUSTOMS card"); }
@@ -378,6 +378,8 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
 { try {
     const pf = FX.fixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json"); if (!pf) throw new Error("fixture missing");
     const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    // v7.27.5 (AUD-30): the settlement counts the kilos LOADED for each sale — this check describes PO-2026-0043 after its truck was loaded
+    d9.shipments = (d9.shipments || []).map(s => s.number === "SHP-2026-0036" ? { ...s, status: "Loaded", goods: (s.goods || []).map(g => ({ ...g, soRef: g.soRef || "SO-2026-0026" })) } : s);
     // v7.18.6 (A-AU-12, owner 9 Oct): an open settlement takes the NBP rate of the day before today — checked here at a known NBP rate of 4.35 (the rate this file's record had typed)
     { const tdy = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" }); const yst = new Date(Date.parse(tdy + "T12:00:00Z") - 86400000).toISOString().slice(0, 10); require(path.resolve("./src/fx")).__setNbpStore({ days: { [yst]: { EUR: 4.35 } }, covered: { [yst]: 1 } }); }
     const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [], poSettlements: d9.poSettlements, settlements: d9.poSettlements, inspections: d9.inspections || [] };
@@ -408,6 +410,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
 { try {
     const pf = FX.fixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json"); if (!pf) throw new Error("fixture missing");
     const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    d9.shipments = (d9.shipments || []).map(s => s.number === "SHP-2026-0036" ? { ...s, status: "Loaded", goods: (s.goods || []).map(g => ({ ...g, soRef: g.soRef || "SO-2026-0026" })) } : s);   // v7.27.5 (AUD-30): after loading
     // v7.18.6 (A-AU-12, owner 9 Oct): an open settlement takes the NBP rate of the day before today — checked here at a known NBP rate of 4.35 (the rate this file's record had typed)
     { const tdy = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" }); const yst = new Date(Date.parse(tdy + "T12:00:00Z") - 86400000).toISOString().slice(0, 10); require(path.resolve("./src/fx")).__setNbpStore({ days: { [yst]: { EUR: 4.35 } }, covered: { [yst]: 1 } }); }
     const po = d9.pos.find(p => p.number === "PO-2026-0043");

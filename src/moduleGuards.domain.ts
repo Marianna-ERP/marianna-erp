@@ -2,6 +2,7 @@
 import { S } from "./format";
 import { lotLoadedTwice } from "./lotView.domain";   // v7.11.5 (A-RV-28)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { takenBySale } from "./salesOrders.domain";   // v7.27.14 (A-RV-29): the shared rule
 // The same shape Purchase Orders got in v6.72.0: a very small number of hard
 // gates, more warnings that state their CONSEQUENCE, and a readiness view while
 // you work rather than a refusal at the save button.
@@ -96,7 +97,7 @@ export function shipmentWarnings(shipment: any, opts: { strict?: boolean; isExpo
  *  and the purchase order should be closed short. */
 export const LOT_AGEING_DAYS = 10;
 
-export function lotWarnings(lot: any, todayISO: string): Warning[] {
+export function lotWarnings(lot: any, todayISO: string, ctx: { orders?: any[] } = {}): Warning[] {
   const out: Warning[] = [];
   const status = S(lot?.status);
   const expected = num(lot?.expectedKg);
@@ -131,7 +132,19 @@ export function lotWarnings(lot: any, todayISO: string): Warning[] {
     const lastIn = live.filter((m: any) => S(m?.type).toUpperCase() === "IN").map((m: any) => S(m?.date)).sort().pop();
     const days = daysBetween(lastIn || "", todayISO);
     if (days != null && days > 30) {
-      out.push({ field: "ageing stock", why: `in store ${days} days and still unsold — fruit ages, and storage is charged for every one of those days` });
+    // v7.27.14 (A-RV-29): 'unsold' is checked against the sales — what the open sales still have to take from this lot
+    const open = (ctx.orders || []).filter((o: any) => o && !["Cancelled", "Draft"].includes(S(o.status)));
+    const claim = open.map((o: any) => {
+    const lines = (o.items || []).filter((it: any) => it && String(it.sourceRef) === String(lot?.number)); const qty = lines.reduce((a: number, it: any) => a + num(it.qty), 0);
+    return { no: S(o.number), kg: Math.max(0, qty - takenBySale(lot, o.number)) };
+    }).filter((x: any) => x.kg > 0);
+    const reserved = claim.reduce((a: number, x: any) => a + x.kg, 0); const free = Math.max(0, num(lot.physicalKg) - reserved);
+    const sos = claim.map((x: any) => x.no).join(", ");
+    const kg = (v: number) => Math.round(v).toLocaleString("pl-PL");
+    const why = !reserved ? `in store ${days} days and still unsold — fruit ages, and storage is charged for every one of those days`
+    : free > 0 ? `in store ${days} days — ${kg(free)} kg still unsold, ${kg(reserved)} kg reserved by ${sos} and not yet shipped — fruit ages, and storage is charged for every one of those days`
+    : `in store ${days} days — reserved by ${sos}, not yet shipped — fruit ages, and storage is charged for every one of those days`;
+    out.push({ field: "ageing stock", why });
     }
   }
   return out;
@@ -141,11 +154,11 @@ export function lotWarnings(lot: any, todayISO: string): Warning[] {
  *  ten days; received kilos 5 % or more off the order). The other two of lotWarnings (unexplained movements, ageing stock)
  *  wait for the owner (registered A-RV-24). Shown in amber: they are hints, not errors. */
 export const LOT_WARNINGS_SHOWN = ["still expected", "variance", "unexplained movements", "ageing stock"];   // v7.11.2 (A-RV-24, owner 8 Oct): all four
-export function lotWarningsShown(lot: any, todayISO: string): Warning[] {
+export function lotWarningsShown(lot: any, todayISO: string, ctx: { orders?: any[] } = {}): Warning[] {
   if (/Cancelled|Deleted/.test(S(lot?.status))) return [];
   // v7.11.5 (A-RV-28, owner 8 Oct): a lot received twice (kept as history by ruling) already says so with its +100 % badge — no ±5 % warning on top
   const twice = !!lotLoadedTwice(lot);
-  return lotWarnings(lot, todayISO).filter(w => LOT_WARNINGS_SHOWN.includes(w.field) && !(w.field === "variance" && twice));
+  return lotWarnings(lot, todayISO, ctx).filter(w => LOT_WARNINGS_SHOWN.includes(w.field) && !(w.field === "variance" && twice));
 }
 
 function daysBetween(fromISO: string, toISO: string): number | null {

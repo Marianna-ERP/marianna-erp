@@ -166,8 +166,8 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
   const si = (i, k, v) => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
   const addItem = () => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
   const removeItem = (i) => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
-  const setClient = (name) => {
-    const c = clients.find(c => c.name === name);
+  const setClient = (id) => {
+  const c = clients.find(c => String(c.id) === String(id));   // v7.27.1 (FZ-24): chosen by id — two companies of one name never swap
     // v6.99.59 (A-OW-1, owner): the party's TERMS (payment basis + days, default currency) come with it — the picker's list holds only
     // the party's identity, so they are read from the live counterparty by id. The SO keeps them as the terms agreed for this sale.
     const live: any = c ? (contacts || []).find((x: any) => String(x.id) === String(c.id)) : null;
@@ -481,9 +481,9 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               </div>
               <div>
                 <Lbl>Client</Lbl>
-                <Sel value={order.client?.name || ""} onChange={e => setClient(e.target.value)}>
+                <Sel value={order.client?.id != null ? String(order.client.id) : ""} onChange={e => setClient(e.target.value)}>
                   <option value="">— select —</option>
-                  {clients.map(c => <option key={c.id} value={c.name}>{c.name} {c.country ? `· ${c.country}` : ""} {c.nip ? `(NIP ${c.nip})` : ""}</option>)}
+                  {clients.map(c => <option key={c.id} value={String(c.id)}>{c.name} {c.country ? `· ${c.country}` : ""} {c.nip ? `(NIP ${c.nip})` : ""}</option>)}
                 </Sel>
               </div>
               <div><Lbl>Status</Lbl>
@@ -550,7 +550,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     const unsourced = (order.items || []).filter((it: any) => String(it.product || "").trim() && !(["PO", "STOCK"].includes(String(it.sourceType || "")) && String(it.sourceRef || "").trim()));
                     if (unsourced.length) { await ofAlert({ tone: "warn", title: "Every sale rests on a purchase", message: `${unsourced.length} line(s) have no source. Pick the PO line or the stock lot each line sells from — a free-typed line cannot be confirmed (owner ruling R2).` }); return; }
                     // v6.68.0 (F-3): credit control at the moment of commitment.
-                    const clientRec = (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(order.client?.name || "").trim().toLowerCase());
+                    const clientRec = (contacts || []).find((c: any) => String(c.id) === String(order.client?.id));   // v7.27.1 (FZ-24): by id
                     const limit = parseFloat(String(clientRec?.creditLimitPLN ?? "")) || 0;
                     if (limit > 0) {
                       const soPLN = (order.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) * (parseFloat(String(it.unitPrice)) || 0)), 0) * (parseFloat(String(order.fxRate)) || 1);
@@ -728,7 +728,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               <div><Lbl>FX rate to PLN</Lbl>
                 <Inp type="number" value={order.fxRate ?? ""} onChange={() => {}} disabled title="NBP of the day before the order date, with the safety buffer — filled automatically (A-AU-2)" />
                 {!isLocked && String(order.currency || "PLN").toUpperCase() !== "PLN" && <div data-fx-order="1" style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{fxNoteO} {order.fxAgreedReason ? <button onClick={() => setOrder((o: any) => ({ ...o, fxAgreedReason: "" }))} style={{ fontSize: 10, border: "none", background: "none", color: "#2563EB", cursor: "pointer" }}>use NBP</button> : <button onClick={agreeRate} style={{ fontSize: 10, border: "none", background: "none", color: "#2563EB", cursor: "pointer" }}>agreed rate…</button>}</div>}
-                {order.fxLockedAt && <div style={{ fontSize: 10, color: "#888", marginTop: 3 }}>Locked {order.fxLockedAt}</div>}
+                {order.fxLockedAt && <div style={{ fontSize: 10, color: "#888", marginTop: 3 }}>Locked {formatDMY(order.fxLockedAt)}</div>}
               </div>
             </div>
           </Card>
@@ -739,7 +739,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E", marginBottom: 4 }}>⚠ Delivery date is before PO arrival</div>
               {deliveryWarnings.map(w => (
                 <div key={w.idx} style={{ fontSize: 11, color: "#92400E" }}>
-                  Line {w.idx + 1} ({w.lineProduct}) is sourced from {w.poRef} which arrives <strong>{w.poETA}</strong>, but SO delivery is set to <strong>{order.deliveryDate}</strong>. Consider pushing SO delivery later.
+                  Line {w.idx + 1} ({w.lineProduct}) is sourced from {w.poRef} which arrives <strong>{w.poETA}</strong>, but SO delivery is set to <strong>{formatDMY(order.deliveryDate)}</strong>. Consider pushing SO delivery later.
                 </div>
               ))}
             </div>

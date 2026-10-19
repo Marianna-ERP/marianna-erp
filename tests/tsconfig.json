@@ -86,6 +86,14 @@
     "../src/autoBackup.domain.ts",
     "../src/customsImport.domain.ts",
     "../src/lotView.domain.ts",
-    "../src/storeShapes.ts"
+    "../src/storeShapes.ts",
+    "../src/fakturownia.ts",
+    "../src/invoiceNotes.domain.ts",
+    "../src/invoicePdfFolder.ts",
+    "../src/numbering.ts",
+    "../src/shipmentDerived.domain.ts",
+    "../src/costInvoice.domain.ts",
+    "../src/fxDifferences.domain.ts",
+    "../src/datesChain.domain.ts"
   ]
 }

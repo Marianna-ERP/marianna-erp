@@ -137,11 +137,8 @@ export function lotReservationsForStock(lot: any, sourceSOs: any[], ctx?: Reserv
       totalReserved += q;
     });
   });
-  const directBasis = lot.directFlow ? (parseFloat(lot.expectedKg) || 0) : 0;
   const physical = lot.physicalKg ?? lot.receivedKg ?? 0;
-  const notYetReceived = !parseNum(lot.physicalKg) && !parseNum(lot.receivedKg) && parseNum(lot.expectedKg) > 0;
-  // v6.99.127 (A-ONE-1): a lot not yet received (sold ahead, as a PO line used to be) is available for its expected kilos
-  const availabilityBasis = lot.directFlow ? Math.max(directBasis, physical) : notYetReceived ? parseNum(lot.expectedKg) : physical;
+  const availabilityBasis = lotSellableBasis(lot);   // v7.27.7 (FZ-30, P-12): the one rule the data checks read too
   return {
     physicalKg: physical,
     availabilityBasis,
@@ -169,6 +166,29 @@ function effectiveStatusOf(o: any, ctx: any): string {
  * wrong-product guards). lots/pos are the picker-adapted shapes
  * (lot.availableKg, poLine.available).
  */
+/** v7.27.7 (FZ-30, P-12): the kilos a sale has already TAKEN from a lot — its SHIP_OUT movements, less reversals (a pass-through
+ *  pair counts: the goods left to that sale). Read by the sale line's free kilos and by the data checks alike. */
+export function takenBySale(lot: any, soNumber: any): number {
+  const so = String(soNumber || ""); if (!so) return 0;
+  return Math.max(0, (lot?.movements || []).reduce((a: number, m: any) => {
+    if (!m || m.voided || String(m.soRef || "") !== so) return a;
+    if (m.type === "SHIP_OUT") return a + (parseFloat(m.qtyKg) || 0);
+    if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
+    return a;
+  }, 0));
+}
+/** v7.27.7 (FZ-30, P-12 — one rule, one reader): HOW MUCH OF A LOT CAN BE SOLD. A direct lot: its expected kilos (or what is physically
+ *  there, if more); a lot not yet received: its expected kilos (it is sold ahead — A-ONE-1); otherwise what is physically there. The
+ *  sale lines and the data checks read this same rule (the data check read a stored 'available' that is 0 before the receipt, and
+ *  called 18 lots on the real copy 'oversold' that were sold ahead of their arrival). */
+export function lotSellableBasis(lot: any): number {
+  const physical = parseNum(lot?.physicalKg ?? lot?.receivedKg ?? 0);
+  const expected = parseNum(lot?.expectedKg);
+  if (lot?.directFlow) return Math.max(expected, physical);
+  const notYetReceived = !parseNum(lot?.physicalKg) && !parseNum(lot?.receivedKg) && expected > 0;
+  return notYetReceived ? expected : physical;
+}
+
 export function computeLineAvailability(soItems: any[], allOrders: any[], currentOrderId: any, lots: any[], pos: any[], shipments?: any[]): any[] {
   const _ctx: ReserveCtx | undefined = lots ? { lots, shipments: shipments || [] } : undefined;
   const LOTS = lots || [];
@@ -201,12 +221,7 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
   // lot is still its own — a pass-through lot shipped to this sale, or a line partly shipped, must not read as supply someone
   // else took. (The rule lived in the old "from a PO" path; the lot path never had it.)
   const selfSO = String((allOrders || []).find((o: any) => o && o.id === currentOrderId)?.number || "");
-  const ownShippedFrom = (lot: any) => !selfSO ? 0 : Math.max(0, (lot?.movements || []).reduce((a: number, m: any) => {
-    if (!m || m.voided || String(m.soRef || "") !== selfSO) return a;
-    if (m.type === "SHIP_OUT") return a + (parseFloat(m.qtyKg) || 0);
-    if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
-    return a;
-  }, 0));
+  const ownShippedFrom = (lot: any) => takenBySale(lot, selfSO);   // v7.27.7 (P-12): the shared rule
 
   return (soItems || []).map((it: any) => {
     const lineQty = parseFloat(it.qty) || 0;

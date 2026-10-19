@@ -40,14 +40,14 @@ function eq(a, b, msg) { if (JSON.stringify(a) !== JSON.stringify(b)) throw new 
 function ok(v, msg) { if (!v) throw new Error(msg || "expected truthy"); }
 function approx(a, b, msg) { if (Math.abs(a - b) > 0.01) throw new Error((msg||"") + " expected ~" + b + " got " + a); }
 const noLoc = () => null;
-const ownLoc = () => ({ type: "OWN" });
+const ownLoc = () => ({ type: "RentedWarehouse" });   // v7.27.3 (FZ-26): a place is its type
 
 const mapper = { inventoryType: c => c === "customs" ? "customs" : "freight", label: c => c === "customs" ? "Customs" : "Freight" };
 const mkLot = (over={}) => ({ id: ++idc, number: "LOT-1", product: "Peppers", poRef: "PO-1",
   expectedKg: 1000, receivedKg: 0, physicalKg: 0, movements: [], costs: [], locationId: 1, ...over });
 const mkShipIn = (over={}) => ({ id: ++idc, number: "SHP-IN", purpose: "INBOUND", status: "Loaded",
   goods: [{ id: 1, lotRef: "LOT-1", poRef: "PO-1", qtyKg: 1000 }],
-  lotRefs: ["LOT-1"], poRefs: ["PO-1"], legs: [{ fromLocationId: 9, toLocationId: 2 }], costs: [], ...over });
+  lotRefs: ["LOT-1"], poRefs: ["PO-1"], legs: [{ fromLocationId: 3, toLocationId: 2 }], costs: [], ...over });
 const mkOrder = (over={}) => ({ id: ++idc, number: "SO-1", status: "Confirmed", currency: "PLN", fxRate: 1,
   client: { id: 70, name: "Biedronka" },
   items: [{ id: 1, product: "Peppers", qty: 600, unitPrice: 5, sourceType: "STOCK", sourceRef: "LOT-1" }], ...over });
@@ -75,7 +75,7 @@ t("cancelling ONLY truck B returns the lot to 500 kg — truck A untouched", () 
 });
 t("receipt → transfer → cancel transfer: kg stays, location returns (D-03 anchored end-to-end)", () => {
   let lots = [mkLot({ locationId: 9 })];
-  lots = ship.postShipmentToLots(mkShipIn({ legs: [{ fromLocationId: 9, toLocationId: 2 }] }), lots, deps).lots;
+  lots = ship.postShipmentToLots(mkShipIn({ legs: [{ fromLocationId: 3, toLocationId: 2 }] }), lots, deps).lots;
   const move = mkShipIn({ number: "SHP-T", purpose: "TRANSFER", legs: [{ fromLocationId: 2, toLocationId: 3 }] });
   lots = ship.postShipmentToLots(move, lots, deps).lots;
   eq(String(lots[0].locationId), "3");

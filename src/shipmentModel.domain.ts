@@ -530,14 +530,18 @@ export function containerPlaceNote(sh: any, u: any): { pol: string | null; pod: 
 // The list showed the header's dates stored at creation and the detail the leg's planned dates; neither read the units,
 // where the planned dates live and where the actual loading / unloading are entered. One reader for both.
 export interface ShipmentDates { plannedLoading: string; plannedDelivery: string; loaded: string; delivered: string; }
+/** v7.27.18 (A-D-4, P-12): a truck's actual loading / unloading date — one reader for the two generations of the field: the editor
+*  writes loadedAt / unloadedAt; trucks entered before keep actualLoadDate / actualUnloadDate (51 of 57 on the real copy of 15 Oct). */
+export function unitLoadedAt(u: any): string { return S(u?.loadedAt) || S(u?.actualLoadDate); }
+export function unitUnloadedAt(u: any): string { return S(u?.unloadedAt) || S(u?.actualUnloadDate); }
 export function shipmentDates(sh: any): ShipmentDates {
   const units = allUnits(sh).map(x => x.unit); const legs = sh?.legs || [];
   const pick = (vals: string[], last = false) => { const v = vals.map(S).filter(Boolean).sort(); return last ? (v[v.length - 1] || "") : (v[0] || ""); };
   return {
     plannedLoading: pick(units.map((u: any) => u.plannedLoadingDate)) || pick(legs.map((l: any) => l.plannedPickupDate)) || S(sh?.loadingDate),
     plannedDelivery: pick(units.map((u: any) => u.plannedDeliveryDate), true) || pick(legs.map((l: any) => l.plannedDeliveryDate), true) || S(sh?.expectedDeliveryDate),
-    loaded: pick(units.map((u: any) => u.loadedAt)),
-    delivered: pick(units.map((u: any) => u.deliveredAt || u.unloadedAt || u.dischargedAt), true),
+    loaded: pick(units.map((u: any) => unitLoadedAt(u))),
+    delivered: pick(units.map((u: any) => S(u.deliveredAt) || unitUnloadedAt(u) || S(u.dischargedAt)), true),
   };
 }
 /** When a lot delivered by the supplier is received: the truck's actual unloading, else its planned delivery, else the PO's. */
@@ -599,7 +603,7 @@ export const DOC_TYPES: { value: string; label: string; system?: boolean }[] = [
   { value: "Invoice", label: "Invoice" }, { value: "Packing list", label: "Packing list" }, { value: "CMR", label: "CMR" },
   { value: "BL", label: "B/L" }, { value: "AWB", label: "AWB (air waybill)" }, { value: "EUR.1", label: "EUR.1" },
   { value: "Phytosanitary certificate", label: "Phytosanitary certificate" }, { value: "Certificate of origin", label: "Certificate of origin" }, { value: "Insurance certificate", label: "Insurance certificate" },   // v7.20.2 (A-INC-2): the certificate a CIF / CIP sale holds
-  { value: "Export declaration", label: "Export declaration" }, { value: "Import declaration", label: "Import declaration" },
+  { value: "Export declaration", label: "Export declaration" }, { value: "Import declaration", label: "Import declaration" }, { value: "T1 transit", label: "T1 transit" },   // v7.27.11 (FZ-16)
   { value: "Transport order", label: "Transport order" }, { value: "Loading protocol", label: "Loading protocol" },
   { value: "Export declaration (EAD)", label: "Export declaration (EAD)", system: true }, { value: "Customs release (CC529C)", label: "Customs release (CC529C)", system: true },
   { value: "Exit confirmation (CC599C)", label: "Exit confirmation (CC599C)", system: true }, { value: "Customs declaration copy (SAD)", label: "Customs declaration copy (SAD)", system: true },

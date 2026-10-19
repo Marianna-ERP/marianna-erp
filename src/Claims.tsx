@@ -9,20 +9,16 @@ import { inspectLink } from "./docLinks.domain";
 import { buildCostChain, toClaimCostLines, CLIENT_COST_PROMPTS, chainGaps } from "./claimCostChain.domain";
 import { applyDeadlineDefault, suggestNoticeDeadline, deadlineStatus, claimsNeedingNotice,
          claimEvidenceGaps, evidenceWarning, EVIDENCE_KINDS, reconcileClaimNote } from "./claimReadiness.domain";
-import {
-  CLAIM_STATUSES, CLAIM_CAUSES, RESPONDENT_KINDS, CLAIM_DIRECTIONS, CLAIM_BASES,
-  isClaimOpen, claimsSummary, incidentNet, nextClaimNumber, blankClaim,
-  buildClaimFinanceNote, claimNoteMode, claimMoney,
-  requestedFromBasis, buildClaimPostings, applyPostingsToLots, applyPostingsToOrders,
-  reverseClaimPostings,
-} from "./claims.domain";
-import { localTodayISO } from "./dates";
+import { CLAIM_STATUSES, CLAIM_CAUSES, RESPONDENT_KINDS, CLAIM_DIRECTIONS, CLAIM_BASES, isClaimOpen, claimsSummary, incidentNet, blankClaim, buildClaimFinanceNote, claimNoteMode, claimMoney, requestedFromBasis, buildClaimPostings, applyPostingsToLots, applyPostingsToOrders, reverseClaimPostings } from "./claims.domain";
+import { localTodayISO , formatDMY } from "./dates";
 import { nbpRateBefore } from "./fx";   // v7.18.6 (A-AU-12)
 import { COST_TYPES } from "./Shipments";   // v7.18.5 (A-AU-10): the cost types a claim's cost line picks from
 import { nextId } from "./ids";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { RISK_CAUSES, journeyStages, claimRouting, claimShipment } from "./incoterms.domain";   // v7.19.4 (A-INC-1, 5/5)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { issueNumber } from "./numbering";   // v7.27.8 (A-W5)
+import { CompanyPicker } from "./CompanyPicker";   // v7.27.15 (A-RV-26 / A-AU-8)
 
 // ─── v6.48.0  CLAIMS MODULE (Phase 1: the register) ──────────────────────────
 // Claims are now documents in their own right rather than rows hidden inside a
@@ -64,7 +60,7 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
   const insCands = inspectionCandidates(claim, inspections);
   const cands = evidenceCandidates(claim, { inspections, shipments });
   const lot = (lots || []).find((l: any) => (claim.subjects || []).some((s: any) => String(s.kind).toUpperCase() === "LOT" && String(s.ref) === String(l.number))) || null;
-  const supplier = (contacts || []).find((c: any) => String(c.id) === String(claim?.respondent?.contactId)) || (contacts || []).find((c: any) => String(c.name) === String(claim?.respondent?.name)) || null;
+  const supplier = (contacts || []).find((c: any) => String(c.id) === String(claim?.respondent?.contactId)) || null;   // v7.27.1 (FZ-24): by id only — a claim naming its company in text is linked in the review list (A-RV-26)
   const warn = qcReportWarning(claim, lot, inspections, supplier ? { qualityReportDays: supplier.qualityReportDays } : null);
   const d = defectFromInspection(claim, inspections);
   const note = (financeNotes || []).find((n: any) => String(n.id) === String(claim.financeNoteId)) || null;
@@ -77,7 +73,7 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
       {warn && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 8 }}>⚠ {warn}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         <div><Lbl>Defect from inspection (CL-2)</Lbl>
-          <select value={claim.inspectionId ?? ""} onChange={e => patch({ inspectionId: e.target.value || null })} style={inp}><option value="">— typed on the claim —</option>{insCands.map((x: any) => <option key={String(x.id)} value={x.id}>{x.date} · {x.lotNumber} · {x.stage} · {x.verdict}</option>)}</select>
+          <select value={claim.inspectionId ?? ""} onChange={e => patch({ inspectionId: e.target.value || null })} style={inp}><option value="">— typed on the claim —</option>{insCands.map((x: any) => <option key={String(x.id)} value={x.id}>{formatDMY(x.date)} · {x.lotNumber} · {x.stage} · {x.verdict}</option>)}</select>
           {d.inspection && <div style={{ fontSize: 11, color: "#334155", marginTop: 3 }}>{d.defectType} · total <b>{d.defectPct}%</b>{d.description ? ` · ${d.description}` : ""}</div>}
         </div>
         <div><Lbl>Agreed extension / exception (CL-4)</Lbl><input value={claim.agreedExtension || ""} onChange={e => patch({ agreedExtension: e.target.value })} placeholder="e.g. QC deadline extended to 15/09 by email" style={inp} /></div>
@@ -198,9 +194,10 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
   // for a producer claim. One claim per seed; the seed is consumed immediately.
   React.useEffect(() => {
     if (!claimSeed) return;
+    (async () => {   // v7.27.8 (A-W5): the number comes from the counter
     const c = blankClaim({
       id: nextId(),
-      number: nextClaimNumber(claims, new Date(today).getFullYear() || 2026),
+      number: await issueNumber("CLM", new Date(today).getFullYear() || new Date().getFullYear(), (claims || []).map((x: any) => x.number)),
       date: today,
       status: "Draft",
       direction: claimSeed.direction || (String(claimSeed.respondentKind) === "Client" ? "CONCESSION" : "RECOVERY"),
@@ -213,8 +210,9 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
     setClaims((prev: any[]) => [...(prev || []), c]);
     setSelectedId(c.id);
     if (typeof onClaimSeedConsumed === "function") onClaimSeedConsumed();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [claimSeed]);
+    }, [claimSeed]);
 
   // v6.63.0 (D-13): finalisation produces the MONEY DOCUMENT, per the owner's
   // rulings — client → credit note we issue; supplier/carrier → their credit
@@ -244,10 +242,10 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
     patch(c.id, { financeNoteId: note.id, resolvedAt: c.resolvedAt || today, status: ["Settled", "Closed"].includes(String(c.status)) ? c.status : "Settled" });
   };
 
-  const addClaim = () => {
-    const c = blankClaim({
-      id: nextId(),
-      number: nextClaimNumber(claims, new Date(today).getFullYear() || 2026),
+  const addClaim = async () => {
+  const c = blankClaim({
+  id: nextId(),
+  number: await issueNumber("CLM", new Date(today).getFullYear() || new Date().getFullYear(), (claims || []).map((x: any) => x.number)),   // v7.27.8 (A-W5)
       date: today,
       status: "Draft",
     });
@@ -288,10 +286,10 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
   };
 
   // the chain: a concession we granted usually justifies claiming it back
-  const recoverFrom = (parent: any) => {
-    const c = blankClaim({
-      id: nextId(),
-      number: nextClaimNumber(claims, new Date(today).getFullYear() || 2026),
+  const recoverFrom = async (parent: any) => {
+  const c = blankClaim({
+  id: nextId(),
+  number: await issueNumber("CLM", new Date(today).getFullYear() || new Date().getFullYear(), (claims || []).map((x: any) => x.number)),   // v7.27.8 (A-W5)
       direction: "RECOVERY",
       respondent: { kind: "Supplier", contactId: null, name: "" },
       cause: parent.cause, basis: parent.basis || "DEFECT",
@@ -494,8 +492,11 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     </select>
                   </div>
                   <div>
-                    <Lbl>Name</Lbl>
-                    <input value={selected.respondent?.name || ""} onChange={e => patch(selected.id, { respondent: { ...(selected.respondent || {}), name: e.target.value } })} placeholder="e.g. Konkret" style={INP} />
+                    <Lbl>Company</Lbl>
+                    {/* v7.27.15 (A-RV-26, owner approved 17 Oct): picked from Counterparties by id — its agreed notice days then apply; a typed name links with one pick */}
+                    <CompanyPicker contacts={contacts} value={selected.respondent?.contactId ?? null} typedName={selected.respondent?.contactId != null ? "" : (selected.respondent?.name || "")}
+                    roles={({ Supplier: ["Supplier"], Client: ["Client"], Carrier: ["Carrier", "Forwarder"], Warehouse: ["Warehouse"] } as any)[selected.respondent?.kind || "Supplier"] || null}
+                    onPick={(c: any) => patch(selected.id, { respondent: { ...(selected.respondent || {}), contactId: c ? c.id : null, name: c ? c.name : (selected.respondent?.name || "") } })} />
                   </div>
                   <div>
                     <Lbl>Cause</Lbl>
@@ -664,9 +665,9 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     const add = (subs: any[]) => patch(selected.id, Object.assign({ subjects: [...(selected.subjects || []).filter((s: any) => s.ref !== ref), ...subs] },
                       (() => {
                         if (kind === "SO") { const o = (orders || []).find((x: any) => x.number === ref); const val = (o?.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (Number(it.boxes) || 0) : (Number(it.qty) || 0)) * (Number(it.unitPrice) || 0)), 0);
-                          return { direction: "CONCESSION", respondent: { kind: "Client", contactId: (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(o?.client?.name || "").trim().toLowerCase())?.id ?? null, name: o?.client?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (o?.items || []).map((it: any) => `${it.product} ${it.qty || it.boxes} ${it.pricingUnit === "box" ? "boxes" : "kg"} @ ${it.unitPrice}`).join(", ") + ` · document value ${val.toLocaleString("pl-PL")} ${o?.currency || "PLN"}` }; }
+                          return { direction: "CONCESSION", respondent: { kind: "Client", contactId: o?.client?.id ?? null, name: o?.client?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (o?.items || []).map((it: any) => `${it.product} ${it.qty || it.boxes} ${it.pricingUnit === "box" ? "boxes" : "kg"} @ ${it.unitPrice}`).join(", ") + ` · document value ${val.toLocaleString("pl-PL")} ${o?.currency || "PLN"}` }; }
                         if (kind === "PO") { const p = (pos || []).find((x: any) => x.number === ref); const val = (p?.items || []).reduce((a: number, it: any) => a + (Number(it.qty) || 0) * (Number(it.unitPrice) || 0), 0);
-                          return { direction: "RECOVERY", respondent: { kind: "Supplier", contactId: (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(p?.supplier?.name || "").trim().toLowerCase())?.id ?? null, name: p?.supplier?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (p?.items || []).map((it: any) => `${it.product} ${it.qty} kg @ ${it.unitPrice}`).join(", ") + ` · document value ${val.toLocaleString("pl-PL")} ${p?.currency || "PLN"}` }; }
+                          return { direction: "RECOVERY", respondent: { kind: "Supplier", contactId: p?.supplier?.id ?? null, name: p?.supplier?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (p?.items || []).map((it: any) => `${it.product} ${it.qty} kg @ ${it.unitPrice}`).join(", ") + ` · document value ${val.toLocaleString("pl-PL")} ${p?.currency || "PLN"}` }; }
                         const sh = (shipments || []).find((x: any) => x.number === ref); const carrier = (contacts || []).find((c: any) => String(c.id) === String(sh?.carrierId || sh?.forwarderId));
                         return { direction: "RECOVERY", respondent: { kind: sh?.forwarderId && !sh?.carrierId ? "Forwarder" : "Carrier", contactId: carrier?.id ?? null, name: carrier?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (sh?.goods || []).map((g: any) => `${g.product || g.lotRef} ${g.qtyKg} kg`).join(", ") };
                       })()));

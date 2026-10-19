@@ -1,7 +1,7 @@
 import { referencesToContact } from "./referenceGuards";
 import { setUserCountries } from "./counterparty.domain";
 import { recordAudit } from "./audit";
-import { localTodayISO } from "./dates";   // v7.17.0
+import { localTodayISO , formatDMY } from "./dates";   // v7.17.0
 import { currentUser } from "./permissions.domain";
 
 import DateInput from "./DateInput";
@@ -254,7 +254,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
             <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 12 }}>COMPANY</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <div><Lbl>Primary type</Lbl><Sel value={form.type} onChange={e => { const v = e.target.value; setForm((f: any) => ({ ...f, type: v, additionalTypes: (f.additionalTypes || []).filter((t: string) => t !== v) })); }} title="v6.99.45 (CP-10): one role, one place — the primary cannot also be a secondary">{COUNTERPARTY_TYPES.map(t => <option key={t}>{t}</option>)}</Sel></div>
-              <div><Lbl>Company name</Lbl><Inp value={form.name} onChange={e => sf("name", e.target.value)} placeholder="e.g. FreshFarm ES" /></div>
+              <div><Lbl>Company name</Lbl><Inp value={form.name} onChange={e => sf("name", e.target.value)} placeholder="Company name" /></div>
               <div style={{ gridColumn: "span 2" }}>
                 <Lbl>Also acts as <span style={{ color: "#BBB", fontWeight: 400 }}>(optional — for counterparties wearing multiple hats)</span></Lbl>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -622,7 +622,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
               {p.notes && <div style={{ fontSize: 11, color: "#888", marginTop: 6, fontStyle: "italic" }}>{p.notes}</div>}
             </div>
           ))}
-          {(counterparty.deletedContacts || []).map((p: any) => <div key={"del-" + p.id} data-deleted-person="1" style={{ padding: "6px 0", fontSize: 12, color: "#9CA3AF", textDecoration: "line-through" }}>{p.name}{p.role ? ` · ${p.role}` : ""}{p.email ? ` · ${p.email}` : ""} — deleted {p.deletedAt || ""}</div>)}{/* v7.17.1 (A-RV-07) */}
+          {(counterparty.deletedContacts || []).map((p: any) => <div key={"del-" + p.id} data-deleted-person="1" style={{ padding: "6px 0", fontSize: 12, color: "#9CA3AF", textDecoration: "line-through" }}>{p.name}{p.role ? ` · ${p.role}` : ""}{p.email ? ` · ${p.email}` : ""} — deleted {formatDMY(p.deletedAt) || ""}</div>)}{/* v7.17.1 (A-RV-07) */}
 
           {counterparty.contacts.length === 0 && editingPersonId !== "new" && (
             <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12, border: "1px dashed #E5E7EB", borderRadius: 8 }}>
@@ -1467,7 +1467,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
   const ownerOf = (l: any) => (l as any).ownerId != null ? (l as any).ownerId : (sourceOf(l) === "counterparty site" ? (counterparties || []).find((c: any) => counterpartyLocations([c]).some((x: any) => String(x.id) === String(l.id)))?.id : null);
   const CHIPS: Array<[string, string, (l: any) => boolean]> = [
     ["all", "All", () => true], ["ports", "Ports & airports", (l: any) => ["Port", "Airport", "PortWarehouse"].includes(String(l.type)) /* v7.21.14 (A-RV-37): by the type only */],
-    ["border", "Border crossings", (l: any) => String(l.type) === "BorderCrossing" || String(l.legacyType) === "BORDER"], ["customs", "Customs", (l: any) => String(l.type) === "Customs" || String(l.legacyType) === "CUSTOMS"],
+    ["border", "Border crossings", (l: any) => String(l.type) === "BorderCrossing"], ["customs", "Customs", (l: any) => String(l.type) === "Customs"],
     ["company", "Companies' places", (l: any) => ownerOf(l) != null],   /* v7.7.1 (A-RET-1): no "Hidden" chip — the built-ins it showed are gone */
   ];
   const base = [...unifiedLocations(counterparties || [])];
@@ -2035,7 +2035,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
             <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
               {primary?.email && <button onClick={() => onEmail(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Email primary">✉</button>}
               {!c.deleted && <button onClick={() => onEdit(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Edit">Edit</button>}
-              {c.deleted ? <span style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF" }}>Deleted {c.deletedAt || ""}</span> : <button onClick={async () => { if (await ctConfirm({ tone: "danger", title: `Delete ${c.name}?`, message: "It stays on record — struck through, read-only — and leaves every picker.", confirmLabel: "Delete" })) onDelete(c.id); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, cursor: "pointer" }} title="Delete">🗑</button>}
+              {c.deleted ? <span style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF" }}>Deleted {formatDMY(c.deletedAt) || ""}</span> : <button onClick={async () => { if (await ctConfirm({ tone: "danger", title: `Delete ${c.name}?`, message: "It stays on record — struck through, read-only — and leaves every picker.", confirmLabel: "Delete" })) onDelete(c.id); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, cursor: "pointer" }} title="Delete">🗑</button>}
             </div>
           </div>
         );

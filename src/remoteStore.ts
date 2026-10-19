@@ -54,6 +54,9 @@ async function rest(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${REMOTE_URL}/rest/v1/${path}`, { ...init, headers: { apikey: REMOTE_KEY, Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init.headers || {}) } });
 }
 
+/** v7.27.8 (A-W5): call a database function (Supabase RPC) as the person signed in. */
+export async function rpc(name: string, body: any): Promise<Response> { return rest(`rpc/${name}`, { method: "POST", body: JSON.stringify(body || {}) }); }
+
 // ── the sync engine ────────────────────────────────────────────────────────────────────────────────────────────────────
 /** v7.14.0 (A-RV-01): what a merge has to tell the person — a record both changed (theirs kept, mine aside, "Use mine"), or a new
  *  document of mine renumbered because a colleague took its number meanwhile. */

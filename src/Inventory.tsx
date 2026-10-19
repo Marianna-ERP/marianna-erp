@@ -12,7 +12,7 @@ import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.dom
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
-import { unifiedLocations, locationById , isPortType } from "./locations";
+import { unifiedLocations, locationById, isPortType, placeGroup } from "./locations";
 import { localTodayISO, formatDMY, addDaysISO } from "./dates";
 import { shipmentTradeDirection, shipmentTradeEnds, MOVEMENT_LABELS } from "./tradeFlow.domain";
 import { recordAudit } from "./audit";
@@ -37,7 +37,7 @@ const LOCATION_TYPES: Record<string, any> = {
 };
 
 // Safe lookup: never throws if a location carries a type not in the table above
-// (e.g. a new legacyType added later). Falls back to a neutral default.
+// (a group added later). Falls back to a neutral default.
 const DEFAULT_LOCATION_TYPE = { label: "Location", color: "#6B7280", bg: "#F3F4F6", icon: "📍" };
 export function locType(t: string) {
   return LOCATION_TYPES[t] || DEFAULT_LOCATION_TYPE;
@@ -51,7 +51,7 @@ export function locType(t: string) {
 // pickers see a counterparty added this session without a browser refresh.
 export function mergedLocations(contacts: any[]) {
   // v6.86.0 (owner ruling): ONE source — unifiedLocations() — no module-level merge, no demo seeds.
-  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, placeType: l.type, type: l.legacyType }));   // v7.21.14: the real type kept as placeType
+  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, placeType: l.type, type: placeGroup(l) }));   // v7.27.3 (FZ-26): the screen group worked out from the type; the real type kept as placeType
 }
 
 // Lot status lifecycle — PHYSICAL states only.
@@ -125,7 +125,7 @@ function journeyFromShipments(lot: any, shipments: any[], locResolve: (id: any) 
   };
   const stages: any[] = [];
   legs.forEach((lg: any, i: number) => {
-    // v6.99.16 (A-R12-4): places live on the UNITS — the leg's from/to are legacy defaults (SHP-0035 showed a stale "Biedronka")
+    // v6.99.16 (A-R12-4): places live on the UNITS — the leg's from/to are legacy defaults (SHP-0035 showed a stale demo place)
     const us = (lg.vehicles || []);
     const unitFrom = us.map((u: any) => String(u.pickupText || "").trim()).find(Boolean);
     const unitTo = us.map((u: any) => String(u.deliveryText || "").trim()).find(Boolean);
@@ -953,7 +953,7 @@ export function SortingWindow({ f, setF, lot, inspections = [], contacts = [], o
             {sortablePools(lot).map((x: any) => <option key={x.key} value={x.key}>{x.label} — {x.kg.toLocaleString("pl-PL")} kg available</option>)}
           </Sel>
         </QhField>
-        <QhField label="Follows inspection"><Sel value={f.followsInspection || ""} onChange={(e: any) => set("followsInspection", e.target.value)}><option value="">— none —</option>{inspections.map((x: any) => <option key={String(x.id)} value={String(x.id)}>{x.date} · {x.verdict} · defects {inspectionVerdict(x).totalPct} %</option>)}</Sel></QhField>
+        <QhField label="Follows inspection"><Sel value={f.followsInspection || ""} onChange={(e: any) => set("followsInspection", e.target.value)}><option value="">— none —</option>{inspections.map((x: any) => <option key={String(x.id)} value={String(x.id)}>{formatDMY(x.date)} · {x.verdict} · defects {inspectionVerdict(x).totalPct} %</option>)}</Sel></QhField>
         <QhField label="Sorted by"><NamePicker value={f.by} options={["Our team", ...activeParties(contacts).filter((c: any) => (c.roles || [c.type]).includes("Warehouse") || (c.additionalTypes || []).includes("Warehouse")).map((c: any) => String(c.name).trim())]} onChange={(v: string) => set("by", v)} placeholder="— our team or a warehouse —" /></QhField>
         <QhField label="Hours"><input type="number" value={f.hours ?? ""} onChange={e => set("hours", e.target.value)} style={qhInp} /></QhField>
       </div>
@@ -1047,12 +1047,12 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
       </div>); })()}
       <div style={{ padding: "12px 16px" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
-        {tile("ARRIVAL", arrival ? <>{arrival.number} · {arrival.arrangedBy === "SUPPLIER" ? "supplier's truck" : "our shipment"}<br />{unit?.truckPlate || unit?.announcedPlate || "plates —"}{plateMismatch(unit) ? <b style={{ color: "#DC2626" }}> · plates differ from announced!</b> : ""}<br />{arrivedAt ? `arrived ${arrivedAt}` : (unit?.eta ? `ETA ${unit.eta}` : "not arrived")}</> : <span style={{ color: "#94A3B8" }}>no inbound shipment{lot.poRef ? " — register the supplier's truck on the PO" : ""}</span>)}
+        {tile("ARRIVAL", arrival ? <>{arrival.number} · {arrival.arrangedBy === "SUPPLIER" ? "supplier's truck" : "our shipment"}<br />{unit?.truckPlate || unit?.announcedPlate || "plates —"}{plateMismatch(unit) ? <b style={{ color: "#DC2626" }}> · plates differ from announced!</b> : ""}<br />{arrivedAt ? `arrived ${formatDMY(arrivedAt)}` : (unit?.eta ? `ETA ${formatDMY(unit.eta)}` : "not arrived")}</> : <span style={{ color: "#94A3B8" }}>no inbound shipment{lot.poRef ? " — register the supplier's truck on the PO" : ""}</span>)}
         {/* v6.99.17 (A-R13-7): RECEIPT tile removed — the quantity breakdown already shows expected / received / variance */}
-        {tile("QUALITY", lastIns ? <>{lastIns.stage} {lastIns.date}<br />defects <b>{inspectionTotals(lastIns).totalPct}%</b> · <b style={{ color: lastIns.verdict === "Rejected" ? "#DC2626" : lastIns.verdict === "Sort" ? "#B45309" : "#16A34A" }}>{lastIns.verdict}</b><br />{ins.length} inspection(s){lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</> : <span style={{ color: dueQC ? "#B45309" : "#94A3B8" }}>no inspection{dueQC ? ` — QC report due ${dueQC}` : ""}{lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</span>, lastIns ? "#111" : "#94A3B8")}
+        {tile("QUALITY", lastIns ? <>{lastIns.stage} {formatDMY(lastIns.date)}<br />defects <b>{inspectionTotals(lastIns).totalPct}%</b> · <b style={{ color: lastIns.verdict === "Rejected" ? "#DC2626" : lastIns.verdict === "Sort" ? "#B45309" : "#16A34A" }}>{lastIns.verdict}</b><br />{ins.length} inspection(s){lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</> : <span style={{ color: dueQC ? "#B45309" : "#94A3B8" }}>no inspection{dueQC ? ` — QC report due ${dueQC}` : ""}{lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</span>, lastIns ? "#111" : "#94A3B8")}
         {!lotIsDirect(lot) && tile("STOCK — AVAILABLE NOW", (() => { const a = lotAvailabilityByGrade(lot, orders); return <><div>class I <b>{a.I.toLocaleString("pl-PL")}</b> kg</div><div>class II <b>{a.II.toLocaleString("pl-PL")}</b> kg</div>{a.unsorted > 0 ? <div>unsorted {a.unsorted.toLocaleString("pl-PL")} kg</div> : null}<div style={{ color: "#94A3B8" }}>waste {g.waste.toLocaleString("pl-PL")} kg</div></>; })())}
         {tile("SALES", <>{sales.length ? sales.map((o: any) => { const kg = (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))).reduce((a: number, it: any) => a + num(it.qty), 0); return <div key={o.number}>{o.number} · <b>{Math.round(kg).toLocaleString("pl-PL")} kg</b>{o.items?.some((it: any) => it.grade === "II") ? " · II" : ""} · {o.status}</div>; }) : <span style={{ color: "#94A3B8" }}>no sales yet</span>}<span style={{ color: num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "#16A34A" : "#B45309" }}>{num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "fully sold" : `${Math.max(0, Math.round(num(lot.receivedKg) - soldKg - g.waste)).toLocaleString("pl-PL")} kg to sell`}</span></>)}
-        {tile("SETTLEMENT (on the PO)", settlement ? <>{settlement.number ? settlement.number + " · " : ""}<b style={{ color: settlement.status === "Closed" ? "#16A34A" : "#B45309" }}>{settlement.status}</b>{settlement.closedAt ? ` · closed ${settlement.closedAt}` : ""}<br />{settlement.commissionInvoiceId ? "commission invoice issued" : settlement.status === "Closed" ? "commission not yet invoiced — waiting for the Monday commission run" : "closes on the PO when the truck is sold"}</> : <span style={{ color: "#94A3B8" }}>{lot.poRef ? `not opened yet — on ${lot.poRef}` : "—"}</span>)}
+        {tile("SETTLEMENT (on the PO)", settlement ? <>{settlement.number ? settlement.number + " · " : ""}<b style={{ color: settlement.status === "Closed" ? "#16A34A" : "#B45309" }}>{settlement.status}</b>{settlement.closedAt ? ` · closed ${formatDMY(settlement.closedAt)}` : ""}<br />{settlement.commissionInvoiceId ? "commission invoice issued" : settlement.status === "Closed" ? "commission not yet invoiced — waiting for the Monday commission run" : "closes on the PO when the truck is sold"}</> : <span style={{ color: "#94A3B8" }}>{lot.poRef ? `not opened yet — on ${lot.poRef}` : "—"}</span>)}
       </div>
       <div style={{ marginTop: 8, fontSize: 10, color: "#94A3B8" }}>Actions live below in their owning sections: Receive · Inspect · Sort · Count · Move · Return · Claim; the settlement, its reports and the commission run are on the PO. This strip stores nothing — it reads what each module owns.</div>
       </div>
@@ -1177,7 +1177,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
       const amt = parseNum(claimValue);
       extSetFinanceNotes((prev: any[]) => [...(prev || []), {
         id: nextId(), noteType: "CREDIT", direction: "outgoing",
-        invoiceId: inv?.id ?? null, relatedRef: soRef || selected.number, partyName: party,
+        invoiceId: inv?.id ?? null, relatedRef: soRef || selected.number, partyId: inv?.counterparty?.id ?? so?.client?.id ?? null, partyName: party,   // v7.27.15 (A-RV-26): by id
         category: "Quality", amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
         status: "Draft", reason: `Quality claim — ${qtyKg} kg defective on ${selected.number}${soRef ? ` (${soRef})` : ""}`,
         date: date || today, source: `claim:lot:${selected.id}:${Date.now()}`,
@@ -1489,9 +1489,9 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                   if (a.kind === "direct") return <><div style={{ fontSize: 11, fontWeight: 700, color: "#7C3AED" }}>Direct</div><div style={{ fontSize: 11, color: "#64748B" }}>{a.loaded ? `loaded ${D(a.loaded)}` : ""}{a.delivered ? ` · delivered ${D(a.delivered)}` : ""}</div></>;
                   if (a.kind === "expected") return <div style={{ fontSize: 11, color: "#B45309", fontWeight: 600 }}>expected {D(a.date)}</div>;
                   return <span style={{ color: "#CCC" }}>—</span>; })()}
-                  {(() => { const w = lotWarningsShown(l, localTodayISO()); return w.length ? <div data-lot-warning="1" title={w.map(x => `${x.field}: ${x.why}`).join("\n")} style={{ fontSize: 10, fontWeight: 700, color: "#B45309", marginTop: 2 }}>⚠ {w.map(x => x.field === "still expected" ? (x.why.match(/expected for (\d+) days/) || [])[1] + " d still expected"
+                  {(() => { const w = lotWarningsShown(l, localTodayISO(), { orders: extOrders || [] }); return w.length ? <div data-lot-warning="1" title={w.map(x => `${x.field}: ${x.why}`).join("\n")} style={{ fontSize: 10, fontWeight: 700, color: "#B45309", marginTop: 2 }}>⚠ {w.map(x => x.field === "still expected" ? (x.why.match(/expected for (\d+) days/) || [])[1] + " d still expected"
                     : x.field === "unexplained movements" ? (x.why.match(/^(\d+) movement/) || [])[1] + " unexplained movement(s)"   // v7.11.2 (A-RV-24)
-                    : x.field === "ageing stock" ? (x.why.match(/in store (\d+) days/) || [])[1] + " d in store, unsold"   // v7.11.2 (A-RV-24)
+                    : x.field === "ageing stock" ? (x.why.match(/in store (\d+) days/) || [])[1] + (/reserved by/.test(x.why) ? (/still unsold/.test(x.why) ? " d in store, partly unsold" : " d in store, reserved") : " d in store, unsold")   // v7.11.2 (A-RV-24)
                     : (x.why.match(/^(over|short) by [^)]*\)/) || [x.field])[0]).join(" · ")}</div> : null; })()}{/* v7.10.3 (A-RV-15) */}</div>
                 <div>
                   {(() => {
