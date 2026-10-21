@@ -53,6 +53,7 @@ import { linkSpellingOnDocs } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { linkSaleDestinationOn } from "./locations";   // v7.18.1 (A-AU-3)
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
+import { IdleSignOut } from "./IdleSignOut";   // v7.30.3 (Batch M · M-4)
 import { shapingSetter, shapeWritten, shapeShipment, shapeClaim } from "./storeShapes";   // v7.24.3 (FZ-01 step 2): a save writes the clean shape
 import { withLiveCompanies } from "./counterparty.domain";   // v7.25.0 (A-RV-13 / FZ-02)
 import { ScreenBoundary } from "./ErrorBoundary";   // v7.26.2 (A-UI-3)
@@ -162,6 +163,11 @@ export default function App() {
   const [productCatalog, setProductCatalog] = useLocalStoredState("productCatalog", PRODUCT_CATALOG_SEED);
   const [packagingTypes, setPackagingTypes] = useLocalStoredState("packagingTypes", PACKAGING_SEED);
   const [claims, setClaimsRaw] = useLocalStoredState("claims", []);
+  // v7.30.2 (Batch M · M-3): a save that asked for a number the shared counter could not give stops before writing anything; say so
+  useEffect(() => {
+    const onRefusal = (ev: PromiseRejectionEvent) => { const r: any = ev && ev.reason; if (r && r.name === "NumberingUnavailable") { ev.preventDefault(); uiAlert({ tone: "warn", title: "Not saved", message: String(r.message) }); } };   // the app's own window (A-RV-17)
+    window.addEventListener("unhandledrejection", onRefusal); return () => window.removeEventListener("unhandledrejection", onRefusal);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   const setClaims = useMemo(() => shapingSetter(setClaimsRaw, shapeClaim), [setClaimsRaw]);   // v7.28.6 (Batch L): written in the clean shape
   // v6.56.0: load plans group the shipments of one commercial movement.
   // v7.7.1 (A-RET-1): the load-plans store is retired (tab gone since v6.99.124)
@@ -443,7 +449,7 @@ export default function App() {
   const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog } as any).issues,   /* v7.21.13: + the audit log, for shared ids */ // eslint-disable-next-line react-hooks/exhaustive-deps
     [contacts, pos, lots, orders, shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog]);
 
-  if (!shared.ready) return <>{dialogNode}{shared.node}</>;   // v6.99.148: sign in / loading the shared data
+  if (!shared.ready) return <><IdleSignOut active={!!readSession()} />{/* v7.30.3 (Batch M · M-4) */}{dialogNode}{shared.node}</>;   // v6.99.148: sign in / loading the shared data
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>{dialogNode}
       <EnvironmentStrip />{/* v6.99.149 */}
@@ -487,10 +493,12 @@ export default function App() {
             // v7.1.12 (owner 6 Oct, trapped again): a sign-in that matches no entry CLAIMS its entry here — only an entry that carries no
             // e-mail yet can be claimed, the claim writes the e-mail (so it can never be claimed twice) and is audit-logged. Nobody is
             // ever locked out of Settings by the state of the list again.
-            const free = (users || []).filter((u: any) => !String(u.email || "").trim());
+            // v7.30.0 (Batch M · M-1): once an owner is linked, only the owner links a sign-in to an entry (the shared copy refuses
+            // anyone else's change to the users list); claiming an entry yourself stays possible only while no owner is linked
+            const free = hasOwner(users || []) ? [] : (users || []).filter((u: any) => !String(u.email || "").trim());
             return (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>
-                {signInEmail} is not linked to an entry.{free.length ? " Which entry is you?" : " Every entry is already linked to another sign-in — ask the owner."}
+                {signInEmail} is not linked to an entry.{free.length ? " Which entry is you?" : hasOwner(users || []) ? " Ask the owner to link it in Settings › Users." : " Every entry is already linked to another sign-in — ask the owner."}
                 {free.length > 0 && <select value="" onChange={async e => { const id = e.target.value; if (!id) return; const u = free.find((x: any) => String(x.id) === id); if (!u) return;
                   if (!(await uiConfirm({ title: "Please confirm", message: `Link ${signInEmail} to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}?\n\nThis is recorded in the audit trail and cannot be undone from here.` }))) return;
                   setUsers((prev: any[]) => (prev || []).map((x: any) => String(x.id) === id ? { ...x, email: signInEmail } : x));

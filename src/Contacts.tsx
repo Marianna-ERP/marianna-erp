@@ -14,6 +14,7 @@ import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLoca
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
 import { useUnsavedGuard } from "./unsaved";
+import { companyProfile } from "./useLocalStoredState";   // v7.30.4
 import { AddressCompletion } from "./AddressCompletion";   // v7.28.10 (Batch L)
 import { parseNum } from "./numbers";   // v7.28.1
 
@@ -30,10 +31,7 @@ function textToBands(t: string): any[] {
 
 
 // ─── COMPANY & CONFIG ───────────────────────────────────────────────────────
-const COMPANY = {
-  name: "MARIANNA",
-  person: "Hazem Osman",
-};
+const COMPANY = companyProfile();   // v7.30.4 (Batch M · M-5): the company from Settings — no name written into the program
 
 const COUNTERPARTY_TYPES = ["Client", "Supplier", "Broker", "Forwarder", "Carrier", "Warehouse", "Other"];
 

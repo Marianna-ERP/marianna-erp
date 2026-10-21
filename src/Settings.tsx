@@ -748,6 +748,10 @@ function CompanyPanel({ company: savedCompany = {}, setCompany: saveCompany = nu
         <input placeholder="Phone" value={company.phone || ""} onChange={e => set("phone", e.target.value)} style={inp} />
         <input placeholder="Address" value={company.address || ""} onChange={e => set("address", e.target.value)} style={{ ...inp, gridColumn: "1 / 3" }} />
         <input placeholder="E-mail" value={company.email || ""} onChange={e => set("email", e.target.value)} style={inp} />
+        {/* v7.30.4 (Batch M · M-5, audit F-17): printed on documents — no longer written into the program */}
+        <input placeholder="Contact person (printed on POs)" value={company.person || ""} onChange={e => set("person", e.target.value)} style={inp} />
+        <input placeholder="Trade name on transport orders (e.g. the full registered name)" value={company.tradeName || ""} onChange={e => set("tradeName", e.target.value)} style={inp} />
+        <input placeholder="Emergency phone (printed on transport orders)" value={company.emergencyPhone || ""} onChange={e => set("emergencyPhone", e.target.value)} style={inp} />
         <select value={company.country || ""} onChange={e => set("country", e.target.value)} style={inp} title="v7.19.6 (A-TD-5): our country — the trade-direction rule reads it; it prints after the address when the address does not already name it">
           <option value="">Country — {COMPANY_DEFAULTS.country} (built-in)</option>
           {readCountries().slice().sort((a, b) => a.name.localeCompare(b.name)).map(c => <option key={c.iso + c.name} value={c.name}>{c.name}</option>)}
@@ -1150,9 +1154,14 @@ export default function Settings({ roles = [], setRoles = null,
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>EXPORT</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Download a JSON file containing all your data (contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points). Share it with a colleague, or send it to Hazem as feedback. The filename includes the app version (<strong>v{APP_VERSION}</strong>) — whoever imports it must be on the same version.
+            Download a JSON file containing all your data (contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points). Share it with a colleague, or send it as feedback. The filename includes the app version (<strong>v{APP_VERSION}</strong>) — whoever imports it must be on the same version.
           </div>
-          <Button onClick={handleExport} variant="primary">📥 Export all data as JSON</Button>
+          {/* v7.30.5 (Batch M · M-6, audit F-14; owner 21 Oct): the full file holds every contact and price — the owner only; while no
+          owner is linked (a fresh copy) it stays open. The automatic backups and the twice-daily snapshots carry on for everyone. */}
+          {(() => { const linked = (users || []).some((u: any) => u && u.isOwner && String(u.email || "").trim()); const me = userBySignIn(users || [], readSession()?.email);
+          return !linked || (me && me.isOwner)
+          ? <Button onClick={handleExport} variant="primary">📥 Export all data as JSON</Button>
+          : <div data-export-owner-only="1" style={{ fontSize: 12, color: "#92400E" }}>Only the owner can export all the data. The automatic backups carry on as before.</div>; })()}
         </Card>
 
         {/* v7.2.4 (A-SET-4, owner): on the shared data this RESTORES a backup into the shared data for everyone — the owner only */}

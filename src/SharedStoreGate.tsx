@@ -53,8 +53,8 @@ export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLa
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [busy, setBusy] = useState(false);
   if (sync.status === "off") return null;
-  const color = sync.status === "synced" ? "#15803D" : sync.status === "saving" || sync.status === "pulling" ? "#B45309" : sync.status === "offline" ? "#DC2626" : "#6366F1";
-  const label = sync.status === "synced" ? "shared · synced" : sync.status === "saving" ? "shared · saving…" : sync.status === "pulling" ? "shared · loading…" : sync.status === "offline" ? "shared · offline — changes kept here, retried on the next save" : sync.status === "empty" ? "shared store is empty" : "shared";
+  const color = sync.status === "refused" ? "#B91C1C" : sync.status === "synced" ? "#15803D" : sync.status === "saving" || sync.status === "pulling" ? "#B45309" : sync.status === "offline" ? "#DC2626" : "#6366F1";
+  const label = sync.status === "refused" ? `shared · a change to ${sync.refusedKey || "a list"} was refused — only the owner can make it` : sync.status === "synced" ? "shared · synced" : sync.status === "saving" ? "shared · saving…" : sync.status === "pulling" ? "shared · loading…" : sync.status === "offline" ? "shared · offline — changes kept here, retried on the next save" : sync.status === "empty" ? "shared store is empty" : "shared";
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 700, color }} title={sync.lastPull ? `last pulled ${sync.lastPull.slice(11, 19)} UTC` : ""}>{dialogNode}
       <span style={{ width: 8, height: 8, borderRadius: 4, background: color, display: "inline-block" }} />{label}

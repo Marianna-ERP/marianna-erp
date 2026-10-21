@@ -14,16 +14,34 @@ async function bodyOf(req) {
   if (req.body !== undefined && req.body !== null) { if (typeof req.body === "string") { try { return JSON.parse(req.body || "{}"); } catch { return null; } } return req.body; }
   return new Promise(resolve => { let s = ""; req.on("data", c => { s += c; }); req.on("end", () => { try { resolve(JSON.parse(s || "{}")); } catch { resolve(null); } }); req.on("error", () => resolve(null)); });
 }
+// v7.30.1 (Batch M · M-2, external audit 21 Oct: F-04): the caller is known, not only signed in — the sign-in's e-mail comes back
 async function signedIn(req) {
-  const m = String((req.headers && (req.headers.authorization || req.headers.Authorization)) || "").match(/^Bearer\s+(\S+)$/i);
-  const url = originOf(env("REACT_APP_SUPABASE_URL")), key = env("REACT_APP_SUPABASE_ANON_KEY");
-  if (!m || !url || !key) return false;
-  try { const r = await fetch(`${url}/auth/v1/user`, { headers: { apikey: key, Authorization: `Bearer ${m[1]}` } }); return r.ok; } catch { return false; }
+const m = String((req.headers && (req.headers.authorization || req.headers.Authorization)) || "").match(/^Bearer\s+(\S+)$/i);
+const url = originOf(env("REACT_APP_SUPABASE_URL")), key = env("REACT_APP_SUPABASE_ANON_KEY");
+if (!m || !url || !key) return null;
+try { const r = await fetch(`${url}/auth/v1/user`, { headers: { apikey: key, Authorization: `Bearer ${m[1]}` } }); if (!r.ok) return null;
+let u = null; try { u = await r.json(); } catch { u = null; } return { token: m[1], email: String((u && u.email) || "").trim().toLowerCase() }; } catch { return null; }
+}
+// v7.30.1 (Batch M · M-2): MAY THIS PERSON ISSUE A LIVE INVOICE — the users list of the shared copy (Settings › Users), read with the
+// caller's own sign-in: the owner, or a user with the Invoices module ticked. With no owner linked yet the users model is off and
+// everyone may, as in the app itself.
+async function mayIssueInvoices(who) {
+const url = originOf(env("REACT_APP_SUPABASE_URL")), key = env("REACT_APP_SUPABASE_ANON_KEY");
+try {
+const r = await fetch(`${url}/rest/v1/stores?key=eq.users&select=data`, { headers: { apikey: key, Authorization: `Bearer ${who.token}`, Accept: "application/json" } });
+if (!r.ok) return false;
+const rows = await r.json(); const users = Array.isArray(rows) && rows[0] && Array.isArray(rows[0].data) ? rows[0].data : [];
+const linkedOwner = users.some(u => u && u.isOwner && String(u.email || "").trim() !== "");
+if (!linkedOwner) return true;
+const me = users.find(u => u && String(u.email || "").trim().toLowerCase() === who.email);
+return !!(me && (me.isOwner || (me.modules && me.modules.invoices === true)));
+} catch { return false; }
 }
 const detailOf = d => (d ? ` Details: ${(typeof d === "string" ? d : JSON.stringify(d.message ?? d.errors ?? d)).slice(0, 400)}` : "");
 module.exports = async function handler(req, res) {
   try {
-    if (!(await signedIn(req))) return send(res, 401, { error: "Sign in to MARIANNA first." });
+    const who = await signedIn(req);
+    if (!who) return send(res, 401, { error: "Sign in to MARIANNA first." });
     const q = queryOf(req); const op = String(q.op || "");
     const token = env("FAKTUROWNIA_API_TOKEN");
     const sub = env("FAKTUROWNIA_SUBDOMAIN").replace(/^https?:\/\//i, "").replace(/\.fakturownia\.pl.*$/i, "").replace(/\/.*$/, "");
@@ -52,6 +70,7 @@ module.exports = async function handler(req, res) {
     }
     if (req.method === "POST" && op === "create") {
       if (testCopy) return send(res, 403, { error: "This is the TEST copy: invoices are never created in Fakturownia from here." });
+      if (!(await mayIssueInvoices(who))) return send(res, 403, { error: "Only the owner or a user with the Invoices module (Settings › Users) can issue an invoice in Fakturownia." });   // v7.30.1 (M-2)
       const body = await bodyOf(req); if (!body || typeof body !== "object" || !body.invoice) return send(res, 400, { error: "No invoice in the request." });
       const payload = { ...body }; delete payload.api_token;
       const r = await fetch(`${base}/invoices.json`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ ...payload, api_token: token }) });

@@ -38,6 +38,18 @@ if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the 
   fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*|\/\/)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); if (/\b(warehouseInvoices|settledRefs|setSettledRefs|creditNotes)\b/.test(c) || (/\b(l|lot)\??\.settlement\b/.test(c) && !/delete l\.settlement/.test(c))) off.push(`${f}:${i + 1}`); }));   // the tidy-up's delete is the retirement
  if (off.length) { failed++; console.log(`  ✗ the retired stores are gone: still named in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ the retired stores are gone: nothing loads or reads them");
 }
+// v7.30.3 (Batch M · M-4, audit F-16, P-13): THE PAGE TALKS ONLY TO WHAT ITS SECURITY POLICY ALLOWS — every outside address the code
+// fetches is in vercel.json's connect-src, the policy forbids other scripts and framing, and the security headers are set
+{
+  checked++; const off = [];
+  const v = JSON.parse(fs.readFileSync(path.join(src, "../vercel.json"), "utf8")); const hs = ((v.headers || [])[0] || {}).headers || []; const h = k => (hs.find(x => x.key === k) || {}).value || "";
+  const csp = h("Content-Security-Policy"); const connect = (csp.match(/connect-src ([^;]+)/) || [])[1] || "";
+  if (!/script-src 'self'(;|$)/.test(csp) || !/frame-ancestors 'none'/.test(csp) || !/object-src 'none'/.test(csp)) off.push("the policy lets other scripts, framing or plug-ins in");
+  ["X-Content-Type-Options", "X-Frame-Options", "Referrer-Policy", "Strict-Transport-Security"].forEach(k => { if (!h(k)) off.push(`no ${k}`); });
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => {
+    if (/^\s*(\/\/|\*)/.test(l)) return; const m = l.match(/fetch\(\s*[`"'](https:\/\/[^/`"'$]+)/); if (m && !connect.split(/\s+/).some(s => s === m[1] || (s.startsWith("https://*.") && m[1].endsWith(s.slice(9))))) off.push(`${f}:${i + 1} fetches ${m[1]}`); }));
+  if (off.length) { failed++; console.log(`  ✗ security headers: ${off.slice(0, 4).join("; ")}`); } else console.log("  ✓ security headers: set, and every outside address the code fetches is allowed by the policy");
+}
 // v7.28.11 (Batch L · FZ-03, P-13): A COMPANY'S COUNTRY IS ITS CODE — no file reads a company record's country name except the
 // helpers (companyCountryName / companyCountryIso) and the company tidy-up; the copies on documents keep the printed name
 {
@@ -136,7 +148,8 @@ if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the 
   // the built-in places of real producers and clients (Białski Owoc, Euro-Papryka…) are still read by your data (place 3: 9
   // references on the real copy) — they move into the places table with FZ-04; the names removed in v7.27.12 must not come back
   // the stub companies removed in v7.27.12 and the partners' / test places removed from the built-in list in v7.27.17 (SC-14)
-  const NAMES = /Myziak|Metro Cash|Lidl|zakupy@|Biedronka|Białski|Euro-Papryka|Venice Cold Stores|AM sped|FreshFarm|AgriTrade|Fresco Hamburg|Metro DC|Górecka|Wojska Polskiego 6F|Banchina dell'Azoto|Słomczyn 81/;
+  // v7.30.4 (Batch M · M-5, audit F-17): and no personal detail of the owner (name, phone) — they are Settings › Company fields
+  const NAMES = /Myziak|Metro Cash|Lidl|zakupy@|Biedronka|Białski|Euro-Papryka|Venice Cold Stores|AM sped|FreshFarm|AgriTrade|Fresco Hamburg|Metro DC|Górecka|Wojska Polskiego 6F|Banchina dell'Azoto|Słomczyn 81|Hazem|Osman|784 775 065/;
   fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (NAMES.test(l) || /nip:\s*["']\d{10}["']/.test(l)) off.push(`${f}:${i + 1}`); }));
   if (off.length) { failed++; console.log(`  ✗ no real company in the code: ${off.length} line(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ no real company in the code: no tax number or company name written into a source file");
 }

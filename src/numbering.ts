@@ -20,6 +20,11 @@ let lastSource: NumberSource | null = null; let lastProblem = "";
 /** Where the last number came from, and why not the database if it did not — read by Settings → Numbering. */
 export function numberingStatus(): { source: NumberSource | null; problem: string } { return { source: lastSource, problem: lastProblem }; }
 
+/** v7.30.2 (Batch M · M-3, external audit 21 Oct: F-05): on a copy that shares its data, a number is never invented by one browser —
+*  when the shared counter cannot be reached the document is not saved (the form stays open); the reason is said. */
+export class NumberingUnavailable extends Error {
+constructor(why: string) { super(`The shared numbering cannot be reached (${why}) — nothing was saved. Check the connection and try again.`); this.name = "NumberingUnavailable"; }
+}
 /** Take COUNT consecutive numbers of KIND for YEAR. inUse: the numbers the app holds for that kind (the floor). */
 export async function issueNumbers(kind: NumberKind, year: number, inUse: any[], count = 1): Promise<{ numbers: string[]; source: NumberSource }> {
   const floor = highestInUse(inUse, kind, year); const n = Math.max(1, Math.floor(count));
@@ -27,12 +32,12 @@ export async function issueNumbers(kind: NumberKind, year: number, inUse: any[],
   if (!REMOTE_URL || !REMOTE_KEY) { lastSource = "browser"; lastProblem = "this copy runs without the shared database"; return local(); }
   try {
     const res = await rpc("next_doc_numbers", { p_kind: kind, p_year: year, p_floor: floor, p_count: n });
-    if (!res.ok) { lastSource = "browser"; lastProblem = res.status === 404 ? "the counter is not installed (supabase/numbering.sql)" : `the database answered ${res.status}`; return local(); }
+    if (!res.ok) { lastSource = null; lastProblem = res.status === 404 ? "the counter is not installed (supabase/numbering.sql)" : `the database answered ${res.status}`; throw new NumberingUnavailable(lastProblem); }
     const first = Number(await res.json());
-    if (!(first > 0)) { lastSource = "browser"; lastProblem = "the database gave no number"; return local(); }
+    if (!(first > 0)) { lastSource = null; lastProblem = "the database gave no number"; throw new NumberingUnavailable(lastProblem); }
     lastSource = "database"; lastProblem = "";
     return { numbers: Array.from({ length: n }, (_, i) => formatDocNumber(kind, year, first + i)), source: "database" };
-  } catch (e: any) { lastSource = "browser"; lastProblem = String(e?.message || e || "no connection"); return local(); }
+  } catch (e: any) { if (e instanceof NumberingUnavailable) throw e; lastSource = null; lastProblem = String(e?.message || e || "no connection"); throw new NumberingUnavailable(lastProblem); }
 }
 export async function issueNumber(kind: NumberKind, year: number, inUse: any[]): Promise<string> { return (await issueNumbers(kind, year, inUse, 1)).numbers[0]; }
 

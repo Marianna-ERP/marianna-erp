@@ -39,6 +39,11 @@ grant select, insert, update, delete on public.stores to service_role;   -- Supa
 
 It should say "Success. No rows returned".
 
+## Step 2b — the security rules (v7.30.0)
+After Step 3 (the owner marked in Settings › Users with the owner's sign-in e-mail), run **supabase/security.sql** in the
+SQL Editor: only the owner then changes the users, the roles, the closed months and the company profile, and the audit
+trail only grows. See HOW_TO_DEPLOY.md, "One-time database step — the shared lists' security rules".
+
 ## Step 3 — the three users
 Supabase → left menu **Authentication** → **Users** → **Add user** → *Create new user*: e-mail + password, tick **Auto Confirm User**. One for each of you.
 Then **Authentication → Sign In / Providers → Email**: turn **off** "Allow new users to sign up", so nobody can create an account by themselves.

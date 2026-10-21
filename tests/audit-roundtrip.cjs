@@ -2137,9 +2137,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const M = B("shipmentModel.domain.js"); const U = B("useLocalStoredState.js"); const L = B("legacy.js");
   const dPath = FX.needFixture("marianna-erp_v6.99.66_schema-v2_2026-09-26T14-16-24.json", "the 26 Sept file — before the v6.99.67 heal"); if (!dPath) return;
   const d = require(dPath);
-  t("A-AUD-1: with Settings empty the company profile equals the former literals, so no document changes", () => {
-    const p = U.companyProfile(); eq(p.name, "MARIANNA"); eq(p.nip, "PL525-284-27-87"); eq(p.person, "Hazem Osman"); eq(p.regon, "387501311");
-    const to = U.companyForTransportOrder(); eq(to.name, "MARIANNA HAZEM OSMAN"); eq(to.address1, "ul. Dluga 29"); eq(to.address2, "00-238 Warszawa - Polska"); eq(to.nip, "PL 525-284-27-87"); eq(to.emergencyPhone, "+48 784 775 065");
+  t("A-AUD-1 · v7.30.4 (M-5): with Settings empty the company's legal details are the former literals; no personal detail (contact person, trade name, emergency phone) is written into the program — Settings › Company holds them", () => {
+  const p = U.companyProfile(); eq(p.name, "MARIANNA"); eq(p.nip, "PL525-284-27-87"); eq(p.person, ""); eq(p.regon, "387501311");
+  const to = U.companyForTransportOrder(); eq(to.name, "MARIANNA"); eq(to.address1, "ul. Dluga 29"); eq(to.address2, "00-238 Warszawa - Polska"); eq(to.nip, "PL 525-284-27-87"); eq(to.emergencyPhone, "");
   });
   console.log("v6.99.67 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -3067,9 +3067,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 // ══ v7.1.12 — a sign-in claims its entry; nobody is locked out by the list's state ══
 (function v7112(){
   console.log("\n══ v7.1.12. claim your entry ══");
-  t("an unmatched sign-in may claim only an entry without e-mail; the claim writes the e-mail and is audit-logged", () => {
-    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
-    ok(/const free = \(users \|\| \[\]\)\.filter\(\(u: any\) => !String\(u\.email \|\| ""\)\.trim\(\)\);/.test(src), "only entries without e-mail");
+  t("an unmatched sign-in may claim only an entry without e-mail — and, since v7.30.0 (Batch M), only while no owner is linked; the claim writes the e-mail and is audit-logged", () => {
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
+  ok(/const free = hasOwner\(users \|\| \[\]\) \? \[\] : \(users \|\| \[\]\)\.filter\(\(u: any\) => !String\(u\.email \|\| ""\)\.trim\(\)\);/.test(src), "only entries without e-mail, only before an owner is linked");
     ok(/\{ \.\.\.x, email: signInEmail \}/.test(src), "the claim writes the e-mail"); ok(/linked itself to the entry/.test(src), "audit-logged");
   });
   console.log("v7.1.12 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
@@ -4741,6 +4741,53 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const a = { number: "A", status: "Booked", purpose: "OUTBOUND", soRefs: ["SO-2"], legs: [{ mode: "Road", fromLocationId: "WH", toLocationId: "X" }] }, b = { ...a, number: "B", legs: [{ mode: "Road", fromLocationId: "X", toLocationId: "Y" }] };
     eq((IC.saleJourneyGap(dap, { orders: [dap], shipments: [a, b] }) || {}).need, "place"); eq(IC.saleJourneyGap(dap, { orders: [dap], shipments: [a] }), null, "a single shipment checked twice");
     ok(IC.termsToReview({ orders: [so], shipments: [truck] }).some(f => f.kind === "journey" && /no sea leg/.test(f.text)), "the line is not in Terms to review");
+  });
+})();
+
+// ══ v7.30.2 — Batch M · M-3 (audit F-05): no number invented by one browser on a shared copy ══
+(function v73002(){
+  console.log("\n══ v7.30.2 — M-3: the shared numbering or nothing ══");
+  t("M-3 (v7.30.2): on a copy that shares its data, a counter that cannot be reached (not installed, refused, unreachable) stops the save with NumberingUnavailable — no number is invented; a copy without a shared database keeps local numbering", async () => {
+    const path = require("path"); const ids = ["./build/numbering.js", "./build/remoteStore.js"].map(p => require.resolve(p));
+    const fresh = env => { ids.forEach(id => { delete require.cache[id]; }); const keep = { u: process.env.REACT_APP_SUPABASE_URL, k: process.env.REACT_APP_SUPABASE_ANON_KEY }; Object.assign(process.env, env); const m = require(ids[0]); process.env.REACT_APP_SUPABASE_URL = keep.u || ""; process.env.REACT_APP_SUPABASE_ANON_KEY = keep.k || ""; return m; };
+    const was = global.fetch, wasWin = global.window;
+    const mem = { "marianna:shared:session": JSON.stringify({ access_token: "good", refresh_token: "r", expires_at: Date.now() + 3600e3, email: "owner@firm.pl" }) };
+    global.window = { ...(wasWin || {}), localStorage: { getItem: k => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); }, removeItem: k => { delete mem[k]; } } };
+    try {
+    const N = fresh({ REACT_APP_SUPABASE_URL: "https://proj.supabase.co", REACT_APP_SUPABASE_ANON_KEY: "anon" });
+      for (const [why, reply] of [["not installed", async () => ({ ok: false, status: 404, json: async () => ({}) })], ["unreachable", async () => { throw new Error("network down"); }], ["no number", async () => ({ ok: true, status: 200, json: async () => 0 })]]) {
+        global.fetch = reply; let err = null; try { await N.issueNumbers("PO", 2026, ["PO-2026-0007"], 1); } catch (e) { err = e; }
+        ok(err && err.name === "NumberingUnavailable" && /nothing was saved/.test(err.message), `${why}: a number was invented — ${err && err.message}`);
+      }
+      global.fetch = async () => ({ ok: true, status: 200, json: async () => 41 }); const r = await N.issueNumbers("PO", 2026, [], 2); eq(r.numbers.join(), "PO-2026-0041,PO-2026-0042"); eq(r.source, "database");
+    } finally { global.fetch = was; global.window = wasWin; ids.forEach(id => { delete require.cache[id]; }); }
+    const Local = B("numbering.js"); const l = await Local.issueNumbers("SO", 2026, ["SO-2026-0003"], 1); eq(l.numbers.join(), "SO-2026-0004", "a copy without a shared database"); eq(l.source, "browser");
+  });
+})();
+
+// ══ v7.30.3 — Batch M · M-4 (audit F-16): security headers; sign-out after idle time ══
+(function v73003(){
+  console.log("\n══ v7.30.3 — M-4: security headers and idle sign-out ══");
+  const fsx = require("fs"), px = require("path");
+  t("M-4 (v7.30.3): the security policy allows the app itself, Supabase and the NBP rates only; the idle sign-out is 60 minutes with a two-minute warning and never ends a session over unsaved work", () => {
+    const v = JSON.parse(fsx.readFileSync(px.join(__dirname, "../vercel.json"), "utf8")); const csp = v.headers[0].headers.find(x => x.key === "Content-Security-Policy").value;
+    ok(/connect-src 'self' https:\/\/\*\.supabase\.co https:\/\/api\.nbp\.pl/.test(csp) && /default-src 'self'/.test(csp), "the policy's sources changed");
+    const idle = fsx.readFileSync(px.join(__dirname, "../src/IdleSignOut.tsx"), "utf8");
+    ok(/IDLE_MINUTES = 60, WARNING_MINUTES = 2/.test(idle), "not 60 / 2 minutes"); ok(/if \(dirtyEntries\(\)\.length\) \{ setWarn\("unsaved"\); return; \}/.test(idle), "a session ends over unsaved work");
+    ok(/<IdleSignOut active=\{!!readSession\(\)\} \/>/.test(fsx.readFileSync(px.join(__dirname, "../src/App.tsx"), "utf8")), "the idle sign-out is not mounted");
+  });
+})();
+
+// ══ v7.30.4 / v7.30.5 — Batch M · M-5 (audit F-17), M-6 (audit F-14) ══
+(function v73005(){
+  console.log("\n══ v7.30.4–5 — M-5: no personal detail in the program; M-6: the full export for the owner ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("M-5 (v7.30.4): the contact person, the trade name and the emergency phone are Settings › Company fields; the fallbacks carry no personal detail", () => {
+    const L = B("useLocalStoredState.js"); eq([L.COMPANY_DEFAULTS.person, L.COMPANY_DEFAULTS.emergencyPhone].join("|"), "|", "a personal detail in the defaults");
+    const s = rd("Settings.tsx"); ok(/set\("person", e\.target\.value\)/.test(s) && /set\("tradeName", e\.target\.value\)/.test(s) && /set\("emergencyPhone", e\.target\.value\)/.test(s), "the fields are not in Settings › Company");
+  });
+  t("M-6 (v7.30.5): Export all data is the owner's (open while no owner is linked)", () => {
+    const s = rd("Settings.tsx"); ok(/return !linked \|\| \(me && me\.isOwner\)/.test(s) && /data-export-owner-only="1"/.test(s), "the full export is not owner-only");
   });
 })();
 

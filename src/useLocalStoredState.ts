@@ -231,13 +231,13 @@ export function clearAllData(): void {
 // ── v6.99.67 (A-AUD-1, owner): ONE company profile. Five documents carried their own literal company block — a copy of
 // master data — so a change in Settings never reached them. They read this instead; the literal values are the fallback
 // for a field Settings has not filled yet, so nothing printed changes until the owner changes it in Settings.
-export const COMPANY_DEFAULTS = { name: "MARIANNA", person: "Hazem Osman", address: "ul. Długa 29,\n00-238 Warszawa\nPolska", country: "Poland", nip: "PL525-284-27-87", regon: "387501311", phone: "", email: "", emergencyPhone: "+48 784 775 065" };
+export const COMPANY_DEFAULTS = { name: "MARIANNA", person: "", address: "ul. Długa 29,\n00-238 Warszawa\nPolska", country: "Poland", nip: "PL525-284-27-87", regon: "387501311", phone: "", email: "", emergencyPhone: "" };   // v7.30.4 (Batch M · M-5, audit F-17): no personal detail in the program — the contact person and the emergency phone are filled in Settings › Company
 /** The transport order's letterhead used a longer trade name and a two-line address; it derives from the profile the same way. */
 /** v7.19.6 (A-TD-5): the company's address lines as printed — the country follows when the address does not already name it. */
 export function companyAddressLines(p: any = companyProfile()): string[] { return addressWithCountry(p?.address, p?.country); }
 export function companyForTransportOrder(): { name: string; address1: string; address2: string; nip: string; emergencyPhone: string } {
   const p = companyProfile(); const lines = companyAddressLines(p);   // v7.19.6 (A-TD-5)
-  return { name: p.tradeName || (p.name === COMPANY_DEFAULTS.name ? "MARIANNA HAZEM OSMAN" : p.name), address1: lines[0]?.replace(/,$/, "") === "ul. Długa 29" ? "ul. Dluga 29" : (lines[0] || "").replace(/,$/, ""), address2: lines.length > 1 ? lines.slice(1).join(" - ") : "", nip: p.nip === COMPANY_DEFAULTS.nip ? "PL 525-284-27-87" : p.nip, emergencyPhone: p.emergencyPhone || p.phone || "" };
+  return { name: p.tradeName || p.name, address1: lines[0]?.replace(/,$/, "") === "ul. Długa 29" ? "ul. Dluga 29" : (lines[0] || "").replace(/,$/, ""), address2: lines.length > 1 ? lines.slice(1).join(" - ") : "", nip: p.nip === COMPANY_DEFAULTS.nip ? "PL 525-284-27-87" : p.nip, emergencyPhone: String(p.emergencyPhone || p.phone || "").trim()};   // v7.30.4 (M-5): the trade name printed on transport orders is a Settings › Company field
 }
 export function companyProfile(): typeof COMPANY_DEFAULTS & Record<string, any> {
   let stored: any = {}; try { stored = readFromStorage("company", {}) || {}; } catch { stored = {}; }

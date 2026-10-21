@@ -53,6 +53,23 @@ const fkt = () => calls.filter(c => /fakturownia\.pl/.test(c.url));
     const x = await run({ method: "POST", query: { op: "create" }, headers: { authorization: "Bearer good" }, body: { invoice: { kind: "vat" } } });
     eq(x.status, 403); ok(/TEST copy/.test(x.body.error), x.raw); eq(fkt().length, 0, "Fakturownia was called from TEST");
   });
+  await t("M-2 (v7.30.1, audit F-04): a live invoice is issued only by the owner or a user with the Invoices module — read from the shared users list with the caller's own sign-in; with no owner linked everyone may", async () => {
+  setEnv({ ...SUPA, FAKTUROWNIA_API_TOKEN: "SECRET", FAKTUROWNIA_SUBDOMAIN: "acme" });
+  const EMAIL = { "Bearer own": "owner@firm.pl", "Bearer inv": "ops@firm.pl", "Bearer no": "Admin@Firm.pl", "Bearer stranger": "x@else.pl" };
+  const users = [{ id: 1, email: "owner@firm.pl", isOwner: true, modules: {} }, { id: 2, email: "ops@firm.pl", isOwner: false, modules: { invoices: true } }, { id: 3, email: "admin@firm.pl", isOwner: false, modules: { invoices: false } }];
+  let list = users;
+  mockFetch((u, i) => { const auth = (i.headers || {}).Authorization;
+  if (u.endsWith("/auth/v1/user")) return EMAIL[auth] ? answer(200, { id: "u", email: EMAIL[auth] }) : answer(401, {});
+  if (u.includes("/rest/v1/stores?key=eq.users")) return answer(200, [{ data: list }]);
+  return answer(201, { id: 9, number: "FV 9/2026" }); });
+  const go = async who => { calls.length = 0; const r = await run({ method: "POST", query: { op: "create" }, headers: { authorization: who }, body: { invoice: { kind: "vat" } } }); return { status: r.status, sent: fkt().length }; };
+  eq(JSON.stringify(await go("Bearer own")), JSON.stringify({ status: 200, sent: 1 }), "the owner");
+  eq(JSON.stringify(await go("Bearer inv")), JSON.stringify({ status: 200, sent: 1 }), "a user with the Invoices module");
+  eq(JSON.stringify(await go("Bearer no")), JSON.stringify({ status: 403, sent: 0 }), "a user without the Invoices module (e-mail case ignored)");
+  eq(JSON.stringify(await go("Bearer stranger")), JSON.stringify({ status: 403, sent: 0 }), "a sign-in not in the users list");
+  list = [{ id: 1, email: "", isOwner: true }];
+  eq(JSON.stringify(await go("Bearer stranger")), JSON.stringify({ status: 200, sent: 1 }), "no owner linked yet: the model is off");
+  });
   await t("AUD-49 (v7.21.1): any other request is refused", async () => {
     setEnv({ ...SUPA, FAKTUROWNIA_API_TOKEN: "SECRET", FAKTUROWNIA_SUBDOMAIN: "acme" }); calls.length = 0; mockFetch((u, i) => session(u, i) || answer(200, {}));
     eq((await run({ query: { op: "clients" }, headers: { authorization: "Bearer good" } })).status, 400); eq((await run({ method: "DELETE", query: { op: "invoices" }, headers: { authorization: "Bearer good" } })).status, 400); eq(fkt().length, 0);
