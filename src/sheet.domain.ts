@@ -42,8 +42,28 @@ export const SHEET_COLUMNS: SheetCol[] = [
   { key: "eta", label: "ETA", kind: "date", width: 130 },
 ];
 
-export interface SheetRow { id: string; createdAt: string; frozen?: boolean; cells: Record<string, any>; }
-export interface SheetTab { id: string; name: string; order: number; createdAt: string; rows: SheetRow[]; }
+// v7.30.17 (owner test 21 Oct: "like an excel sheet — another line in the same cell, cell height and width, bold letters and colours
+// for the letters and the cells"): the sheet keeps its own LOOK beside its content — a row's height, a tab's column widths, a cell's
+// bold / text colour / fill. Presentation only: never logged for the study, never read by any module.
+export interface CellStyle { b?: boolean; color?: string; fill?: string; }
+export interface SheetRow { id: string; createdAt: string; frozen?: boolean; cells: Record<string, any>; height?: number; styles?: Record<string, CellStyle>; }
+export interface SheetTab { id: string; name: string; order: number; createdAt: string; rows: SheetRow[]; widths?: Record<string, number>; }
+export const TEXT_COLOURS = ["#111827", "#B91C1C", "#C2410C", "#15803D", "#1D4ED8", "#7E22CE", "#6B7280"];
+export const FILL_COLOURS = ["#FEF08A", "#FECACA", "#FED7AA", "#BBF7D0", "#BFDBFE", "#E9D5FF", "#E5E7EB"];
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
+/** A cell's look changed (a patch value of null clears that part; an empty look is removed). */
+export function setCellStyle(tab: SheetTab, rowId: string, key: string, patch: Partial<Record<keyof CellStyle, any>> | null): SheetTab {
+return { ...tab, rows: (tab.rows || []).map(r => {
+if (r.id !== rowId) return r;
+const cur: any = { ...((r.styles || {})[key] || {}) };
+if (patch === null) { Object.keys(cur).forEach(k => delete cur[k]); } else Object.entries(patch).forEach(([k, v]) => { if (v === null || v === undefined || v === false || v === "") delete cur[k]; else cur[k] = v; });
+const styles: any = { ...(r.styles || {}) }; if (Object.keys(cur).length) styles[key] = cur; else delete styles[key];
+const n: any = { ...r, styles }; if (!Object.keys(styles).length) delete n.styles; return n;
+}) };
+}
+/** A column's width (50–600 px) and a row's height (24–400 px), as dragged. */
+export function setColWidth(tab: SheetTab, key: string, px: number): SheetTab { return { ...tab, widths: { ...(tab.widths || {}), [key]: clamp(px, 50, 600) } }; }
+export function setRowHeight(tab: SheetTab, rowId: string, px: number): SheetTab { return { ...tab, rows: (tab.rows || []).map(r => r.id === rowId ? { ...r, height: clamp(px, 24, 400) } : r) }; }
 export interface SheetLogEntry { at: string; who: string; tab: string; row?: string; col?: string; old?: any; now?: any; action: "cell" | "row+" | "row-" | "freeze" | "unfreeze" | "tab+" | "tab-" | "rename" | "import" | "paste"; }
 
 let seq = 0;

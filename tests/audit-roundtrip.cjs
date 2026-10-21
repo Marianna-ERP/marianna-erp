@@ -4838,6 +4838,24 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.30.15–16 — owner test 21 Oct: the booking's cut-off; the unit's currency warning ══
+(function v73016(){
+  console.log("\n══ v7.30.15–16 — the cut-off and the unit's currency ══");
+  const SM = B("shipmentModel.domain.js"); const fsx = require("fs"), px = require("path");
+  t("v7.30.15: a truck whose delivery date is known is judged by it — arriving on the cut-off day makes it, a day later does not; with no delivery date the loading date plus the transit days still decides", () => {
+    const sh = (u) => ({ bookings: [{ id: 1, number: "BK2026", cutOff: "2026-09-05" }], legs: [{ mode: "Road", vehicles: [{ kind: "truck", bookingId: 1, truckPlate: "TP1", plannedLoadingDate: "2026-09-03", ...u }] }] });
+    eq(SM.cutOffWarnings(sh({ plannedDeliveryDate: "2026-09-05" })).length, 0, "the delivery on the cut-off day was warned");
+    const late = SM.cutOffWarnings(sh({ plannedDeliveryDate: "2026-09-06" })); eq(late.length, 1); eq(late[0].delivery, "2026-09-06"); eq(late[0].cutOff, "2026-09-05");
+    eq(SM.cutOffWarnings(sh({ plannedLoadingDate: "2026-09-05" })).length, 1, "no delivery date: loading on the cut-off day with a day's transit is late");
+    eq(SM.cutOffWarnings(sh({ plannedLoadingDate: "2026-09-04" })).length, 0);
+  });
+  t("v7.30.15–16 (editor): a cut-off more than 30 days before its ETD is said and outlined in red (a wrong year); the unit's guide line gave way to a warning when it is priced in another currency than the carrier invoices in", () => {
+    const e = fsx.readFileSync(px.join(__dirname, "../src/ShipmentEditor.tsx"), "utf8");
+    ok(/function cutOffFarFromEtd\(b: any\): boolean \{[^}]*e - c > 30 \* 86400000/.test(e) && /check the year/.test(e), "no wrong-year check");
+    ok(!/Optional — set this when each truck/.test(e) && /data-unit-currency-warning="1"/.test(e) && /invoices in \{uc\.currency\}; this unit is priced in \{cur\}/.test(e), "the guide line stayed or no currency warning");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

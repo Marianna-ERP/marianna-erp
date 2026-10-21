@@ -52,5 +52,30 @@ const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.proto
     await act(async () => { c2.focus(); c2.dispatchEvent(new dom.window.FocusEvent("focusin", { bubbles: true })); setter.call(c2, "typo"); c2.dispatchEvent(new dom.window.Event("input", { bubbles: true })); c2.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     ok(!m.latest().flatMap(x => x.rows).some(r => r.cells.client === "typo"), "Escape stored the typo");
   });
+  // ══ v7.30.17 (owner test 21 Oct): like an Excel sheet — several lines in a cell, sizes, bold and colours ══
+  const SD = require(path.resolve("./src/sheet.domain"));
+  await t("v7.30.17: a text cell is a text box — Alt+Enter starts a new line in the same cell, leaving it stores both lines", async () => {
+    const box = m.host.querySelector("table textarea[data-sheet-text='1']"); ok(box, "no multi-line text cell");
+    const tset = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value").set;
+    await act(async () => { box.focus(); box.dispatchEvent(new dom.window.FocusEvent("focusin", { bubbles: true })); tset.call(box, "first line"); box.selectionStart = box.selectionEnd = box.value.length; });
+    await act(async () => { box.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", altKey: true, bubbles: true })); });
+    ok(box.value === "first line\n", "Alt+Enter did not start a new line: " + JSON.stringify(box.value));
+    await act(async () => { tset.call(box, box.value + "second line"); box.blur(); box.dispatchEvent(new dom.window.FocusEvent("focusout", { bubbles: true })); });
+    const stored = m.latest().flatMap(x => x.rows).some(r => Object.values(r.cells || {}).some(v => v === "first line\nsecond line")); ok(stored, "the two lines were not stored together");
+  });
+  await t("v7.30.17: the selected cell's look — bold, a text colour, a fill — kept with the sheet (not logged); a row's height and a column's width kept as dragged", async () => {
+    const bar = m.host.querySelector("[data-sheet-format='1']"); ok(bar, "no formatting bar for the selected cell");
+    const bold = Array.from(bar.querySelectorAll("button")).find(b => b.textContent === "B");
+    await act(async () => { bold.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+    ok(m.latest().flatMap(x => x.rows).some(r => Object.values(r.styles || {}).some(s => s && s.b)), "bold was not kept");
+    const fill = bar.querySelector("button[title='fill " + SD.FILL_COLOURS[0] + "']");
+    await act(async () => { fill.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+    ok(m.latest().flatMap(x => x.rows).some(r => Object.values(r.styles || {}).some(s => s && s.fill === SD.FILL_COLOURS[0])), "the fill was not kept");
+    ok(m.host.querySelector("[data-col-resize]") && m.host.querySelector("[data-row-resize]"), "no handles to drag the width or the height");
+    const tab0 = { id: "t", name: "w", order: 1, createdAt: "x", rows: [{ id: "r", createdAt: "x", cells: {} }] };
+    ok(SD.setColWidth(tab0, "client", 900).widths.client === 600 && SD.setRowHeight(tab0, "r", 10).rows[0].height === 24, "the sizes are not kept within 50–600 / 24–400");
+    const styled = SD.setCellStyle(SD.setCellStyle(tab0, "r", "client", { b: true, color: "#B91C1C" }), "r", "client", { b: null });
+    ok(JSON.stringify(styled.rows[0].styles) === JSON.stringify({ client: { color: "#B91C1C" } }), "a part of the look is not cleared alone"); ok(!("styles" in SD.setCellStyle(styled, "r", "client", null).rows[0]), "clearing leaves an empty look");
+  });
   console.log(`SHEET TYPING: ${passed} passed, ${failed} failed`); process.exit(failed ? 1 : 0);
 })();

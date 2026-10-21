@@ -48,7 +48,7 @@ export function latestLoadingDate(cutOffISO: string, transitDays: number): strin
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export interface CutOffWarning { unit: string; loadingDate: string; latest: string; booking: string; }
+export interface CutOffWarning { unit: string; loadingDate: string; latest: string; booking: string; delivery?: string; cutOff?: string; }
 /** Trucks whose planned loading date cannot make their booking's cut-off (transit days per unit, default 1). */
 export function cutOffWarnings(sh: any): CutOffWarning[] {
   const out: CutOffWarning[] = [];
@@ -59,9 +59,13 @@ export function cutOffWarnings(sh: any): CutOffWarning[] {
     const b = bookings.find(x => String(x.id) === String(u.bookingId)) || bookings[0];
     if (!b?.cutOff) return;
     const date = S(u.loadedAt || u.plannedLoadingDate || leg.plannedPickupDate);
+    // v7.30.15 (owner test 21 Oct): a truck whose delivery date is known is judged by it — arriving on the cut-off day makes it; the
+    // loading date plus the transit days is the estimate only while no delivery date is set
+    const cut = S(b.cutOff).slice(0, 10); const delivery = S(unitUnloadedAt(u) || u.plannedDeliveryDate || leg.plannedDeliveryDate).slice(0, 10);
+    if (delivery) { if (delivery > cut) out.push({ unit: S(u.truckPlate || u.id), loadingDate: date, latest: "", booking: b.number || "(booking)", delivery, cutOff: cut }); return; }
     if (!date) return;
     const latest = latestLoadingDate(b.cutOff, u.transitDays ?? 1);
-    if (latest && date > latest) out.push({ unit: S(u.truckPlate || u.id), loadingDate: date, latest, booking: b.number || "(booking)" });
+    if (latest && date > latest) out.push({ unit: S(u.truckPlate || u.id), loadingDate: date, latest, booking: b.number || "(booking)", cutOff: cut });
   }));
   return out;
 }

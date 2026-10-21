@@ -26,6 +26,8 @@ import { legFreightPayers, freightLineNotOurs, PAYER_LABEL, exwCarriageConflict,
 import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { applyDerivedTravel, temperatureFromCatalog, palletTypeFromPackaging, goodsOnUnit, unitCurrencyFrom } from "./shipmentDerived.domain";   // v7.27.9 (FZ-29)
 
+/** v7.30.15 (owner test 21 Oct): a cut-off more than 30 days before its ETD is most likely a wrong year (05/09/2023 for 05/09/2026). */
+function cutOffFarFromEtd(b: any): boolean { const c = Date.parse(String(b?.cutOff || "")), e = Date.parse(String(b?.etd || "")); return !isNaN(c) && !isNaN(e) && e - c > 30 * 86400000; }
 export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [], packagingTypes = [], productCatalog = [], onSave, onCancel, allShipmentsForCap = [], invoices = [] }: any) {
   
   
@@ -507,7 +509,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
               <div style={{ display: "grid", gridTemplateColumns: "minmax(170px, 1.6fr) minmax(120px, 1fr) 132px 132px 132px", gap: 10 }}>
                 <div><Lbl>Forwarder</Lbl><Sel value={b?.forwarderId ?? ""} onChange={e => sb("forwarderId", e.target.value || null)} title="v6.99.8: one forwarder per booking — every container on it is carried by him; the sea freight line names him"><option value="">— forwarder —</option>{pickerParties(contacts, b?.forwarderId).filter((c: any) => ["Forwarder", "Carrier", "ShippingLine"].includes(c.type) || (c.roles || []).some((r: string) => ["Forwarder", "Carrier", "ShippingLine"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}{archivedMark(c)}</option>)}</Sel></div>
                 <div><Lbl>Booking no.</Lbl><Inp value={b?.number || ""} onChange={e => sb("number", e.target.value)} placeholder="from the forwarder" /></div>
-                <div><Lbl>Cut-off</Lbl><Inp type="date" value={b?.cutOff || ""} onChange={e => sb("cutOff", e.target.value)} /></div>
+                <div><Lbl>Cut-off</Lbl><Inp type="date" value={b?.cutOff || ""} onChange={e => sb("cutOff", e.target.value)} style={(b?.cutOff && b?.etd && (String(b.cutOff) > String(b.etd) || cutOffFarFromEtd(b))) ? { border: "2px solid #DC2626", background: "#FEF2F2" } : undefined} /></div>
                 <div><Lbl>ETD</Lbl><div style={ring(!b?.etd)}><Inp type="date" value={b?.etd || ""} onChange={e => sb("etd", e.target.value)} /></div></div>
                 <div><Lbl>ETA</Lbl><div style={ring(!b?.eta)}><Inp type="date" value={b?.eta || ""} onChange={e => sb("eta", e.target.value)} /></div></div>
               </div>
@@ -516,6 +518,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                 const w: string[] = [];
                 if (b?.eta && due && String(b.eta) > due) w.push(`ETA ${formatDMY(b.eta)} is AFTER the expected delivery of ${so.number} (${formatDMY(due)}) — the container lands too late for the sale.`);
                 if (b?.cutOff && b?.etd && String(b.cutOff) > String(b.etd)) w.push(`Cut-off ${formatDMY(b.cutOff)} is after the ETD ${formatDMY(b.etd)}.`);
+                if (cutOffFarFromEtd(b)) w.push(`Cut-off ${formatDMY(b.cutOff)} is ${Math.round((Date.parse(String(b.etd)) - Date.parse(String(b.cutOff))) / 86400000)} days before the ETD ${formatDMY(b.etd)} — check the year.`);   // v7.30.15
                 if (b?.etd && b?.eta && String(b.eta) < String(b.etd)) w.push(`ETA ${formatDMY(b.eta)} is before the ETD ${formatDMY(b.etd)}.`);
                 return w.length ? <div style={{ marginTop: 6, fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 8px" }}>{w.map((x, i) => <div key={i}>⚠ {x}</div>)}</div> : null; })()}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 8 }}>   {/* ports, containers planned, BL, line */}
@@ -554,7 +557,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
         {isSupplierTruck && supplierTruckFacts()}{(!isSupplierTruck) && (<Card>
           {cutOffWarnings(draft).map((w: any, k: number) => (
             <div key={"co" + k} style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11, color: "#92400E", fontWeight: 600 }}>
-              ⏱ {w.unit}: loading {formatDMY(w.loadingDate)} cannot make booking {w.booking}'s cut-off — latest loading {w.latest}.
+              {w.delivery ? `⏱ ${w.unit}: delivery ${formatDMY(w.delivery)} is after booking ${w.booking}'s cut-off ${formatDMY(w.cutOff)}.` : `⏱ ${w.unit}: loading ${formatDMY(w.loadingDate)} cannot make booking ${w.booking}'s cut-off ${formatDMY(w.cutOff)} — latest loading ${formatDMY(w.latest)}.`}   {/* v7.30.15 */}
             </div>
           ))}
           {stuffingViolations(draft).map((v: string, k: number) => (
@@ -709,7 +712,8 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                     const typed = parseNum(u.costAmount) > 0; const cur = u.priceCurrency || leg.costCurrency || "PLN";
                     if (!typed && uc.currency) return <div><Lbl>Currency <span style={{ color: "#AAA", fontWeight: 400 }}>· the {uc.source}'s</span></Lbl><div style={{ padding: "7px 9px", border: "1px solid #F3F4F6", borderRadius: 6, fontSize: 13, fontWeight: 700, background: "#F8FAFC" }}>{uc.currency}</div></div>;
                     return <div><Lbl>Currency{typed && uc.currency && uc.currency !== cur ? <span style={{ color: "#B45309", fontWeight: 400 }}> · the {uc.source} invoices in {uc.currency}</span> : null}</Lbl><Sel value={cur} onChange={e => { const c2 = e.target.value; updateVehicle(i, ui, "priceCurrency", c2); updateLeg(i, "costCurrency", c2); updateLeg(i, "costFxRate", documentFxDefault(c2)); }} title="the price's own currency — while no price is typed it is the carrier's">{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>; })()}
-                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10, color: "#64748B", paddingBottom: 8 }}>{(legPayers[i]?.payer || "us") !== "us" ? `Freight on this leg is ${PAYER_LABEL[legPayers[i].payer]} (${legPayers[i].why}) — a price here makes no cost line of ours.` : "Optional — set this when each truck/container has a different price. The transport order totals all unit prices for the carrier."}</div>
+                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10, color: "#64748B", paddingBottom: 8 }}>{(legPayers[i]?.payer || "us") !== "us" ? `Freight on this leg is ${PAYER_LABEL[legPayers[i].payer]} (${legPayers[i].why}) — a price here makes no cost line of ours.` : (() => { const cid = carrierOfUnit(draft, leg, u); const uc = unitCurrencyFrom(cid != null ? (contacts || []).find((c: any) => String(c.id) === String(cid)) : null, (draft.bookings || [])[0]); const cur = u.priceCurrency || leg.costCurrency || "PLN";   /* v7.30.16 (owner test 21 Oct): the guide line gave way to a warning */
+                    return parseNum(u.costAmount) > 0 && uc.currency && uc.currency !== cur ? <span data-unit-currency-warning="1" style={{ color: "#B45309", fontWeight: 700 }}>⚠ {uc.source === "carrier" ? "The carrier" : `The ${uc.source}`} invoices in {uc.currency}; this unit is priced in {cur}. Fine when agreed — the carrier's invoice will be checked against {cur}.</span> : ""; })()}</div>
                 </div>
                 {(() => { const p = legPayers[i]; const c = p && p.payer !== "us" ? carrierOfUnit(draft, leg, u) : null; if (c == null || c === "") return null;   // v7.20.5 (A-INC-2, 5): a transport order would go out
                   return <div data-terms-carrier="1" style={{ marginTop: 8, fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px" }} title="v7.20.5 (A-INC-2, 5): flagged, never changed">⚠ Leg {i + 1}'s freight is {PAYER_LABEL[p.payer]} ({p.why}{p.doc ? `, ${p.doc}` : ""}), yet {((contacts || []).find((x: any) => String(x.id) === String(c)) || {}).name || "a carrier"} is named on this unit — a transport order would go out to them.</div>; })()}
