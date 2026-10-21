@@ -143,7 +143,10 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     const dirOf = (h) => (h.match(/data-trade-direction="([^"]*)"/) || [])[1];
     // a delivered shipment opens with its Arrange stage folded; the same record with status Booked shows it (same places, same sale)
     const shp = (n) => { const s = d.shipments.find(x => x.number === n); return ["Delivered", "Closed", "Arrived"].includes(s.status) ? { ...s, status: "Booked" } : s; };
-    await t("A-TD-1: Koper → Warsaw (SHP-2026-0007) is Intra-EU — a typed address is not read as a country", async () => { ok(dirOf(edH(shp("SHP-2026-0007"))) === "INTRA_EU", "got " + dirOf(edH(shp("SHP-2026-0007")))); });
+    // v7.28.7 (Batch L): the route decides where a shipment starts — the scenario stated on the route (on the test file this truck's
+    // first leg points at a supplier address by an old id that no longer resolves — FZ-36)
+    const viaKoper = s => ({ ...s, legs: (s.legs || []).map((l, i) => i === 0 ? { ...l, fromLocationId: 113 } : l) });
+    await t("A-TD-1: Koper → Warsaw (SHP-2026-0007) is Intra-EU — a typed address is not read as a country", async () => { ok(dirOf(edH(viaKoper(shp("SHP-2026-0007")))) === "INTRA_EU", "got " + dirOf(edH(viaKoper(shp("SHP-2026-0007"))))); });
     await t("A-TD-1: the Hungarian producer's own truck to us (SHP-2026-0036) is Intra-EU, not a default Import", async () => { ok(dirOf(edH(shp("SHP-2026-0036"))) === "INTRA_EU", "got " + dirOf(edH(shp("SHP-2026-0036")))); });
     await t("A-TD-1: Poland → Egypt with no sale (SHP-2026-0030) is Export", async () => { ok(dirOf(edH(shp("SHP-2026-0030"))) === "EXPORT", "got " + dirOf(edH(shp("SHP-2026-0030")))); });
     await t("A-TD-2: the editor's customs check knows an export with NO stored direction (SHP-2026-0035): the zero-rating wording", async () => {
@@ -163,7 +166,8 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
       // v7.24.1 (FZ-01): the one-time clear ran on both copies (no stored direction left, 15 Oct) and went
     });
     await t("A-TD-4: the editor shows the countries actually used and where each comes from", async () => {
-      const h = T(edH(shp("SHP-2026-0007"))); ok(/Slovenia \(starting place\) → Poland \(client's country\)/.test(h), "got: " + (h.match(/Trade direction.{0,160}/) || [""])[0]);
+      const h = T(edH(viaKoper(shp("SHP-2026-0007")))); ok(/Slovenia \(starting place\) → Poland \(client's country\)/.test(h), "got: " + (h.match(/Trade direction.{0,160}/) || [""])[0]);
+      ok(/the starting place is not a known place/.test(T(edH(shp("SHP-2026-0007")))), "an unknown starting place is still called 'no starting place set'");
     });
   }
 
@@ -308,7 +312,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
   await t("BP-9 / BP-17: 'Actual availability' is off the PO form and 'Actual delivery' off the SO form", async () => {
     const { OrderForm } = require(path.resolve("./src/PurchaseOrderForm")); const po = d.pos[0];
     const h = T(renderToStaticMarkup(React.createElement(OrderForm, { order: { ...po, status: "Draft" }, setOrder: noop, contacts: d.contacts, allSOs: d.orders, allShipments: d.shipments, lots: d.lots, onSave: noop, onCancel: noop })));
-    ok(/Expected delivery date/.test(h), "the PO form did not render"); ok(!/Actual availability/.test(h), "the PO form still shows 'Actual availability'");
+    ok(/(Loading|Shipment|Delivery) date/.test(h), "the PO form did not render"); ok(!/Expected delivery date/.test(h), "the PO form still asks for a second date (v7.28.5: one promised date)"); ok(!/Actual availability/.test(h), "the PO form still shows 'Actual availability'");
     ok(!/<Lbl>Actual delivery<\/Lbl>/.test(srcOf("SalesOrderForm.tsx")), "the SO form still shows 'Actual delivery'");
   });
   await t("A-RV-04: a catalog CN code is saved with Save, not at each keystroke", async () => {
@@ -430,7 +434,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
   });
   await t("A-AU-12: claims, settlements and warehouse invoices take NBP rates — none typed", async () => {
     const cl = srcOf("Claims.tsx"), po = srcOf("PurchaseOrders.tsx"), fi = srcOf("Finance.tsx");
-    ok(!/patch\(selected\.id, \{ plnPerEur: e\.target\.value \}\)/.test(cl) && /nbpRateBefore\("EUR", date\)/.test(cl), "the claim's rate is still typed");
+    ok(!/patch\(selected\.id, \{ fxToPLN: e\.target\.value \}\)/.test(cl) && /nbpRateBefore\("EUR", date\)/.test(cl), "the claim's rate is still typed");
     ok(!/upd\(\{ ratePLNperEUR: parseFloat/.test(po) && /settlementRate\(order, rec/.test(po), "the settlement's rate is still typed");
     ok(!/setInv\(\{ \.\.\.inv, fxRate: e\.target\.value \}\)/.test(fi) && /nbpRateBefore\(c, inv\.date\)/.test(fi), "the warehouse invoice's rate is still typed");
   });
@@ -501,7 +505,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     const h = shipList({ initialStatusFilter: "Terms to review" });
     // v7.27.11 (FZ-16): the expected-document lines come on top of the 21 — the base is unchanged
     const nAll = Number((h.match(/Terms to review \((\d+)\)/) || [])[1] || 0); const nDocs = (h.match(/expected document missing/g) || []).length;
-    ok(nAll - nDocs === 21 && nDocs > 0, `the filter counts ${nAll}, of which ${nDocs} expected-document lines — the base is not 21`); ok(new RegExp(`${nAll} inconsistencies with the incoterms on \\d+ records`).test(h), "the review is not drawn: " + (h.match(/inconsistenc.{0,80}/) || ["(none)"])[0]);
+    ok(nAll - nDocs === 28 && nDocs > 0, `the filter counts ${nAll}, of which ${nDocs} expected-document lines — the base is not 28 (v7.28.7: the route decides where a shipment starts)`); ok(new RegExp(`${nAll} inconsistencies with the incoterms on \\d+ records`).test(h), "the review is not drawn: " + (h.match(/inconsistenc.{0,80}/) || ["(none)"])[0]);
     ok(/CFR SO-2026-0001 named place not a port ⚠ Sold CFR: the named place must be the port of destination/.test(h), "SO-0001's line is missing");
     ok(/CIF SO-2026-0020 → SHP-2026-0028 no insurance certificate ⚠ Sold CIF: we insure the cargo — ICC \(C\) minimum/.test(h), "SHP-0028's line is missing");
     const plain = shipList(); ok(new RegExp(`Terms to review \\(${nAll}\\)`).test(plain) && !/inconsistencies with the incoterms on/.test(plain), "the review shows without the filter");

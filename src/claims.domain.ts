@@ -92,7 +92,7 @@ export interface Claim {
   basis: ClaimBasis;
   /** COSTS/MIXED side — cargo actually lost, and the costs the party caused us. */
   lostKg: any;
-  lostValueEUR: any;
+  lostValue: any;
   causedCosts: { label: string; amountEUR: any }[];
   /** v6.70.0 — the CLIENT's own costs in a producer recovery: his import
    *  clearance and his haulage from the port to his warehouse. They were never
@@ -103,19 +103,17 @@ export interface Claim {
   defectPct: any;
   soldInMarket: boolean | null;
   recoveredEGP: any;
-  egpPerEur: any;
-  plnPerEur: any;
+  egpRate: any;
+  fxToPLN: any;
   /** v6.81.0 (D-62, owner ruling): the claim's currency follows the ROOT document —
    *  a PLN sale is claimed in PLN, a EUR purchase in EUR. acceptedAmount + fxToPLN
    *  carry the money in that currency; the EUR fields stay as the legacy mirror. */
   currency?: string;
   acceptedAmount?: any;
-  fxToPLN?: any;
-  totalCostEUR: any;
-  defectValueEUR: any;
-  recoveredEUR: any;
-  requestedEUR: any;              // what we asked for
-  acceptedEUR: any;               // what was agreed after negotiation — the number that moves the P/L
+  totalCost: any;
+  defectValue: any;
+  recovered: any;
+  requestedAmount: any;              // what we asked for
   status: ClaimStatus;
   resolvedAt: string;
   evidence: ClaimEvidence[];
@@ -123,7 +121,6 @@ export interface Claim {
   movementRef: any;              // the CLAIM movement that carries claimedKg
   notes: string;
   migratedFrom?: string;          // provenance when lifted out of the old structures
-  requestedAmount?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
@@ -148,12 +145,12 @@ export function blankClaim(overrides: Partial<Claim> = {}): Claim {
     respondent: { kind: "Supplier", contactId: null, name: "" },
     cause: "Quality defect", subjects: [], parentClaimId: null,
     date: "", notifiedAt: "", noticeDeadline: "",
-    costLines: [], basis: "DEFECT", lostKg: "", lostValueEUR: "", causedCosts: [], clientCosts: [],
+    costLines: [], basis: "DEFECT", lostKg: "", lostValue: "", causedCosts: [], clientCosts: [],
     defectType: "", defectPct: "", soldInMarket: null,
-    recoveredEGP: "", egpPerEur: "", plnPerEur: "",
-    currency: (overrides as any)?.currency || "EUR", acceptedAmount: null, fxToPLN: (overrides as any)?.fxToPLN ?? "",
-    totalCostEUR: 0, defectValueEUR: 0, recoveredEUR: 0,
-    requestedEUR: 0, acceptedEUR: null,
+    recoveredEGP: "", egpRate: "",
+    currency: (overrides as any)?.currency || "EUR", fxToPLN: (overrides as any)?.fxToPLN ?? "",
+    totalCost: 0, defectValue: 0, recovered: 0,
+    requestedAmount: 0, acceptedAmount: null,
     status: "Draft", resolvedAt: "", evidence: [],
     financeNoteId: null, movementRef: null, notes: "",
     ...overrides,
@@ -164,10 +161,10 @@ export function blankClaim(overrides: Partial<Claim> = {}): Claim {
 export function requestedFromBasis(c: any): number {
   const basis = str(c?.basis) || "DEFECT";
   const causedEUR = (c?.causedCosts || []).reduce((a: number, x: any) => a + num(x?.amountEUR), 0);
-  const defectEUR = num(c?.defectValueEUR) - num(c?.recoveredEUR);
-  const lostEUR = num(c?.lostValueEUR);
+  const defectEUR = num(c?.defectValue) - num(c?.recovered);
+  const lostEUR = num(c?.lostValue);
   let total = 0;
-  if (basis === "DEFECT") total = defectEUR > 0 ? defectEUR : num(c?.requestedEUR);
+  if (basis === "DEFECT") total = defectEUR > 0 ? defectEUR : num(c?.requestedAmount);
   else if (basis === "COSTS") total = lostEUR + causedEUR;
   else total = (defectEUR > 0 ? defectEUR : 0) + lostEUR + causedEUR;
   return Math.round(Math.max(0, total) * 100) / 100;
@@ -202,7 +199,7 @@ export function incidentNet(claims: any[], rootClaimId: any) {
   const root = all.find((c: any) => String(c?.id) === String(rootClaimId));
   if (!root) return { conceded: 0, recovered: 0, net: 0, members: [] as any[] };
   const family = [root, ...all.filter((c: any) => String(c?.parentClaimId ?? "") === String(root.id))];
-  const amount = (c: any) => (c.acceptedEUR != null && c.acceptedEUR !== "" ? num(c.acceptedEUR) : num(c.requestedEUR));
+  const amount = (c: any) => (c.acceptedAmount != null && c.acceptedAmount !== "" ? num(c.acceptedAmount) : num(c.requestedAmount));
   const conceded = family.filter(c => c.direction === "CONCESSION").reduce((a, c) => a + amount(c), 0);
   const recovered = family.filter(c => c.direction === "RECOVERY").reduce((a, c) => a + amount(c), 0);
   return {
@@ -222,7 +219,7 @@ export function claimsSummary(claims: any[], todayISO: string) {
   const open = rows.filter(isClaimOpen);
   const overdue = open.filter(c => str(c.noticeDeadline) && str(c.noticeDeadline) < todayISO && !str(c.notifiedAt));
   const noEvidence = open.filter(c => !(c.evidence || []).some((e: any) => str(e?.link)));
-  const amount = (c: any) => (c.acceptedEUR != null && c.acceptedEUR !== "" ? num(c.acceptedEUR) : num(c.requestedEUR));
+  const amount = (c: any) => (c.acceptedAmount != null && c.acceptedAmount !== "" ? num(c.acceptedAmount) : num(c.requestedAmount));
   return {
     total: rows.length,
     open: open.length,
@@ -268,12 +265,12 @@ export function isPostable(c: any): boolean {
  * Recoveries spread across the claim's lots pro-rata by affected kg (evenly when
  * no kg are stated). Concessions land on the sales order.
  */
-export function buildClaimPostings(claim: any, opts: { plnPerEur?: any; todayISO?: string } = {}): { postings: ClaimPosting[]; warnings: string[] } {
+export function buildClaimPostings(claim: any, opts: { fxToPLN?: any; todayISO?: string } = {}): { postings: ClaimPosting[]; warnings: string[] } {
   const warnings: string[] = [];
   if (!isPostable(claim)) return { postings: [], warnings: ["Claim is not accepted, or the agreed amount is zero"] };
 
   const money = claimMoney(claim);
-  const rate = money.currency === "PLN" ? 1 : (num(opts.plnPerEur) || num(claim?.fxToPLN) || num(claim?.plnPerEur));
+  const rate = money.currency === "PLN" ? 1 : (num(opts.fxToPLN) || num(claim?.fxToPLN) || num(claim?.fxToPLN));
   if (!(rate > 0)) return { postings: [], warnings: [`No ${money.currency}→PLN rate on the claim — set one before posting`] };
 
   const acceptedPLN = money.currency === "PLN" ? Math.round(money.amount * 100) / 100 : Math.round(money.amount * rate * 100) / 100;
@@ -381,7 +378,7 @@ export function buildClaimFinanceNote(
   deps: { nextId: () => any; todayISO: () => string; invoices?: any[] }
 ): any {
   const money = claimMoney(claim);                 // v6.81.0 (D-62): in the claim's own currency
-  const acceptedEUR = money.amount;
+  const acceptedAmount = money.amount;
   const fx = money.currency === "PLN" ? 1 : (money.amount > 0 ? money.pln / money.amount : 0);
   const amountPLN = money.pln;
   const invSubj = (claim?.subjects || []).find((s: any) => s.kind === "INVOICE");
@@ -393,7 +390,7 @@ export function buildClaimFinanceNote(
     relatedRef: firstDoc ? String(firstDoc.ref) : String(claim?.number || ""),
     partyName: String(claim?.respondent?.name || ""),
     category: "Claim settlement",
-    amount: acceptedEUR,
+    amount: acceptedAmount,
     currency: money.currency,
     fxRate: fx || 1,
     amountPLN,
@@ -415,9 +412,9 @@ export function claimMoney(c: any): { currency: string; amount: number; pln: num
   const cur = String(c?.currency || "EUR").toUpperCase();
   if (cur !== "EUR" || (c?.acceptedAmount != null && c?.acceptedAmount !== "")) {
     const amount = num(c?.acceptedAmount);
-    const fx = cur === "PLN" ? 1 : (num(c?.fxToPLN) || (cur === "EUR" ? num(c?.plnPerEur) : 0));
+    const fx = cur === "PLN" ? 1 : (num(c?.fxToPLN) || (cur === "EUR" ? num(c?.fxToPLN) : 0));
     return { currency: cur, amount, pln: Math.round(amount * fx * 100) / 100 };
   }
-  const amount = c?.acceptedEUR != null && c?.acceptedEUR !== "" ? num(c.acceptedEUR) : 0;
-  return { currency: "EUR", amount, pln: Math.round(amount * num(c?.plnPerEur) * 100) / 100 };
+  const amount = c?.acceptedAmount != null && c?.acceptedAmount !== "" ? num(c.acceptedAmount) : 0;
+  return { currency: "EUR", amount, pln: Math.round(amount * num(c?.fxToPLN) * 100) / 100 };
 }

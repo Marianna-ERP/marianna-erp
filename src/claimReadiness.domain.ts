@@ -213,34 +213,34 @@ export function evidenceWarning(gaps: EvidenceGap[]): string {
 
 export interface NoteReconciliation {
   state: "no-amount" | "no-note" | "matched" | "differs";
-  acceptedEUR: number;
-  noteEUR: number;
-  differenceEUR: number;
+  acceptedAmount: number;
+  noteAmount: number;
+  differenceAmount: number;
   message: string;
 }
 
 /** Compare a settled claim with the credit/debit note it produced.
  *  `findNote` resolves claim.financeNoteId to the note record. */
 export function reconcileClaimNote(claim: any, findNote: (id: any) => any): NoteReconciliation {
-  const accepted = n(claim?.acceptedEUR);
+  const accepted = n(claim?.acceptedAmount);
   const note = claim?.financeNoteId != null ? findNote(claim.financeNoteId) : null;
-  const noteEUR = note ? (S(note.currency).toUpperCase() === "EUR" ? n(note.amount) : n(note.amountEUR)) : 0;
+  const noteAmount = note ? (S(note.currency).toUpperCase() === "EUR" ? n(note.amount) : n(note.amountEUR)) : 0;
   if (accepted <= 0) {
-    return { state: "no-amount", acceptedEUR: 0, noteEUR, differenceEUR: 0, message: "No agreed amount recorded yet — nothing to reconcile." };
+    return { state: "no-amount", acceptedAmount: 0, noteAmount, differenceAmount: 0, message: "No agreed amount recorded yet — nothing to reconcile." };
   }
   if (!note) {
     return {
-      state: "no-note", acceptedEUR: accepted, noteEUR: 0, differenceEUR: accepted,
+      state: "no-note", acceptedAmount: accepted, noteAmount: 0, differenceAmount: accepted,
       message: `An amount of €${accepted.toLocaleString("pl-PL")} has been agreed but no credit or debit note has been raised. The P/L has moved and the legal document does not exist.`,
     };
   }
-  const diff = Math.round((accepted - noteEUR) * 100) / 100;
+  const diff = Math.round((accepted - noteAmount) * 100) / 100;
   if (Math.abs(diff) <= 0.01) {
-    return { state: "matched", acceptedEUR: accepted, noteEUR, differenceEUR: 0, message: `Agreed amount and ${S(note.noteType) || "note"} ${S(note.number) || ""} agree.`.trim() };
+    return { state: "matched", acceptedAmount: accepted, noteAmount, differenceAmount: 0, message: `Agreed amount and ${S(note.noteType) || "note"} ${S(note.number) || ""} agree.`.trim() };
   }
   return {
-    state: "differs", acceptedEUR: accepted, noteEUR, differenceEUR: diff,
-    message: `The agreed amount (€${accepted.toLocaleString("pl-PL")}) and the note (€${noteEUR.toLocaleString("pl-PL")}) differ by €${Math.abs(diff).toLocaleString("pl-PL")}. One of them is wrong: the P/L follows the claim, the ledger follows the note.`,
+    state: "differs", acceptedAmount: accepted, noteAmount, differenceAmount: diff,
+    message: `The agreed amount (€${accepted.toLocaleString("pl-PL")}) and the note (€${noteAmount.toLocaleString("pl-PL")}) differ by €${Math.abs(diff).toLocaleString("pl-PL")}. One of them is wrong: the P/L follows the claim, the ledger follows the note.`,
   };
 }
 

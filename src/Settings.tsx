@@ -84,7 +84,7 @@ function Button({ onClick, children, variant = "default", disabled = false, styl
 // ── v6.99.54 (AR-1 · AR-3 · AR-5, owner ruling 23 Sept): SEASONS — close, export, remove, re-import. Nothing is deleted at season end. ──
 function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archivedSeasons = [], setArchivedSeasons, stConfirm, setMessage }: any) {
   const st = seasonSettings || DEFAULT_SEASON;
-  const data: any = { pos: refStores.pos || [], orders: refStores.orders || [], shipments: refStores.shipments || [], lots: refStores.lots || [], invoices: readStoreValue("invoices"), claims: readStoreValue("claims"), poSettlements: readStoreValue("poSettlements"), inspections: readStoreValue("inspections"), stockCounts: readStoreValue("stockCounts"), financeNotes: readStoreValue("financeNotes"), creditNotes: readStoreValue("creditNotes"), warehouseInvoices: readStoreValue("warehouseInvoices"), operationalCosts: readStoreValue("operationalCosts") };
+  const data: any = { pos: refStores.pos || [], orders: refStores.orders || [], shipments: refStores.shipments || [], lots: refStores.lots || [], invoices: readStoreValue("invoices"), claims: readStoreValue("claims"), poSettlements: readStoreValue("poSettlements"), inspections: readStoreValue("inspections"), stockCounts: readStoreValue("stockCounts"), financeNotes: readStoreValue("financeNotes"), operationalCosts: readStoreValue("operationalCosts") };
   const present = seasonsPresent(data, st);
   const today = localTodayISO(); const cur = currentSeason(today, st);
   const liveLots = (season: string) => (data.lots || []).filter((l: any) => (Number(l.physicalKg) || 0) > 0 && docSeason("lot", l, st, { pos: data.pos }) === season).length;
@@ -402,16 +402,21 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
   const [valDraft, setValDraft] = useState<Record<string, string>>({});   // v7.18.3 (A-AU-5): the calibre / coloration being typed into the catalog (hooks first)
   // v7.16.11 (A-RV-04 · the A-SET-1 root cause): the CN codes are typed into a draft and saved with Save, which lists the
   // changes — like Company and Numbering. On the shared data a code is no longer pushed to everyone at each keystroke.
+  // v7.28.4 (owner 19 Oct: "2 saving buttons at the end of the module"): ONE draft and ONE Save for the catalogue's per-item fields —
+  // the CN code and the travel range (v7.27.9 had given the range a Save of its own, so the module ended with two)
   const cnSaved: any = (catalog || []).reduce((o: any, c: any) => { o[c.item] = c.defaultCnCode || ""; return o; }, {});
-  const { draft: cnDraft, setDraft: setCnDraft, bar: cnBar } = useSectionDraft(cnSaved, (next: any) => setCatalog((cat: any) =>
-    Object.keys(next || {}).reduce((acc: any, item: string) => String(next[item] ?? "") !== String(cnSaved[item] ?? "") ? setCatalogCnCode(acc, item, String(next[item] ?? "")) : acc, cat || [])), "catalog-cn", "CN codes");
-  // v7.27.9 (FZ-29, RM-2 F-5): each item's travel range, typed in a draft and saved with its own Save — shipments read it
   const tSaved: any = (catalog || []).reduce((o: any, c: any) => { o[c.item] = `${c.temperatureMinC ?? ""}|${c.temperatureMaxC ?? ""}`; return o; }, {});
-  const { draft: tDraft, setDraft: setTDraft, bar: tBar } = useSectionDraft(tSaved, (next: any) => setCatalog((cat: any) => (cat || []).map((c: any) => {
-  const v = next?.[c.item]; if (v == null || String(v) === String(tSaved[c.item])) return c;
-  const [lo, hi] = String(v).split("|"); const n = (x: string) => (String(x ?? "").trim() === "" ? undefined : parseNum(x));
-  const out: any = { ...c, temperatureMinC: n(lo), temperatureMaxC: n(hi) }; if (out.temperatureMinC === undefined) delete out.temperatureMinC; if (out.temperatureMaxC === undefined) delete out.temperatureMaxC; return out;
-  })), "catalog-temp", "Temperatures");
+  const itemSaved: any = { cn: cnSaved, t: tSaved };
+  const { draft: itemDraft, setDraft: setItemDraft, bar: itemBar } = useSectionDraft(itemSaved, (next: any) => setCatalog((cat: any) => {
+    let acc = cat || [];
+    const cn = (next && next.cn) || {}; Object.keys(cn).forEach((item: string) => { if (String(cn[item] ?? "") !== String(cnSaved[item] ?? "")) acc = setCatalogCnCode(acc, item, String(cn[item] ?? "")); });
+    const tt = (next && next.t) || {}; const num0 = (x: string) => (String(x ?? "").trim() === "" ? undefined : parseNum(x));
+    acc = acc.map((c: any) => { const v = tt[c.item]; if (v == null || String(v) === String(tSaved[c.item])) return c; const [lo, hi] = String(v).split("|");
+      const out: any = { ...c, temperatureMinC: num0(lo), temperatureMaxC: num0(hi) }; if (out.temperatureMinC === undefined) delete out.temperatureMinC; if (out.temperatureMaxC === undefined) delete out.temperatureMaxC; return out; });
+    return acc;
+  }), "catalog-items", "Catalogue — CN codes and temperatures");
+  const cnDraft = (itemDraft && itemDraft.cn) || {}; const setCnDraft = (fn: any) => setItemDraft((d: any) => ({ ...(d || {}), cn: typeof fn === "function" ? fn((d || {}).cn || {}) : fn }));
+  const tDraft = (itemDraft && itemDraft.t) || {}; const setTDraft = (fn: any) => setItemDraft((d: any) => ({ ...(d || {}), t: typeof fn === "function" ? fn((d || {}).t || {}) : fn }));
   const { confirm: pcConfirm, alert: pcAlert, dialogNode: pcNode , prompt: uiPrompt } = useConfirm(); // P2-6
   const [newItem, setNewItem] = useState("");
   const [vDraft, setVDraft] = useState<Record<string, string>>({});
@@ -570,8 +575,7 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
         ))}
       </div>
       {deletedItems.length > 0 && <div data-deleted-items="1" style={{ marginTop: 10, fontSize: 12, color: "#9CA3AF" }}>Deleted: {deletedItems.map((c: any) => <span key={c.item} style={{ textDecoration: "line-through", marginRight: 10 }}>{c.item}</span>)}</div>}{/* v7.17.1 (A-RV-07) */}
-      {cnBar}{/* v7.16.11 (A-RV-04): Save / Discard for the CN codes */}
-      {tBar}{/* v7.27.9 (FZ-29): Save / Discard for the temperatures */}
+      {itemBar}{/* v7.28.4: one Save / Discard for the CN codes and the temperatures */}
     </Card>
   );
 }

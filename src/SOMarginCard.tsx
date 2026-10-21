@@ -32,6 +32,7 @@ export default function SOMarginCard({
   allOrders = [],
   invoices = [],
   financeNotes = [],
+  poSettlements = [],   /* v7.28.12 (Batch L): a consignment is closed by its PO settlement, not a per-lot copy */
 }: {
   order: any;
   lots?: any[];
@@ -40,7 +41,7 @@ export default function SOMarginCard({
   operationalCosts?: any[];
   allOrders?: any[];
   invoices?: any[];
-  financeNotes?: any[];
+  financeNotes?: any[]; poSettlements?: any[];
 }) {
   const [mode, setMode] = useState<MarginMode>(() => {
     // Default heuristic: if SO is Confirmed/Reserved/Loading, show Forecast.
@@ -66,7 +67,7 @@ export default function SOMarginCard({
     });
     return hits;
   }, [order, lots]);
-  const openConsignment = consignmentSources.filter((l: any) => !(l.settlement && l.settlement.status === "Closed"));
+  const openConsignment = consignmentSources.filter((l: any) => !(poSettlements || []).some((s: any) => s && String(s.poNumber) === String(l.poRef) && String(s.status) === "Closed"));
 
   const isLoss = margin.netMarginPLN < 0;
   const isThinMargin = margin.netMarginPLN >= 0 && margin.netMarginPct < 5;

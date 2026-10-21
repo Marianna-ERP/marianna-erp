@@ -28,6 +28,9 @@ import { companyProfile } from "./useLocalStoredState";
 import { OrderForm } from "./SalesOrderForm";
 import { InvoiceCreationModal, OrderDetail } from "./SalesOrderDetail";
 import { SODoc } from "./SalesOrderDocument";
+import { invoicesForCounterpartyDoc, shipmentsForSO } from "./documents.domain";   // v7.28.5 (Batch L)
+import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
+import { peopleOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 (Batch L)
 import { exportNotesForSale, isFromPoland } from "./invoiceNotes.domain";   // v7.26.4 (A-INV-4)
 import { issueNumber } from "./numbering";   // v7.27.8 (A-W5)
 
@@ -45,7 +48,7 @@ const LOGO_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAlgAAADQCAI
 export const CLIENTS: any[] = [];   // v7.27.12 (A-RV-39): no company is written into the code — the forms read the directory
 
 function primaryContactValue(counterparty) {
-  const contacts = counterparty.contacts || [];
+  const contacts = peopleOf(counterparty);
   const primary = contacts.find(p => p.isPrimary) || contacts[0];
   return primary?.email || primary?.phone || counterparty.email || counterparty.contact || counterparty.phone || "";
 }
@@ -54,10 +57,10 @@ function tradingPartnerFromCounterparty(counterparty) {
   return {
     id: counterparty.id,
     name: counterparty.name,
-    country: counterparty.country || "",
+    country: companyCountryName(counterparty),   // v7.28.11 (Batch L)
     nip: counterparty.nip || "",
     vatEuId: counterparty.vatEuId || "",
-    address: counterparty.address || "",
+    address: companyAddressLine(counterparty),   // v7.28.10 (Batch L)
     contact: primaryContactValue(counterparty),
   };
 }
@@ -135,7 +138,7 @@ function _adaptPOsFromModule(pos) {
     status: po.status,
     supplierName: po.supplier?.name || po.supplierName || "—",
     country: po.supplier?.country || po.country || "—",
-    expectedDelivery: po.expectedDeliveryDate || po.expectedDelivery || "—",
+    expectedDelivery: poExpectedArrival(po) || "—",   // v7.28.5 (Batch L)
     items: (po.items || []).map(it => ({
       ...it,
       available: it.available ?? (parseFloat(it.qty) || 0),
@@ -270,7 +273,6 @@ export function buildInvoiceFromSO(order, invoiceNumber, today, clientVatRate: a
     paidAmount: 0,
     notes: `Issued from ${order.number}${order.deliveryDate ? ` — Goods delivered ${order.deliveryDate}` : ""}.\nLines:\n${order.items.map(it => `• ${it.product}${it.variety ? " " + it.variety : ""} ${parseFloat(it.qty || 0).toLocaleString("pl-PL")} kg @ ${parseFloat(it.unitPrice || 0).toFixed(2)} ${order.currency}`).join("\n")}`,
     attachment: null,
-    creditNotes: [],
     createdAt: issueDate,
     // SO traceability
     sourceSO: order.number,
@@ -523,7 +525,7 @@ function PrintModal({ order, onClose }: any) {
 
 // ─── EMAIL MODAL ──────────────────────────────────────────────────────────
 function bestContactEmail(cp: any) {
-  const cs = (cp && cp.contacts) || [];
+  const cs = peopleOf(cp);
   const withEmail = cs.find((p: any) => p.isPrimary && p.email) || cs.find((p: any) => p.email);
   return (withEmail && withEmail.email) || (cp && cp.email) || "";
 }
@@ -757,7 +759,6 @@ function SalesOrdersScreen({ archive = null,
   function allInvoiceNumbers() {
     return [
       ...(invoices || []).map((iv: any) => iv.number),
-      ...orders.flatMap(o => (o.linkedInvoices || [])),
     ].filter(Boolean);
   }
 
@@ -819,7 +820,7 @@ function SalesOrdersScreen({ archive = null,
       currency: "PLN", fxRate: 1, fxLockedAt: null,
       items: [{ id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
       notes: "",
-      linkedInvoices: [], linkedShipments: [],
+      
     });
     setView("form");
   }
@@ -964,7 +965,7 @@ function SalesOrdersScreen({ archive = null,
     const previous = orders.find(p => p.id === o.id);
     const becameShipped = o.status === "Shipped" && (!previous || previous.status !== "Shipped");
     const becameCancelled = o.status === "Cancelled" && (!previous || previous.status !== "Cancelled");
-    const alreadyInvoiced = (o.linkedInvoices && o.linkedInvoices.length > 0)
+    const alreadyInvoiced = (invoicesForCounterpartyDoc(o.number, "SO", extInvoices || []).length > 0)   /* v7.28.5 (Batch L): from the register, not a stored copy */
       || invoicesForSO(o.number).some((iv: any) => iv.paymentStatus !== "Cancelled"); // v6.80.0 (D-44): a cancelled invoice frees the order
 
     const savedOrder = { ...o, id: o.id ?? nextId() };
@@ -1034,7 +1035,7 @@ function SalesOrdersScreen({ archive = null,
             { kind: "SO", ref: soDoc.number },
           ],
           date: today,
-          requestedEUR: 0,
+          requestedAmount: 0,
           status: "Submitted",
           movementRef: mv.id,
           notes: [cc.note || "", `Credit ${amt} ${cc.cur || "PLN"} requested`].filter(Boolean).join(" · "),
@@ -1063,7 +1064,7 @@ function SalesOrdersScreen({ archive = null,
     const built = buildCollectionShipment(collectionFor, extInvLots || [], extShipments, { ...info, number }, { todayISO: domainToday, nextId });
     if (!built.goods.length) { await uiAlert({ tone: "warn", title: "Nothing to collect", message: "No sourced lines found — source the SO lines from stock or a PO first, then record the collection." }); return; }
     extSetShipments(prev => [built, ...(prev || [])]);
-    setOrders(prev => prev.map(o => o.id === collectionFor.id ? { ...o, linkedShipments: Array.from(new Set([...(o.linkedShipments || []), built.number])) } : o));
+    /* v7.28.5 (Batch L): the SO no longer stores a copy of its shipments — they are worked out from the shipments */
     setCollectionFor(null);
   }
 
@@ -1158,6 +1159,7 @@ function SalesOrdersScreen({ archive = null,
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
         <OrderDetail
           order={selected}
+          onChangeRule={async (r: any) => { if (!(await uiConfirm({ title: `Change ${r.doc} to ${r.to}?`, message: `The rule on ${r.doc} becomes ${r.to} (Incoterms 2020) — what the shipment records fits it. Prices and documents already issued are not changed.`, confirmLabel: `Change to ${r.to}` }))) return; setOrders((prev: any[]) => (prev || []).map((x: any) => String(x?.number) === String(r.doc) ? { ...x, sellIncoterm: r.to } : x)); }}   // v7.29.1 (FZ-41): one click, after confirming
           termsFindings={termsFindingsForDoc(termsAll, selected.number)}
           soInvoices={invoicesForSO(selected.number)} financeNotes={extFinanceNotes}
           allOrders={orders}
@@ -1313,12 +1315,12 @@ function SalesOrdersScreen({ archive = null,
                       the SO showed only its SOURCE documents even after shipping. */}
                   {(() => {
                     const shps = Array.from(new Set([
-                      ...((o.linkedShipments || [])),
+                      ...shipmentsForSO(o.number, extShipments || []),   // v7.28.5 (Batch L): worked out from the shipments
                       ...((extShipments || []).filter((sh: any) => sh.status !== "Cancelled" && ((sh.soRefs || []).includes(o.number) || (sh.goods || []).some((g: any) => g.soRef === o.number))).map((sh: any) => sh.number)),
                     ]));
                     return shps.map((n: any, i: number) => <span key={"sh" + i} style={{ fontSize: 10 }}><DocRef num={n} cancelledSet={cancelledRefs} /></span>);
                   })()}
-                  {(o.linkedInvoices || []).map((n: any, i: number) => <span key={"inv" + i} style={{ fontSize: 10 }}><DocRef num={n} cancelledSet={cancelledRefs} /></span>)}
+                  {invoicesForCounterpartyDoc(o.number, "SO", extInvoices || []).map((n: any, i: number) => <span key={"inv" + i} style={{ fontSize: 10 }}><DocRef num={n} cancelledSet={cancelledRefs} /></span>)}
                 </div>
               </div>
             );

@@ -24,6 +24,104 @@ for (const r of rules) {
 // the clock itself: the suite must be running on Poland's clock
 const tz = Intl.DateTimeFormat().resolvedOptions().timeZone; checked++;
 if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the suites must run in Europe/Warsaw`); } else console.log("  ✓ clock: Europe/Warsaw");
+// v7.28.3 (Batch L · FZ-03, P-13): A COMPANY'S ROLES ARE roles[] — read through rolesOf(); only the company tidy-up and rolesOf
+// still look at the old additionalTypes (a record written before, until it is next saved)
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts", "counterparty.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*|\/\/)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); if (/additionalTypes/.test(c) && !/delete \w+\.additionalTypes/.test(c)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ one list of roles: the old additionalTypes read in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ one list of roles: every screen reads a company's roles through rolesOf()");
+}
+// v7.28.12 (Batch L · FZ-01, P-13): THE RETIRED STORES ARE GONE — no file loads or reads the old warehouse-invoice, "settled" or
+// credit-note stores, or a lot's old per-lot settlement (the register, the payments, the finance notes and the PO settlements own them)
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*|\/\/)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); if (/\b(warehouseInvoices|settledRefs|setSettledRefs|creditNotes)\b/.test(c) || (/\b(l|lot)\??\.settlement\b/.test(c) && !/delete l\.settlement/.test(c))) off.push(`${f}:${i + 1}`); }));   // the tidy-up's delete is the retirement
+ if (off.length) { failed++; console.log(`  ✗ the retired stores are gone: still named in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ the retired stores are gone: nothing loads or reads them");
+}
+// v7.28.11 (Batch L · FZ-03, P-13): A COMPANY'S COUNTRY IS ITS CODE — no file reads a company record's country name except the
+// helpers (companyCountryName / companyCountryIso) and the company tidy-up; the copies on documents keep the printed name
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts", "counterparty.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*|\/\/)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); if (/(?<![\w.?])(c|cp|counterparty|contact|keep|incoming|merged)\??\.country\b(?!Iso)/.test(c)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ a company's country is its code: the name read in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ a company's country is its code: no screen reads a company's country name");
+}
+// v7.28.10 (Batch L · FZ-03, P-13): A COMPANY'S ADDRESS COMES FROM ITS PARTS — no file reads a company record's one-line address
+// except the one helper (companyAddressLine) and the company tidy-up; the copies on documents keep their printed address
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts", "counterparty.domain.ts", "AddressCompletion.tsx"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*|\/\/)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); if (/(?<![\w.?])(c|cp|counterparty|contact|keep|incoming|merged)\??\.address\b/.test(c)) off.push(`${f}:${i + 1}`); }));   // a document's copy (x.counterparty.address) is not the record
+ if (off.length) { failed++; console.log(`  ✗ a company's address from its parts: the one-line copy read in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ a company's address from its parts: no screen reads a company's one-line copy");
+}
+// v7.28.9 (Batch L · FZ-08, P-13): THE TRUCKS OWN THE PLATES, THE DRIVER, THE CONTAINER AND THE PRICE — no file reads a leg's copies
+// of them (only the save-time tidy-up that moves an old value onto the leg's first truck)
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts", "storeShapes.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*|\/\/)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); if (/\b(leg|l|lg|firstLeg|lastLeg)\??\.(vehiclePlate|truckPlate|trailerPlate|driverName|driverPhone|containerNumber|costAmount|costPLN|transportUnits)\b/.test(c)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ the trucks own their facts: a leg's copy read in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ the trucks own their facts: no screen reads a leg's truck or price copy");
+}
+// v7.28.7 (Batch L · FZ-08, P-13): THE ROUTE OWNS A SHIPMENT'S PLACES AND THE TRUCKS ITS ACTUAL DATES — no file reads a shipment's
+// own origin / destination (only the two route helpers, for a shipment without legs) or its own actual loading / delivery date
+{
+  checked++; const off = [];
+  const SH = "(sh|s|shipment|draft|d|fin|prev|selected|ship|editShipment|current|built)";
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts", "storeShapes.ts", "tradeFlow.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*|\/\/)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); if (new RegExp(`\\b${SH}\\??\\.(originLocationId|destinationLocationId|actualLoadingDate|actualDeliveryDate)\\b`).test(c)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ the route owns the places: a shipment's own copy read in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ the route owns the places: no screen reads a shipment's own origin, destination or actual dates");
+}
+// v7.28.6 (Batch L · FZ-13, P-13): A CLAIM'S AMOUNTS ARE IN ITS OWN CURRENCY — no file names an EUR-named claim field (only the
+// save-time tidy-up that moves an old copy)
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["storeShapes.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*|\/\/)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); if (/\b(lostValueEUR|totalCostEUR|defectValueEUR|recoveredEUR|requestedEUR|acceptedEUR|plnPerEur|egpPerEur)\b/.test(c)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ a claim's own currency: an EUR-named field read in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ a claim's own currency: no EUR-named claim field is read");
+}
+// v7.28.5 (Batch L · A-PO-3, P-13): A PO HOLDS ONE PROMISED DATE — no file reads a PO's old expected delivery date (only the PO
+// tidy-up that folds it and the one helper, for a PO written before); no screen reads the stored copies of linked documents
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts", "po.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*|\/\/)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); if (/\b(po|order|selectedPO|linkedPO|o|p)\??\.expectedDeliveryDate\b/.test(c) || /\b(order|po|o|so)\??\.linked(Lots|Invoices|Shipments|SalesOrders)\b/.test(c)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ one promised date: the PO's old date or a stored link copy read in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ one promised date: no screen reads a PO's old delivery date or a stored link copy");
+}
+// v7.28.4 (owner 19 Oct: "2 saving buttons at the end of the module", P-13): ONE SAVE PER SETTINGS SECTION — no section of Settings
+// draws two Save / Discard bars (each section draft draws one)
+{
+  checked++; const off = [];
+  const text = fs.readFileSync(path.join(src, "Settings.tsx"), "utf8"); const fns = text.split(/\n(?=function [A-Z]\w*\()/);
+  fns.forEach(chunk => { const name = (chunk.match(/^function ([A-Z]\w*)\(/) || [])[1]; const n = (chunk.match(/= useSectionDraft\(/g) || []).length; if (name && n > 1) off.push(`${name} (${n})`); });
+  if (off.length) { failed++; console.log(`  ✗ one Save per section: ${off.join(", ")} draw more than one Save bar`); } else console.log("  ✓ one Save per section: no Settings section draws two Save bars");
+}
+// v7.28.3 · v7.28.5 (P-13): NO NOTE HIDES CODE — a "//" note written into the middle of a line silently disabled the end of it
+// (the planning sheet's lists since v7.10.2; the shipment editor's customs rule at save since v7.27.9 and two more of my own edits,
+// caught by the type check). A note followed by code on its line fails here: a declaration, an if, a return, a chained call, a field.
+{
+  checked++; const off = [];
+  const CODE = /\b(const|let|var)\s+\w+\s*=\s*\S|\bif\s*\([^)]*\)\s*[\w{]|\breturn\s+[\w{(][^;]*;|\)\.(map|filter|sort|reduce|find|some|join)\(\(|\b[a-z]\w*:\s*(S|num|parseNum|String|Number)\([^)]*\)\s*(,|\|\|)/;
+  const scan = (dir, re) => fs.readdirSync(dir).filter(f => re.test(f) && !f.startsWith("_")).forEach(f => fs.readFileSync(path.join(dir, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*\/\//.test(l)) return; const k = l.indexOf("//"); if (k < 0 || l[k - 1] === "\\" || /https?:\/\/|["'`][^"'`]*\/\//.test(l.slice(0, k + 2))) return; if (CODE.test(l.slice(k + 2))) off.push(`${f}:${i + 1}`); }));   // an escaped slash in a regular expression is no note
+ scan(src, /\.(ts|tsx)$/); scan(path.join(src, "../tests"), /\.cjs$/);   // v7.28.7: the checks' own files too (one of my notes hid the end of a check's line)
+  if (off.length) { failed++; console.log(`  ✗ no note hides code: ${off.length} line(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ no note hides code: no '//' note is followed by code on its line");
+}
+// v7.28.2 (Batch L · FZ-03, P-13): A COMPANY'S PERSONS ARE people[] — read through peopleOf(); only the company tidy-up and
+// peopleOf itself still look at the old contacts[] (a record written before, until it is next saved)
+{
+  checked++; const off = [];
+  const DIRECTORY = new Set(["p", "sd", "ctx", "inp", "props", "stores", "SHELL_SEED", "st", "d", "data", "input", "n", "this"]);   // the directory list named `contacts`
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts", "counterparty.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\*|\/\*)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, ""); for (const m of c.matchAll(/([A-Za-z_$][\w$]*)\??\.contacts\b/g)) { if (!DIRECTORY.has(m[1]) && !/delete \w+\.contacts/.test(c)) off.push(`${f}:${i + 1}`); } }));
+  if (off.length) { failed++; console.log(`  ✗ one list of persons: a company's old contacts[] read in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ one list of persons: every screen reads a company's persons through peopleOf()");
+}
+// v7.28.1 (Batch L · FZ-03, P-13): A COMPANY'S TERMS HAVE ONE OWNER — no file reads the flat payment days or credit limit; only
+// the company tidy-up folds them into terms{} (for a record written before)
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts", "counterparty.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { const c = l.replace(/\/\/[^\n]*/g, ""); if (/^\s*(\*|\/\*)/.test(l)) return; if (/paymentTermsDays/.test(c) || /(?<!terms\??\.)\bcreditLimitPLN\b(?!\s*:)/.test(c)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ one owner for a company's terms: the flat copies read in ${off.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ one owner for a company's terms: no file reads the flat payment days or credit limit");
+}
+// v7.28.0 (Batch L, RM-2 F-1, P-13): A TRUCK'S ACTUAL DATES HAVE ONE PAIR — the older actualLoadDate / actualUnloadDate is read
+// only by the one helper (until every record is rewritten) and the save-time tidy-up that moves it; no screen or rule reads it.
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["types.ts", "storeShapes.ts", "shipmentModel.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (!/^\s*(\*|\/\*)/.test(l) && /actualLoadDate|actualUnloadDate/.test(l.replace(/\/\/[^\n]*/g, ""))) off.push(`${f}:${i + 1}`); }));
+  const sm = fs.readFileSync(path.join(src, "shipmentModel.domain.ts"), "utf8").split("\n").filter(l => !/^\s*(\*|\/\*)/.test(l) && /actualLoadDate|actualUnloadDate/.test(l.replace(/\/\/[^\n]*/g, "")) && !/export function unit(Loaded|Unloaded)At/.test(l));   // comment lines aside
+  if (off.length || sm.length) { failed++; console.log(`  ✗ one pair of truck dates: the older pair read in ${off.length + sm.length} place(s) — ${off.slice(0, 5).join(", ")}`); } else console.log("  ✓ one pair of truck dates: only the helper and the save-time tidy-up read the older pair");
+}
 // v7.27.13 (owner 19 Oct, P-8 / P-13): NO PLACE IS GUESSED — a shipment builder never falls back to a fixed place id (the early
 // versions put place 10, a test place, on every shipment whose sale named no place; place 1 likewise for the origin)
 {

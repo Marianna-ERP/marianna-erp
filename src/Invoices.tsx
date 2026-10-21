@@ -27,7 +27,7 @@ import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
 import { companyProfile } from "./useLocalStoredState";
-import { pickerParties, archivedMark } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
+import { pickerParties, archivedMark, rolesOf } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6): where a cost is charged follows its category
 import { exportNotesForSale, isFromPoland } from "./invoiceNotes.domain";   // v7.26.4 (A-INV-4)
@@ -1044,7 +1044,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
   }, [form?.currency, form?.issueDate]);
   const isSales = form.kind === "SALES";
   const fc = catKey(form.category); const wanted = isSales ? ["Client"] : fc === "FREIGHT" ? ["Carrier", "Forwarder"] : fc === "CUSTOMS" ? ["Broker"] : fc === "WAREHOUSE" ? ["Warehouse"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
-  const partyOptions = pickerParties(contacts, form.counterparty?.id).filter((c: any) => { const ts = [c.type, ...(c.additionalTypes || [])]; return ts.some((t: string) => wanted.includes(t)); });   // v7.10.2 (A-RV-15 · CP-4)
+  const partyOptions = pickerParties(contacts, form.counterparty?.id).filter((c: any) => { const ts = rolesOf(c); return ts.some((t: string) => wanted.includes(t)); });   // v7.10.2 (A-RV-15 · CP-4)
   // v6.63.0 (D-06, M3/M4): the old picker concatenated ALL SOs+POs+shipments and
   // hard-capped the render at 40 buttons — any PO past position 40 simply never
   // appeared, and the wall of unfiltered buttons was unusable. Now: search box,
@@ -1125,7 +1125,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
                 return <div style={{ marginBottom: 8 }}>
                   {miss && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 6 }}>⚠ {miss}</div>}
                   {props.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}><span style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>SUGGESTED (v6.98.0):</span>{props.map((p: any) => <button key={p.type + p.number} onClick={() => { sf("links", [...(form.links || []), { type: p.type === "SHIPMENT" ? "Shipment" : p.type, number: p.number }]); if (p.costId != null) sf("matchCostId", p.costId); }} title={p.reason} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid " + (p.confidence === "high" ? "#166534" : "#E5E7EB"), background: p.confidence === "high" ? "#F0FDF4" : "#fff", color: "#166534", cursor: "pointer", fontWeight: 700 }}>+ {p.type} {p.number} <span style={{ fontWeight: 400, color: "#64748B" }}>· {p.reason}</span></button>)}</div>}
-                  {!form.dueDate && form.counterparty && (() => { const cp = (contacts || []).find((c: any) => String(c.id) === String(form.counterparty?.id)); const due = defaultCostDueDate(form, cp); return due ? <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Due date will default to <b>{due}</b> ({cp?.paymentTermsDays} days from issue — the counterparty's terms) <button onClick={() => sf("dueDate", due)} style={{ marginLeft: 6, fontSize: 10, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer" }}>apply</button></div> : null; })()}
+                  {!form.dueDate && form.counterparty && (() => { const cp = (contacts || []).find((c: any) => String(c.id) === String(form.counterparty?.id)); const due = defaultCostDueDate(form, cp); return due ? <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Due date will default to <b>{due}</b> ({cp?.terms?.paymentDays} days from issue — the counterparty's terms) <button onClick={() => sf("dueDate", due)} style={{ marginLeft: 6, fontSize: 10, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer" }}>apply</button></div> : null; })()}
                 </div>; })()}
               {/* v6.81.0 (D-59): an invoice born from a Sales Order is that order's invoice — its link is fixed. */}
               {form.kind === "SALES" && (form.links || []).some((l: any) => l.type === "SO") ? (
@@ -1157,7 +1157,7 @@ function NoteForm({ form, setForm, onSave, onCancel, contacts, invoices, orders,
   const sf = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
   const wanted = form.direction === "outgoing" ? ["Client"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
   // v7.27.15 (A-RV-26): the note's party by id — the companies of the wanted kinds; the one the note already names stays
-  const partyOptions = (contacts || []).filter((c: any) => c && (((!c.archived && !c.deleted) && [c.type, ...(c.additionalTypes || []), ...(c.roles || [])].some((t: string) => wanted.includes(t))) || (form.partyId != null && String(c.id) === String(form.partyId)))).slice().sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "pl"));   // v7.10.2 (A-RV-15 · CP-4): archived companies out; the one the note already names stays
+  const partyOptions = (contacts || []).filter((c: any) => c && (((!c.archived && !c.deleted) && rolesOf(c).some((t: string) => wanted.includes(t))) || (form.partyId != null && String(c.id) === String(form.partyId)))).slice().sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "pl"));   // v7.10.2 (A-RV-15 · CP-4): archived companies out; the one the note already names stays
   const invoiceOptions = (invoices || []).filter((i: Invoice) => form.direction === "outgoing" ? i.kind === "SALES" : i.kind === "COST");
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>

@@ -3,6 +3,7 @@
 // record that owns it (the trucks, the lots, the invoices and their payments). A step left without a date while a later one has
 // one is a GAP, shown at a glance — nothing is typed and nothing is stored.
 import { shipmentDates } from "./shipmentModel.domain";
+import { shipmentsDeliveringSale } from "./so.domain";   // v7.29.3 (FZ-38)
 
 const S = (v: any) => String(v ?? "").trim();
 export interface ChainStep { label: string; date: string; gap: boolean }
@@ -20,8 +21,8 @@ function withGaps(steps: Array<{ label: string; date: string }>): ChainStep[] {
   return steps.map((s, k) => ({ ...s, date: S(s.date).slice(0, 10), gap: !S(s.date) && steps.slice(k + 1).some(x => S(x.date)) }));
 }
 
-export function soDatesChain(so: any, ctx: { shipments?: any[]; invoices?: any[] } = {}): ChainStep[] {
-  const ships = (ctx.shipments || []).filter((s: any) => live(s) && ((s.soRefs || []).includes(so?.number) || S(s.governingSoRef) === S(so?.number) || (s.goods || []).some((g: any) => S(g?.soRef) === S(so?.number))));
+export function soDatesChain(so: any, ctx: { shipments?: any[]; invoices?: any[]; pos?: any[]; lots?: any[] } = {}): ChainStep[] {
+  const ships = shipmentsDeliveringSale(so, ctx.shipments || [], { pos: ctx.pos, lots: ctx.lots }).filter((s: any) => live(s));   // v7.29.3 (FZ-38): the supplier's truck that delivers it counts
   const d = ships.map((s: any) => shipmentDates(s));
   const inv = (ctx.invoices || []).filter((i: any) => live(i) && i.kind === "SALES" && !i.isProforma && linked(i, "SO", so?.number));
   return withGaps([

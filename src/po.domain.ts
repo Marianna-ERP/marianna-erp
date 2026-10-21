@@ -10,6 +10,7 @@ import { paymentDaysOf } from "./legacy";
 // ─────────────────────────────────────────────────────────────────────────────
 import { kgPerBoxForLine } from "./pricingUnit.domain";
 import { S, r2 } from "./format";
+import { D_RULES, C_RULES } from "./incoterms.domain";   // v7.28.5 (FZ-21): the one table
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
@@ -48,14 +49,47 @@ export function dueDateFromIssue(issueISO: string, days: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// ── v7.28.5 (Batch L · A-PO-3, P-9, P-12): A PO HOLDS ONE PROMISED DATE, and its meaning comes from the purchase's Incoterms 2020 rule:
+// E and F rules — the goods are handed over at the named place (loaded on our truck); C rules — shipped from origin; D rules — delivered
+// at the named place (the supplier's truck arrives). Every screen and document reads it here.
+export type PromisedDateKind = "handover" | "shipment" | "delivery";
+export function promisedDateKind(po: any): PromisedDateKind {   // from the one incoterm table (FZ-21)
+const t = S(po?.buyIncoterm).toUpperCase();
+if (D_RULES.includes(t)) return "delivery";
+if (C_RULES.includes(t)) return "shipment";
+return "handover";
+}
+export function promisedDateLabel(po: any, lang: "en" | "pl" = "en"): string {
+  const k = promisedDateKind(po);
+  if (lang === "pl") return k === "delivery" ? "Data dostawy" : k === "shipment" ? "Data wysyłki" : "Data załadunku";
+  return k === "delivery" ? "Delivery date" : k === "shipment" ? "Shipment date" : "Loading date";
+}
+/** The promised date — for a PO written before v7.28.5 (until it is next saved) read as the tidy-up will fold it: a D-rule's old
+*  expected delivery date first, any other rule's loading date first. */
+export function poPromisedDate(po: any): string {
+return promisedDateKind(po) === "delivery" ? (S(po?.expectedDeliveryDate) || S(po?.loadingDate)) : (S(po?.loadingDate) || S(po?.expectedDeliveryDate));
+}
+/** When the goods are expected to arrive: a D-rule PO's promised date; any other PO's trucks' planned delivery (none: unknown). */
+export function poExpectedArrival(po: any, shipments: any[] = []): string {
+  if (promisedDateKind(po) === "delivery") return poPromisedDate(po);
+  const plans = (shipments || []).filter((s: any) => s && S(s.status) !== "Cancelled" && (s.poRefs || []).includes(po?.number))
+    .flatMap((s: any) => (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => S(u?.plannedDeliveryDate) || S(u?.eta)))).filter(Boolean).sort();
+  return plans[plans.length - 1] || "";
+}
+
 // ── PO-3 / PO-4 / PO-5: one-time normalisation (idempotent) ─────────────────
 export const LEGACY_PO_STATUSES = ["Shipped", "Arrived", "Received", "Closed"];
 export function normalisePO(po: any, ctx: { orders?: any[]; directFromSOs?: (po: any, orders: any[]) => boolean } = {}): { po: any; changed: boolean } {
   let p: any = { ...po }; let changed = false;
   const drop = (k: string) => { if (k in p) { delete p[k]; changed = true; } };
   if (!S(p.buyIncoterm) && S(p.purchaseIncoterm)) { p.buyIncoterm = p.purchaseIncoterm; changed = true; }
-  if (!S(p.loadingDate) && S(p.expectedDeliveryDate)) { p.loadingDate = p.expectedDeliveryDate; changed = true; }
-  ["flow", "flowLabel", "purchaseIncoterm", "handoverPoint", "requiresSea", "variance", "actualAvailabilityDate"].forEach(drop);   // expectedDeliveryDate: read-forward until the DDL (PO-3 partial)
+  // v7.28.5 (A-PO-3 · P-9): the one promised date keeps the meaning of the purchase's rule — on a DAP / DPU / DDP purchase the supplier
+  // promises the DELIVERY, so the old expected delivery date becomes the promised date; on any other rule it fills the date only when empty
+  { const exp = S(p.expectedDeliveryDate);
+  if (exp) { if (D_RULES.includes(S(p.buyIncoterm).toUpperCase())) { if (S(p.loadingDate) !== exp) { p.loadingDate = exp; changed = true; } } else if (!S(p.loadingDate)) { p.loadingDate = exp; changed = true; } } }
+  // v7.28.5 (Batch L · A-PO-3, RM-2 F-1): one promised date — the old expected delivery date was folded above (when the promised date
+  // was empty) and goes; the stored copies of linked documents go too (documents.domain works them out from the documents)
+  ["flow", "flowLabel", "purchaseIncoterm", "handoverPoint", "requiresSea", "variance", "actualAvailabilityDate", "expectedDeliveryDate", "linkedLots", "linkedInvoices", "linkedShipments", "linkedSalesOrders"].forEach(drop);
   if (LEGACY_PO_STATUSES.includes(S(p.status))) { p.status = "Confirmed"; p.statusNormalisedFrom = po.status; changed = true; }
   if (!(num(p.paymentDays) > 0)) { const m = S(p.paymentTerms).match(/(\d{1,3})/); if (m) { p.paymentDays = num(m[1]); changed = true; } }
   // v6.99.23: one source — basis + days; the legacy text is read once, then retired.

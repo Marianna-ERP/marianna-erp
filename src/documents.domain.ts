@@ -22,7 +22,7 @@ function shipmentsForPO(poNumber: string, shipments: any[]): string[] {
   });
   return Array.from(out);
 }
-function shipmentsForSO(soNumber: string, shipments: any[]): string[] {
+export function shipmentsForSO(soNumber: string, shipments: any[]): string[] {   // v7.28.5: shared
   const out = new Set<string>();
   (shipments || []).forEach(s => {
     const hit = refsOf(s.soRefs).includes(soNumber) ||
@@ -34,7 +34,7 @@ function shipmentsForSO(soNumber: string, shipments: any[]): string[] {
 function lotsForPO(poNumber: string, lots: any[]): string[] {
   return (lots || []).filter(l => l.poRef === poNumber).map(l => l.number);
 }
-function invoicesForCounterpartyDoc(docNumber: string, kind: "PO" | "SO", invoices: any[]): string[] {
+export function invoicesForCounterpartyDoc(docNumber: string, kind: "PO" | "SO", invoices: any[]): string[] {   // v7.28.5: shared
   const out = new Set<string>();
   (invoices || []).forEach(inv => {
     // v6.63.0 (BUG #1 fix): canonical invoices carry links as {type, number}

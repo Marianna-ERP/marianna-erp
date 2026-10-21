@@ -180,7 +180,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
       setClaimFxNote(`NBP table A of ${eur.tableDate}, the last working day before ${date}`);
       const fx = cur === "PLN" ? 1 : cur === "EUR" ? eur.rate : (own ? own.rate : null);
       const p: any = {};
-      if (Math.abs(Number(c.plnPerEur || 0) - eur.rate) > 0.00005) p.plnPerEur = eur.rate;
+      if (Math.abs(Number(c.fxToPLN || 0) - eur.rate) > 0.00005) p.fxToPLN = eur.rate;
       if (fx != null && Math.abs(Number(c.fxToPLN || 0) - fx) > 0.00005) p.fxToPLN = fx;
       if (c.fxTableDate !== eur.tableDate) p.fxTableDate = eur.tableDate;
       if (Object.keys(p).length) patch(c.id, p);
@@ -230,11 +230,11 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
     }
     let mode;
     if (String(c.respondent?.kind) === "Client") {
-      const ok = await uiConfirm({ tone: "warn", title: `Issue credit note to ${c.respondent?.name || "the client"}?`, message: `CREDIT note (we give back) for €${c.acceptedEUR} ≈ ${(Number(c.acceptedEUR) * Number(c.plnPerEur)).toLocaleString("pl-PL")} PLN, linked to ${c.number}.`, confirmLabel: "Issue credit note" });
+      const ok = await uiConfirm({ tone: "warn", title: `Issue credit note to ${c.respondent?.name || "the client"}?`, message: `CREDIT note (we give back) for €${c.acceptedAmount} ≈ ${(Number(c.acceptedAmount) * Number(c.fxToPLN)).toLocaleString("pl-PL")} PLN, linked to ${c.number}.`, confirmLabel: "Issue credit note" });
       if (!ok) return;
       mode = claimNoteMode(c, false);
     } else {
-      const theyIssued = await uiConfirm({ tone: "warn", title: `${c.respondent?.name || "The respondent"} — did they issue a credit note?`, message: `If YES: their CREDIT note is recorded (reduces what we owe them).\nIf NO: WE issue a DEBIT note to them for €${c.acceptedEUR} — what we need to get (owner ruling).`, confirmLabel: "Yes — record their credit note", cancelLabel: "No — we issue a debit note" });
+      const theyIssued = await uiConfirm({ tone: "warn", title: `${c.respondent?.name || "The respondent"} — did they issue a credit note?`, message: `If YES: their CREDIT note is recorded (reduces what we owe them).\nIf NO: WE issue a DEBIT note to them for €${c.acceptedAmount} — what we need to get (owner ruling).`, confirmLabel: "Yes — record their credit note", cancelLabel: "No — we issue a debit note" });
       mode = claimNoteMode(c, !!theyIssued);
     }
     const note = buildClaimFinanceNote(c, mode, { nextId, todayISO: () => today, invoices });
@@ -296,7 +296,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
       subjects: (parent.subjects || []).filter((s: any) => s.kind !== "SO"),
       parentClaimId: parent.id,
       date: today, status: "Draft",
-      plnPerEur: parent.plnPerEur,
+      fxToPLN: parent.fxToPLN,
       // v6.70.0 THE PRODUCER COST CHAIN. A recovery used to open with an empty
       // cost table, so everything spent getting the fruit from the producer's
       // gate to the client's warehouse was retyped from memory. The defect
@@ -409,8 +409,8 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
           )}
           {rows.map((c: any) => {
             const ds = DIR_STYLE[c.direction] || DIR_STYLE.RECOVERY;
-            const amount = c.acceptedEUR != null && c.acceptedEUR !== "" ? num(c.acceptedEUR) : num(c.requestedEUR);
-            const agreed = c.acceptedEUR != null && c.acceptedEUR !== "";
+            const amount = c.acceptedAmount != null && c.acceptedAmount !== "" ? num(c.acceptedAmount) : num(c.requestedAmount);
+            const agreed = c.acceptedAmount != null && c.acceptedAmount !== "";
             return (
               <div key={c.id} onClick={() => setSelectedId(c.id)}
                 style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 10, alignItems: "center", padding: "9px 6px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: String(c.id) === String(selectedId) ? "#F8FAFC" : "transparent" }}>
@@ -550,16 +550,16 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                       </div>;
                     })()}
                   </div>
-                  <div><Lbl>Requested (EUR)</Lbl><input type="number" value={selected.requestedEUR ?? ""} onChange={e => patch(selected.id, { requestedEUR: e.target.value })} style={INP} /></div>
+                  <div><Lbl>Requested ({selected.currency || "EUR"})</Lbl><input type="number" value={selected.requestedAmount ?? ""} onChange={e => patch(selected.id, { requestedAmount: e.target.value })} style={INP} /></div>
                   <div>
-                    <Lbl>Agreed after negotiation (EUR)</Lbl>
+                    <Lbl>Agreed after negotiation ({selected.currency || "EUR"})</Lbl>
                     {String(selected.currency || "EUR").toUpperCase() !== "EUR" && (<>
                       {/* v6.81.0 (D-62): the claim is in the ROOT document's currency */}
                       <div style={{ fontSize: 10, color: "#7C3AED", fontWeight: 700, marginBottom: 3 }}>Claim currency: {selected.currency} (from the root document)</div>
                       <input type="number" value={selected.acceptedAmount ?? ""} onChange={e => patch(selected.id, { acceptedAmount: e.target.value === "" ? null : e.target.value })} placeholder={`accepted, in ${selected.currency}`} style={INP} />
-                      {String(selected.currency).toUpperCase() !== "PLN" && <input type="number" step="0.0001" value={selected.fxToPLN ?? ""} onChange={e => patch(selected.id, { fxToPLN: e.target.value })} placeholder={`${selected.currency}→PLN rate`} style={{ ...INP, marginTop: 4 }} />}
+                      {String(selected.currency).toUpperCase() !== "PLN" && <span style={{ fontSize: 11, color: "#64748B" }} title="A-AU-12: the NBP rate of the day before the claim — never typed">{selected.fxToPLN ? `${selected.currency}→PLN ${Number(selected.fxToPLN).toFixed(4)} (NBP)` : "the NBP rate is taken when the claim is dated"}</span>}{/* v7.28.6: the old typed rate input (the EUR rate) is gone */}
                     </>)}
-                    {String(selected.currency || "EUR").toUpperCase() === "EUR" && <input type="number" value={selected.acceptedEUR ?? ""} onChange={e => patch(selected.id, { acceptedEUR: e.target.value === "" ? null : e.target.value })} placeholder="blank until agreed" style={INP} />}
+                    {String(selected.currency || "EUR").toUpperCase() === "EUR" && <input type="number" value={selected.acceptedAmount ?? ""} onChange={e => patch(selected.id, { acceptedAmount: e.target.value === "" ? null : e.target.value })} placeholder="blank until agreed" style={INP} />}
                   </div>
                 </div>
 
@@ -572,7 +572,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     <div style={{ marginTop: 10 }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                         <div><Lbl>Cargo lost (kg)</Lbl><input type="number" value={selected.lostKg ?? ""} onChange={e => patch(selected.id, { lostKg: e.target.value })} style={INP} /></div>
-                        <div><Lbl>Value of the lost cargo (EUR)</Lbl><input type="number" value={selected.lostValueEUR ?? ""} onChange={e => patch(selected.id, { lostValueEUR: e.target.value })} style={INP} /></div>
+                        <div><Lbl>Value of the lost cargo ({selected.currency || "EUR"})</Lbl><input type="number" value={selected.lostValue ?? ""} onChange={e => patch(selected.id, { lostValue: e.target.value })} style={INP} /></div>
                       </div>
                       <div style={{ marginTop: 10 }}>
                         <Lbl>Costs this party caused</Lbl>
@@ -587,13 +587,13 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                       </div>
                       <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ fontSize: 11, color: "#475569" }}>Computed from this basis: <strong>{eur(requestedFromBasis(selected))}</strong></div>
-                        <SmallButton onClick={() => patch(selected.id, { requestedEUR: requestedFromBasis(selected) })}>Use as requested</SmallButton>
+                        <SmallButton onClick={() => patch(selected.id, { requestedAmount: requestedFromBasis(selected) })}>Use as requested</SmallButton>
                       </div>
                     </div>
                   )}
                   <div style={{ marginTop: 10 }}>
                     <Lbl>EUR → PLN rate used when posting</Lbl>
-                    <div data-claim-rate="1" style={{ ...INP, maxWidth: 180, background: "#F8FAFC" }}>{Number(selected.plnPerEur) > 0 ? Number(selected.plnPerEur).toFixed(4) : "—"}</div>
+                    <div data-claim-rate="1" style={{ ...INP, maxWidth: 180, background: "#F8FAFC" }}>{Number(selected.fxToPLN) > 0 ? Number(selected.fxToPLN).toFixed(4) : "—"}</div>
                     <div style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{claimFxNote}</div>{/* v7.18.6 (A-AU-12): not typed */}
                   </div>
                 </div>
@@ -643,9 +643,9 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   })()}
                 </div>
 
-                {selected.acceptedEUR != null && selected.acceptedEUR !== "" && num(selected.acceptedEUR) !== num(selected.requestedEUR) && (
+                {selected.acceptedAmount != null && selected.acceptedAmount !== "" && num(selected.acceptedAmount) !== num(selected.requestedAmount) && (
                   <div style={{ marginTop: 10, padding: "7px 11px", borderRadius: 7, background: "#F0F9FF", border: "1px solid #BAE6FD", fontSize: 11, color: "#0C4A6E" }}>
-                    Agreed {eur(selected.acceptedEUR)} against {eur(selected.requestedEUR)} requested — a difference of {eur(num(selected.requestedEUR) - num(selected.acceptedEUR))}.
+                    Agreed {eur(selected.acceptedAmount)} against {eur(selected.requestedAmount)} requested — a difference of {eur(num(selected.requestedAmount) - num(selected.acceptedAmount))}.
                   </div>
                 )}
 
@@ -725,7 +725,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                 const share = pct > 0 ? Math.min(1, pct / 100) : 1;
                 const clientLines = selected.clientCosts || [];
                 const saleLines = saleDirectCostLines(lotRefs, orders, shipments, share);   // v7.10.0 (A-RV-15 · CL-5): the sale's delivery / return freight
-                const chain = buildCostChain({ lots, lotRefs, affectedShare: share, clientLines, plnPerEur: selected.plnPerEur, saleLines });
+                const chain = buildCostChain({ lots, lotRefs, affectedShare: share, clientLines, fxToPLN: selected.fxToPLN, saleLines });
                 const gaps = chainGaps(chain, clientLines);
                 const setClient = (i: number, field: string, v: any) => patch(selected.id, {
                   clientCosts: clientLines.map((x: any, xi: number) => xi === i ? { ...x, [field]: v } : x),
@@ -734,7 +734,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   <Card>
                     <SectionTitle right={
                       <SmallButton kind="green" title="Copy the chain into this claim's cost lines. Existing lines are kept; nothing is duplicated."
-                        onClick={() => patch(selected.id, { costLines: [...(selected.costLines || []), ...toClaimCostLines(chain.lines.filter((l: any) => !(selected.costLines || []).some((e: any) => e.label === l.label)), selected.plnPerEur)] })}>
+                        onClick={() => patch(selected.id, { costLines: [...(selected.costLines || []), ...toClaimCostLines(chain.lines.filter((l: any) => !(selected.costLines || []).some((e: any) => e.label === l.label)), selected.fxToPLN)] })}>
                         Add to claim cost lines
                       </SmallButton>}>COST CHAIN — PRODUCER'S GATE → CLIENT'S WAREHOUSE</SectionTitle>
                     <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 10, lineHeight: 1.5 }}>
@@ -749,7 +749,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                         </div>
                       ))}
                     </div>
-                    {chain.totalEUR > 0 && <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>≈ €{chain.totalEUR.toLocaleString("pl-PL")} at {selected.plnPerEur} PLN/EUR</div>}
+                    {chain.totalEUR > 0 && <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>≈ €{chain.totalEUR.toLocaleString("pl-PL")} at {selected.fxToPLN} PLN/EUR</div>}
 
                     <div style={{ fontSize: 10, fontWeight: 800, color: "#334155", marginBottom: 5 }}>Ours — the lots&apos; costs and the sale&apos;s freight</div>
                     {chain.lines.filter((l: any) => l.origin === "OURS").map((l: any) => (

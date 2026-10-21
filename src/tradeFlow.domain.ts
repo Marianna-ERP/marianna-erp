@@ -108,11 +108,10 @@ export function shipmentTradeEnds(sh: any, ctx: { pos?: any[]; orders?: any[]; c
   const poRefs = (sh?.poRefs || []).map(String);
   const po = (ctx.pos || []).find((p: any) => poRefs.includes(String(p?.number))) || null;
   const so = S_(sh?.governingSoRef) ? (ctx.orders || []).find((o: any) => String(o?.number) === S_(sh.governingSoRef)) || null : null;
-  const legs = sh?.legs || [];
   const first = isReceiptOfPO(sh) || S_(sh?.arrangedBy).toUpperCase() === "SUPPLIER";
   let origin: TradeEnd = { country: "", from: "" };
-  if (!first) { const c = cOf(sh?.originLocationId) || cOf(legs[0]?.fromLocationId); if (c) origin = { country: c, from: "starting place" }; }
-  if (!origin.country) { const c = poOriginCountry(po); if (c) origin = { country: c, from: first ? "producer" : "producer — no starting place set" }; }
+  if (!first) { const c = cOf(shipmentStartPlaceId(sh)); if (c) origin = { country: c, from: "starting place" }; }   // v7.28.7: the route's start first
+  if (!origin.country) { const c = poOriginCountry(po); if (c) origin = { country: c, from: first ? "producer" : (shipmentStartPlaceId(sh) != null ? "producer — the starting place is not a known place" : "producer — no starting place set") }; }
   let destination: TradeEnd = { country: "", from: "" };
   if (so) { const c = cOf(so.destinationLocationId); destination = c ? { country: c, from: "sale's place" } : S_(so.client?.country) ? { country: S_(so.client.country), from: "client's country" } : destination; }
   if (!destination.country) { const c = cOf(shipmentEndPlaceId(sh));   /* v7.27.13 (P-12): the route's end first */ if (c) destination = { country: c, from: "shipment's destination" }; }
@@ -127,6 +126,12 @@ export function shipmentTradeEnds(sh: any, ctx: { pos?: any[]; orders?: any[]; c
 /** The direction alone ("" when an end is unknown). Every reader asks this — nothing is stored (A-TD-2). */
 /** v7.27.13 (P-12): WHERE A SHIPMENT ENDS — its route's last leg (places live on the route since A-R12-4); the shipment's own
  *  destination field only when it has no legs. One reader for the terms review, the trade direction and the documents. */
+/** v7.28.7 (Batch L · FZ-08, P-12): WHERE A SHIPMENT STARTS — its route's first leg; its own origin field only without legs. */
+export function shipmentStartPlaceId(sh: any): any {
+  const first = (sh?.legs || []).filter((l: any) => l)[0];
+  const v = first && first.fromLocationId != null && first.fromLocationId !== "" ? first.fromLocationId : (sh?.originLocationId ?? null);
+  return v === "" ? null : v;
+}
 export function shipmentEndPlaceId(sh: any): any {
   const legs = (sh?.legs || []).filter((l: any) => l); const last = legs.length ? legs[legs.length - 1] : null;
   const v = last && last.toLocationId != null && last.toLocationId !== "" ? last.toLocationId : (sh?.destinationLocationId ?? null);

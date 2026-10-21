@@ -6,7 +6,7 @@ import { FX_RATES } from "./fx";
 import { ItemVarietyPicker, PackagingPicker, CatalogValuePicker } from "./ProductPicker";   // v7.18.0 (A-AU-1) · v7.18.3 (A-AU-5)
 import { PAGE_MAX } from "./ui";
 import { cnCodeForItem } from "./productCatalog";
-import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES, copyPOLine } from "./po.domain";
+import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES, copyPOLine, promisedDateLabel, poPromisedDate, promisedDateKind } from "./po.domain";
 import { documentTotals, totalsLine, effectiveCounts } from "./pricingUnit.domain";
 import { isEstimatedLine } from "./so.domain";
 import { localTodayISO , formatDMY } from "./dates";
@@ -214,14 +214,9 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                 <Inp disabled={isLocked} value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" noFuture title="The date the PO was created/agreed with the supplier" />
               </div>
               <div>
-                <Lbl>Loading date</Lbl>
-                <Inp disabled={isLocked} value={order.loadingDate} onChange={e => sf("loadingDate", e.target.value)} type="date" title="When the supplier loads our truck / container — goods leave origin" />
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Goods leave origin</div>
-              </div>
-              <div>
-                <Lbl>Expected delivery date</Lbl>
-                <Inp disabled={isLocked} value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed handover point" />
-                {/* FB-14: 'means' dropdown removed — the handover point (derived from the incoterm) already says where. */}
+                <Lbl>{promisedDateLabel(order)}</Lbl>{/* v7.28.5 (Batch L · A-PO-3, P-9): ONE promised date, named by the Incoterms rule — the separate expected delivery date is gone */}
+                <Inp disabled={isLocked} value={poPromisedDate(order)} onChange={e => sf("loadingDate", e.target.value)} type="date" title="The date the supplier promises — handed over at the named place (E / F rules), shipped from origin (C rules) or delivered at the named place (D rules)" />
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{promisedDateKind(order) === "delivery" ? "The supplier's truck arrives at the named place" : promisedDateKind(order) === "shipment" ? "The goods leave origin (the supplier ships)" : "The goods are handed over at the named place (our truck loads)"}</div>
               </div>
               {/* v7.16.9 (BP-9): 'Actual availability' left the form — the real date is the shipment's arrival / the lot's receipt; the old field stays on the record */}
             </div>

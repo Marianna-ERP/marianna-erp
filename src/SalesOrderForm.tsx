@@ -20,6 +20,7 @@ import { useUnsavedGuard } from "./unsaved";
 import { CLIENTS, CURRENCIES, Inp, QUALITY_GRADES, QualityBadge, Sel, SourceBadge, computeLineAvailability, fmtMoney, fmtNum, lotReservations, netTotal, sameSoDuplicateSources, validatePOReadinessForSO, validateSourcing, useSalesData, lotColorationOf, withLotColorations } from "./SalesOrders";
 import { nbpRateBefore, orderBufferPct, orderRateFrom } from "./fx";   // v7.13.4 (A-AU-2)
 import { parseNum } from "./numbers";
+import { companyCountryName } from "./counterparty.domain";   // v7.28.11 (Batch L)
 import { INCOTERM_CODES, isIncoterm2020, incotermLabel, incotermLine, namedPlaceGuide, ruleOf } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 import { sourceMatch } from "./salesOrders.domain";   // v7.23.2 (A-SOL-1)
 
@@ -177,7 +178,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
       if (live) {
         if (tr.paymentBasis) next.paymentBasis = tr.paymentBasis;
         if (tr.paymentDays !== undefined && tr.paymentDays !== null && tr.paymentDays !== "") next.paymentDays = tr.paymentDays;
-        const cur = tr.defaultCurrency || live.defaultCurrency; if (cur) next.currency = cur;
+        const cur = tr.defaultCurrency; if (cur) next.currency = cur;   // v7.28.1 (Batch L): the terms own the currency
       }
       // v7.18.1 (A-AU-3, owner 9 Oct): the destination defaults to the client's first SITE (its legal address when it is a place) —
       // picked by its id; the address is no longer copied as text. Unless "a port / named place" was chosen.
@@ -483,7 +484,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                 <Lbl>Client</Lbl>
                 <Sel value={order.client?.id != null ? String(order.client.id) : ""} onChange={e => setClient(e.target.value)}>
                   <option value="">— select —</option>
-                  {clients.map(c => <option key={c.id} value={String(c.id)}>{c.name} {c.country ? `· ${c.country}` : ""} {c.nip ? `(NIP ${c.nip})` : ""}</option>)}
+                  {clients.map(c => <option key={c.id} value={String(c.id)}>{c.name} {companyCountryName(c) ? `· ${companyCountryName(c)}` : ""} {c.nip ? `(NIP ${c.nip})` : ""}</option>)}
                 </Sel>
               </div>
               <div><Lbl>Status</Lbl>
@@ -551,7 +552,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     if (unsourced.length) { await ofAlert({ tone: "warn", title: "Every sale rests on a purchase", message: `${unsourced.length} line(s) have no source. Pick the PO line or the stock lot each line sells from — a free-typed line cannot be confirmed (owner ruling R2).` }); return; }
                     // v6.68.0 (F-3): credit control at the moment of commitment.
                     const clientRec = (contacts || []).find((c: any) => String(c.id) === String(order.client?.id));   // v7.27.1 (FZ-24): by id
-                    const limit = parseFloat(String(clientRec?.creditLimitPLN ?? "")) || 0;
+                    const limit = parseFloat(String(clientRec?.terms?.creditLimitPLN ?? "")) || 0;   // v7.28.1 (Batch L)
                     if (limit > 0) {
                       const soPLN = (order.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) * (parseFloat(String(it.unitPrice)) || 0)), 0) * (parseFloat(String(order.fxRate)) || 1);
                       const exposure = clientExposurePLN(order.client?.name, allInvoices || []);

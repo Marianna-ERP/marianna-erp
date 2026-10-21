@@ -6,7 +6,7 @@ import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 //   PAYABLE   (money out)  ← producer consignment payouts, warehouse invoices,
 //                            operational cost invoices, firm-price PO purchases
 // Pure functions; no UI, no storage. The frontend marks items paid via a
-// `settledRefs` set kept in app state; here we just compute and classify.
+// v7.28.12: paid = recorded payments only; here we just compute and classify.
 
 export type LedgerDirection = "receivable" | "payable";
 
@@ -48,19 +48,16 @@ function classify(dueDate: string, settled: boolean, todayISO: string): "Open" |
 export interface LedgerInputs {
   orders?: any[];
   lots?: any[];
-  warehouseInvoices?: any[];
   operationalCosts?: any[];
   invoices?: any[];           // v6.18.6 (P0-7): unified Invoices store — source of truth
   financeNotes?: any[];       // credit/debit notes (passed through; not yet in totals)
   pos?: any[];
-  settledRefs?: string[];     // refs the user marked paid
   fakturowniaPaid?: Record<string, boolean>; // invoiceNo → paid (from live sync)
   todayISO: string;
 }
 
 export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: LedgerTotals } {
   const today = inp.todayISO;
-  const settled = new Set((inp.settledRefs || []).map(String));
   // v6.99.121 (rule 11): inp.fakturowniaPaid is no longer read — the bank is the source of payment
   const items: LedgerItem[] = [];
 
@@ -83,17 +80,14 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     const ref = `INV:${inv.id}`;
     // Paid if the invoice itself says so (payment recorded in the Invoices module),
     // or it's fully covered by recorded payments, or marked paid here / in Fakturownia.
-    // Also honour the legacy SINV: mark-paid ref so previously-cleared sales invoices
-    // don't reappear as open after the switch.
-    const legacyPaid = isSales && settled.has(`SINV:${inv.number}`);
+    
     // Batch 5b (BP-36): payments are EVENTS — paidFromEvents sums them, and
     // synthesises one event from a legacy paidAmount, so old data reads the same.
     // v6.99.121 (AUD-19/20, owner rule 11): paid = payments recorded in Marianna (bank matches or hand-recorded) — Fakturownia's paid flag is not read;
     // an open item carries what is still OUTSTANDING, not the full gross (the same figure the cash projection and statements use)
     const paidPLN = r2(paidFromEvents(inv) * (n(inv.fxRate) || 1));
     const isPaid = inv.paymentStatus === "Paid"
-      || (gross > 0 && paidPLN >= gross - 0.01)
-      || settled.has(ref) || legacyPaid;
+      || (gross > 0 && paidPLN >= gross - 0.01);   // v7.28.12 (Batch L): payments only — the old "settled" marks are gone
     const openPLN = isPaid ? 0 : Math.max(0, r2(gross - paidPLN));
     items.push({
       ref, direction: isSales ? "receivable" : "payable",
@@ -108,22 +102,8 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     });
   });
 
-  // ── PAYABLES: producer consignment payouts (closed settlements) ──
-  (inp.lots || []).forEach((lot: any) => {
-    const s = lot?.settlement;
-    if (!s || s.status !== "Closed") return;
-    const payoutPLN = r2(n(s.producerInvoiceAmountPLN) - n(s.finalCommissionPLN ?? s.expectedCommissionPLN));
-    if (payoutPLN <= 0) return;
-    const ref = `PAYOUT:${lot.number}`;
-    items.push({
-      ref, direction: "payable", kind: "Producer payout",
-      counterparty: (inp.pos || []).find((p: any) => p.number === lot.poRef)?.supplier?.name || "Producer",
-      documentNo: s.producerInvoiceNo || lot.poRef || lot.number, date: s.closedAt || "", dueDate: s.producerDueDate || "",
-      amountPLN: payoutPLN, currency: "PLN", amountOrig: payoutPLN,
-      status: classify(s.producerDueDate, settled.has(ref), today),
-      sourceModule: "Inventory", note: `Consignment ${lot.number}`,
-    });
-  });
+  // v7.28.12 (Batch L · FZ-01): the producer payout rows of the old per-lot settlement are gone — a closed PO settlement's producer
+  // invoice is imported into the register (A-AU-7) and is paid like any invoice
 
   // ── v6.79.0 (W-3, owner ruling): un-invoiced PO commitments are NO LONGER ledger
   // rows. A purchase becomes PAYABLE when its invoice exists — the invoice loop

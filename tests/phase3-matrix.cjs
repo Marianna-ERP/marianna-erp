@@ -198,7 +198,7 @@ t("a credit note WE issue against the SINV reduces its effective open amount", (
 console.log("\n══ P3.5 Claims × Lots × Orders × Notes — the unified flow, money end-to-end ══");
 // ═════════════════════════════════════════════════════════════════════════════
 const acceptedClaim = (over = {}) => ({ id: ++idc, number: "CLM-1", status: "Accepted", direction: "RECOVERY",
-  cause: "Quality defect", acceptedEUR: 500, plnPerEur: 4.3,
+  cause: "Quality defect", acceptedAmount: 500, fxToPLN: 4.3,
   respondent: { kind: "Supplier", name: "FreshFarm", contactId: 30 },
   subjects: [{ kind: "LOT", ref: "LOT-1", affectedKg: 1000 }, { kind: "PO", ref: "PO-1" }, { kind: "INVOICE", ref: "FA-9" }], ...over });
 

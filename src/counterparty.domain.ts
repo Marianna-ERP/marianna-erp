@@ -1,5 +1,6 @@
 import { paymentBasisOf } from "./po.domain";
 import { S } from "./format";
+import { formatAddress } from "./address.domain";   // v7.28.10 (Batch L)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─────────────────────────────────────────────────────────────────────────────
 // counterparty.domain.ts — v6.99.2: COUNTERPARTIES BATCH (CP-1…CP-7, CP-9; owner 11 Sept 2026)
@@ -23,6 +24,16 @@ export function addressWithCountry(address: any, country: any): string[] {
   const same = (countryIso(last) && countryIso(last) === countryIso(c)) || last.toLowerCase() === c.toLowerCase();
   return same ? lines : [...lines, c];
 }
+/** v7.28.11 (Batch L · FZ-03, P-12): A COMPANY'S COUNTRY IS ITS CODE — the name is read from the countries list (Settings ›
+ *  Countries), or the built-in names; the old name field only for a company whose code is still missing. */
+export function countryNameOf(iso: any): string {
+  const k = S(iso).toUpperCase(); if (!k) return "";
+  const u = USER_COUNTRIES.find(x => S(x.iso).toUpperCase() === k); if (u && S(u.name)) return S(u.name);
+  const n = Object.keys(COUNTRY_ISO).find(name => (COUNTRY_ISO as any)[name] === k && name.length > 2);
+  return n ? n.replace(/\b([a-z])/g, (m: string) => m.toUpperCase()) : k;
+}
+export function companyCountryIso(c: any): string { return S(c?.countryIso).toUpperCase() || countryIso(c?.country) || countryIso(c?.addr?.country); }
+export function companyCountryName(c: any): string { const iso = companyCountryIso(c); return iso ? countryNameOf(iso) : S(c?.country); }
 export function isEU(country: any): boolean | null { const iso = countryIso(country); if (!iso) return null; const u = USER_COUNTRIES.find(x => S(x.iso).toUpperCase() === iso); return u ? !!u.eu : EU.has(iso); }
 
 // ── CP-1 / CP-2 / CP-9: normalisation (idempotent) ────────────────────────────
@@ -33,6 +44,7 @@ export function normaliseCounterparty(c: any): { contact: any; changed: boolean 
   [c.type, ...(c.additionalTypes || [])].forEach((t: any) => { const r = S(t); if (r && !roles.includes(r)) roles.push(r); });
   if (JSON.stringify(roles) !== JSON.stringify(c.roles || [])) { n.roles = roles; changed = true; }
   if (!S(n.type) && roles.length) { n.type = roles[0]; changed = true; }
+  if ("additionalTypes" in n) { delete n.additionalTypes; changed = true; }   // v7.28.2 (Batch L · FZ-03): roles[] owns them; type stays the primary one
   // CP-2: one terms{} block
   const terms: any = { ...(c.terms || {}) };
   const legacyDays = num(c.paymentTermsDays) || (S(c.paymentTerms).match(/(\d{1,3})/) ? num(S(c.paymentTerms).match(/(\d{1,3})/)![1]) : 0) || num(c.finance?.paymentDays);
@@ -44,22 +56,50 @@ export function normaliseCounterparty(c: any): { contact: any; changed: boolean 
   if (c.fakturowniaDepartmentId != null && terms.fakturowniaDepartmentId == null) terms.fakturowniaDepartmentId = c.fakturowniaDepartmentId;
   if (!S(terms.paymentBasis)) terms.paymentBasis = paymentBasisOf(c);   // v6.99.23: one payment-terms source on the party too
   if (JSON.stringify(terms) !== JSON.stringify(c.terms || {})) { n.terms = terms; changed = true; }
-  // mirrors kept in sync for existing readers (paymentTermsDays / creditLimitPLN are read by PO-2, SO-4, F-3)
-  if (num(terms.paymentDays) > 0 && num(n.paymentTermsDays) !== num(terms.paymentDays)) { n.paymentTermsDays = num(terms.paymentDays); changed = true; }
-  if (num(terms.creditLimitPLN) > 0 && num(n.creditLimitPLN) !== num(terms.creditLimitPLN)) { n.creditLimitPLN = num(terms.creditLimitPLN); changed = true; }
+  // v7.28.1 (Batch L · FZ-03, RM-2 F-1): the terms{} block owns the payment days, the credit limit and the currency — the flat copies,
+  // folded above when the terms had none, are no longer written
+  ["paymentTermsDays", "creditLimitPLN", "defaultCurrency"].forEach(k => { if (k in n) { delete n[k]; changed = true; } });
+  // v7.28.10 (Batch L · FZ-03): the structured parts own the address — the one-line copy goes once they are complete
+  if ("address" in n && addressComplete(n)) { delete n.address; changed = true; }
   ["paymentTerms", "paymentTermsOther", "finance", "services", "linkedDocs"].forEach(k => { if (k in n) { delete n[k]; changed = true; } });   // CP-2 text fields, CP-9 cache
   // CP-6
   const iso = countryIso(c.country); if (iso && n.countryIso !== iso) { n.countryIso = iso; changed = true; }
-  // CP-3: ONE list of persons. The screens still read `contacts`; `people` is the same array (rename at the DDL).
-  // HOTFIX v6.99.5: v6.99.4 deleted `contacts`, which every list/form reads → crash. Restore it from `people` and keep both in step.
-  const people = Array.isArray(c.contacts) && c.contacts.length ? c.contacts : (Array.isArray(c.people) ? c.people : (Array.isArray(c.contacts) ? c.contacts : []));
-  if (!Array.isArray(c.contacts) || c.contacts !== people) { n.contacts = people; changed = true; }
+  // CP-3 · v7.28.2 (Batch L · FZ-03): ONE list of persons, people[] — every screen reads it through peopleOf(); a record written
+  // before keeps its old contacts[] until it is next saved: the list moves into people[] (when people[] is empty) and is dropped
+  const people = Array.isArray(c.people) && c.people.length ? c.people : (Array.isArray(c.contacts) && c.contacts.length ? c.contacts : (Array.isArray(c.people) ? c.people : []));
   if (!Array.isArray(c.people) || c.people !== people) { n.people = people; changed = true; }
+  if ("contacts" in n) { delete n.contacts; changed = true; }
+  // v7.28.11 (Batch L · FZ-03): the code owns the country — the name and the address's copy of it go once the code is known
+  if ("country" in n && !S(n.country) && !S(n.countryIso)) { delete n.country; changed = true; }   // an empty name says nothing
+  if (S(n.countryIso)) {
+  if ("country" in n) { delete n.country; changed = true; }
+  if (n.addr && typeof n.addr === "object" && "country" in n.addr) { const a = { ...n.addr }; delete a.country; n.addr = a; changed = true; }
+  }
   return { contact: n, changed };
 }
 
+/** v7.28.2 (Batch L · FZ-03, P-12): A COMPANY'S PERSONS — people[]; the only place the old contacts[] is still read (a record written
+ *  before this version, until it is next saved). */
+/** v7.28.2 (Batch L · FZ-03, P-12): A COMPANY'S ROLES — roles[] (the primary type among them); the old additionalTypes is read only
+ *  here, for a record written before, until it is next saved. */
+/** v7.28.10 (Batch L · FZ-03, P-12): A COMPANY'S ADDRESS — its structured parts (street, postcode, city) as one line; the old one-line
+ *  text only for a company whose parts are not complete yet (the Directory lists those to complete). */
+export function companyAddressLine(c: any, opts: { withCountry?: boolean } = {}): string {
+// documents print the country on its own line (addressWithCountry), so the company's line leaves it out; a place's line keeps it
+// the parts when complete; while they are not, the one-line text if there is one (it holds more), else whatever parts there are
+const a = c?.addr || {}; const parts = () => { const line = formatAddress({ ...a, country: "" }, { oneLine: true, withCountry: false }); const cn = opts.withCountry ? companyCountryName(c) : ""; return [line, cn].filter(Boolean).join(", "); };   // v7.28.11: the name from the code
+if (addressComplete(c)) return parts(); if (S(c?.address)) return S(c.address); return (S(a.street) || S(a.city) || S(a.postcode)) ? parts() : "";
+}
+export function addressComplete(c: any): boolean { const a = c?.addr || {}; return !!(S(a.street) && S(a.city) && S(a.postcode)); }
+export function rolesOf(c: any): string[] {
+  const out: string[] = []; const add = (r: any) => { const s = S(r); if (s && !out.includes(s)) out.push(s); };
+  if (Array.isArray(c?.roles) && c.roles.length) { add(c?.type); c.roles.forEach(add); return out; }
+  add(c?.type); (Array.isArray(c?.additionalTypes) ? c.additionalTypes : []).forEach(add); return out;
+}
+export function peopleOf(c: any): any[] { return Array.isArray(c?.people) && (c.people.length || !Array.isArray(c?.contacts)) ? c.people : (Array.isArray(c?.contacts) ? c.contacts : []); }
+
 export function personFor(contact: any, role: string): { name: string; email: string; phone: string } | null {
-  const people = (contact?.contacts && contact.contacts.length ? contact.contacts : contact?.people) || [];
+  const people = peopleOf(contact);   // v7.28.2 (Batch L): the one reader
   const hit = people.find((p: any) => S(p.role).toLowerCase() === S(role).toLowerCase() && S(p.email)) || people.find((p: any) => S(p.email)) || null;
   return hit ? { name: S(hit.name), email: S(hit.email), phone: S(hit.phone) } : (S(contact?.email) ? { name: S(contact?.name), email: S(contact.email), phone: S(contact?.phone) } : null);
 }
@@ -101,12 +141,16 @@ export function currentAgreement(contact: any, dateISO: string): ProducerAgreeme
 // A PO, an SO and a shipment name their companies by id; the screens read the company live from Counterparties. The copy a document
 // carries is never rewritten on a company edit any more, and a company is never looked up by NAME (two companies of one name could
 // swap) — one not found by its id (or by a merged duplicate's id) shows its stored copy and is named in the data checks.
-const primaryPersonOf = (c: any) => (c?.contacts || []).find((p: any) => p.isPrimary) || (c?.contacts || [])[0] || {};
+const primaryPersonOf = (c: any) => peopleOf(c).find((p: any) => p.isPrimary) || peopleOf(c)[0] || {};   // v7.28.2
 /** The company as a document shows it (the fields the documents have always carried). */
+/** v7.28.1: the terms of a company, read in one place — payment days, credit limit (PLN), currency. */
+export function creditLimitOf(c: any): number { return num(c?.terms?.creditLimitPLN); }
+export function currencyOf(c: any): string { return S(c?.terms?.defaultCurrency).toUpperCase(); }
 export function companyCopy(c: any): any {
   const p = primaryPersonOf(c);
-  return { id: c.id, name: c.name, country: c.country, nip: c.nip, vatEuId: c.vatEuId, type: c.type, additionalTypes: c.additionalTypes || [], address: c.address,
-    defaultCurrency: c.defaultCurrency, paymentTerms: c.paymentTerms, paymentTermsOther: c.paymentTermsOther, services: c.services || [], contact: p?.name || "", email: p?.email || "", phone: p?.phone || "" };
+  // v7.28.1 (Batch L · FZ-27): the copy carries the currency from the terms and none of the retired payment-terms text
+  return { id: c.id, name: c.name, country: companyCountryName(c), nip: c.nip, vatEuId: c.vatEuId, type: c.type, roles: rolesOf(c), address: companyAddressLine(c),
+  defaultCurrency: (c.terms || {}).defaultCurrency || "", services: c.services || [], contact: p?.name || "", email: p?.email || "", phone: p?.phone || "" };
 }
 /** The company a document names, read live by its id or a merged duplicate's id — never by name. Not found: the copy as stored. */
 export function liveCompany(saved: any, contacts: any[]): any {

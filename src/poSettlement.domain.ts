@@ -41,7 +41,7 @@ export interface POSettlementCalc {
   grossPLN: number; creditNotesPLN: number; warehousePLN: number; additionalPLN: number; thirdPartyRecoveriesPLN: number; expensesPLN: number;
   producerRecoveriesPLN: number; netPLN: number;
   ratePLNperEUR: number; netSalesEUR: number; commissionPct: number; commissionEUR: number; netAfterCommissionEUR: number;
-  provisionalEUR: number; differenceEUR: number; expectedCreditNoteEUR: number; extraInvoiceEUR: number; transferEUR: number;
+  provisionalEUR: number; differenceAmount: number; expectedCreditNoteEUR: number; extraInvoiceEUR: number; transferEUR: number;
   // v6.99.84 (A-ST-1/3, owner 30 Sept): the "EUR" fields are in the PO's CURRENCY (EUR, USD or PLN) — `currency` names it.
   // correction = the producer's credit note (−) or extra invoice (+) against net sales BEFORE commission (ruling 30 Sept);
   // balance = correction − our commission invoice, i.e. what moves after compensation (+ we owe the producer, − he owes us);
@@ -203,22 +203,22 @@ export function computePOSettlement(input: {
   const provPLN = provCur === "PLN" ? provAmt : provCur === currency ? provAmt * rate : provAmt * num(input.provisionalRate);
   const provisionalEUR = r2(provCur === currency ? provAmt : (rate > 0 ? provPLN / rate : 0));
   if (provAmt > 0 && provCur !== currency && provCur !== "PLN" && !(num(input.provisionalRate) > 0)) warnings.push(`The provisional invoice is in ${provCur} — enter its PLN rate.`);
-  const differenceEUR = r2(netSalesEUR - provisionalEUR);
+  const differenceAmount = r2(netSalesEUR - provisionalEUR);
   const fullySold = lines.every(l => l.onStockKg <= 1);
   if (!fullySold) warnings.push(`Not fully sold: ${lines.filter(l => l.onStockKg > 1).map(l => `${l.variety || l.lotNumber} ${l.onStockKg} kg on stock`).join(", ")} — this is an INTERIM report.`);
   return { poNumber: po.number, lines, grossPLN, creditNotesPLN, warehousePLN, additionalPLN, thirdPartyRecoveriesPLN, expensesPLN, producerRecoveriesPLN, netPLN,
     ratePLNperEUR: rate, netSalesEUR, commissionPct: pct, commissionEUR, netAfterCommissionEUR,
     // v7.16.2 (AUD-31): no rate → no net sales in the PO's currency → nothing can be expected from the producer (it was the whole provisional, at 1.0)
-    provisionalEUR, differenceEUR, expectedCreditNoteEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, -differenceEUR)) : 0, extraInvoiceEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, differenceEUR)) : 0,
+    provisionalEUR, differenceAmount, expectedCreditNoteEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, -differenceAmount)) : 0, extraInvoiceEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, differenceAmount)) : 0,
     transferEUR: r2(netAfterCommissionEUR), fullySold, warnings,
     currency, provisionalCurrency: provCur, provisionalOriginal: r2(provAmt),
-    correctionEUR: provisionalEUR > 0 ? differenceEUR : 0, balanceEUR: provisionalEUR > 0 ? r2(differenceEUR - commissionEUR) : r2(netAfterCommissionEUR),
+    correctionEUR: provisionalEUR > 0 ? differenceAmount : 0, balanceEUR: provisionalEUR > 0 ? r2(differenceAmount - commissionEUR) : r2(netAfterCommissionEUR),
     ...(() => { const no = S(input.provisionalInvoiceNo); const pinv = no ? (input.invoices || []).find((i: any) => i && i.kind !== "SALES" && i.paymentStatus !== "Cancelled" && S(i.number).replace(/\s/g, "").toUpperCase() === no.replace(/\s/g, "").toUpperCase()) : null;
       if (!pinv || !(provisionalEUR > 0)) return { provisionalPaidEUR: null, stillToTransferEUR: null };
       const paidOwn = (pinv.payments || []).reduce((a: number, p: any) => a + num(p.amount), 0) || num(pinv.paidAmount);
       const pc = S(pinv.currency || provCur).toUpperCase(); const paidPLN = pc === "PLN" ? paidOwn : paidOwn * (num(pinv.fxRate) || (pc === currency ? rate : num(input.provisionalRate)));
       const paidPO = r2(pc === currency ? paidOwn : (rate > 0 ? paidPLN / rate : 0));
-      return { provisionalPaidEUR: paidPO, stillToTransferEUR: r2(Math.max(0, provisionalEUR - paidPO) + (differenceEUR - commissionEUR)) }; })(),
+      return { provisionalPaidEUR: paidPO, stillToTransferEUR: r2(Math.max(0, provisionalEUR - paidPO) + (differenceAmount - commissionEUR)) }; })(),
     salesBasis: (bases.has("invoice") && bases.has("order") ? "mixed" : bases.has("invoice") ? "invoice" : "order") as any };
 }
 

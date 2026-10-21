@@ -139,14 +139,14 @@ export interface ChainTotals {
   lotsWithoutCosts: string[];
 }
 
-/** The chain, assembled. plnPerEur converts to the claim's own currency, which
+/** The chain, assembled. fxToPLN converts to the claim's own currency, which
  *  is EUR throughout the claim document. */
 export function buildCostChain(input: {
   lots: any[];
   lotRefs: string[];
   affectedShare?: number;
   clientLines?: PassThroughInput[];
-  plnPerEur?: any;
+  fxToPLN?: any;
   /** v7.10.0 (A-RV-15 · CL-5): the sale's own delivery / return freight — claimsPlus.saleDirectCostLines, already scaled */
   saleLines?: ChainCostLine[];
 }): ChainTotals {
@@ -156,7 +156,7 @@ export function buildCostChain(input: {
   const oursPLN = r2(ours.reduce((s, l) => s + l.amountPLN, 0));
   const clientPLN = r2(theirs.reduce((s, l) => s + l.amountPLN, 0));
   const totalPLN = r2(oursPLN + clientPLN);
-  const rate = n(input.plnPerEur);
+  const rate = n(input.fxToPLN);
   const covered = new Set(ours.map(l => l.lotRef));
   const lotsWithoutCosts = (input.lotRefs || []).map(String).filter(r => !covered.has(r));
   return {
@@ -170,8 +170,8 @@ export function buildCostChain(input: {
 /** Convert accepted chain lines into the claim's own cost-line shape
  *  (claim.domain's ClaimCostLine), so the existing claim maths and the printed
  *  document need no changes at all. */
-export function toClaimCostLines(lines: ChainCostLine[], plnPerEur: any): any[] {
-  const rate = n(plnPerEur);
+export function toClaimCostLines(lines: ChainCostLine[], fxToPLN: any): any[] {
+  const rate = n(fxToPLN);
   return (lines || []).map(l => ({
     label: l.origin === "CLIENT" ? `${l.label} (client's cost)` : l.label,
     party: l.origin === "CLIENT" ? "Client" : "",

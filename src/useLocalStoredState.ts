@@ -150,7 +150,7 @@ export const DATA_KEYS = [
   "roles",   // v7.5.0 (A-ROLE-1): the business's roles and their rights — shared
   "heals",   // v6.99.145 (AUD-46): which one-time heals this DATASET has had — travels with the data, so an older file imported here is healed again
   "contacts", "pos", "lots", "orders", "shipments", "operationalCosts",
-  "customLocations", "warehouseInvoices", "settledRefs", "creditNotes", // v6.18.1: the Invoicing module's stores were missing — without these, invoices
+  "customLocations", // v6.18.1 · v7.28.12 (Batch L): the old warehouse-invoice, "settled" and credit-note stores are gone; without the others, invoices
   // and credit/debit notes were dropped from shared JSON files, auto-backups and
   // reset. They are real data and must travel with everything else.
   "invoices", "financeNotes",
@@ -195,9 +195,6 @@ export function exportAllData(pretty: boolean = true): string {
   };
   for (const key of DATA_KEYS) {
     const v = readFromStorage(key, null);
-    // v6.79.0 (W-10): creditNotes is a DEPRECATED store (folded into financeNotes on load).
-    // It stays importable so old backups still fold, but an empty one is not exported.
-    if (key === "creditNotes" && Array.isArray(v) && v.length === 0) continue;
     data[key] = v;
   }
   return pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);

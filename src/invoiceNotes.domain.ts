@@ -47,7 +47,7 @@ export function exportNotesForSale(order: any, ctx: { shipments?: any[]; lots?: 
   (goods.length ? goods : (order?.items || [])).forEach((g: any) => { const b = parseNum(g?.boxes); if (b > 0) packs.set(S(g.packaging) || "packages", (packs.get(S(g.packaging) || "packages") || 0) + b); });
   if (packs.size) lines.push(`Packages: ${Array.from(packs.entries()).map(([p, b]) => `${Math.round(b).toLocaleString("pl-PL")} × ${p}`).join(" · ")}`);
   // a leg keeps its trucks / containers as vehicles (older records: transportUnits or units)
-  const units = mine.flatMap((sh: any) => (sh.legs || []).flatMap((leg: any) => (Array.isArray(leg?.vehicles) && leg.vehicles.length) ? leg.vehicles : (leg?.transportUnits || leg?.units || ((leg?.truckPlate || leg?.vehiclePlate || leg?.containerNumber || leg?.tempRecorderNo) ? [leg] : []))));
+  const units = mine.flatMap((sh: any) => (sh.legs || []).flatMap((leg: any) => (Array.isArray(leg?.vehicles) ? leg.vehicles : [])));   // v7.28.9 (Batch L): the trucks only
   const trucks = uniq(units.map((u: any) => [S(u.truckPlate || u.vehiclePlate), S(u.trailerPlate)].filter(Boolean).join(" / ")));
   const containers = uniq(units.map((u: any) => u.containerNumber));
   const recorders = uniq(units.map((u: any) => u.tempRecorderNo));

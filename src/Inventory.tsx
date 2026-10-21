@@ -21,7 +21,8 @@ import { useUnsavedGuard } from "./unsaved";
 import { r0 } from "./format";
 import { LotDetail } from "./InventoryLot";
 import { MovementModal } from "./InventoryWindows";
-import { activeParties } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
+import { unitLoadedAt, unitUnloadedAt } from "./shipmentModel.domain";   // v7.28.0 (Batch L)
+import { activeParties , rolesOf } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
 import { ownershipAtPoint } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
@@ -204,15 +205,15 @@ function legsForLot(lot: any, shipments: any[]) {
 function legActualLoad(leg: any) {
   if (!leg) return null;
   // Prefer a per-unit actual load date, else the leg's actual loading date.
-  const units = leg.transportUnits || leg.units || [];
-  const u = units.find((x: any) => x.actualLoadDate);
-  return (u && u.actualLoadDate) || leg.actualLoadingDate || null;
+  const units = leg.vehicles || [];   // v7.28.9 (Batch L): the trucks — the old unit lists are gone (these lines had never read the trucks)
+  const u = units.find((x: any) => unitLoadedAt(x));   // v7.28.0 (Batch L): one reader
+  return (u && unitLoadedAt(u)) || leg.actualLoadingDate || null;
 }
 function legActualDeliver(leg: any) {
   if (!leg) return null;
-  const units = leg.transportUnits || leg.units || [];
-  const u = units.find((x: any) => x.actualUnloadDate);
-  return (u && u.actualUnloadDate) || leg.actualDeliveryDate || null;
+  const units = leg.vehicles || [];   // v7.28.9 (Batch L): the trucks — the old unit lists are gone (these lines had never read the trucks)
+  const u = units.find((x: any) => unitUnloadedAt(x));   // v7.28.0 (Batch L): one reader
+  return (u && unitUnloadedAt(u)) || leg.actualDeliveryDate || null;
 }
 
 // v6.x: drive each journey stage's status + actual date from real data — matching
@@ -954,7 +955,7 @@ export function SortingWindow({ f, setF, lot, inspections = [], contacts = [], o
           </Sel>
         </QhField>
         <QhField label="Follows inspection"><Sel value={f.followsInspection || ""} onChange={(e: any) => set("followsInspection", e.target.value)}><option value="">— none —</option>{inspections.map((x: any) => <option key={String(x.id)} value={String(x.id)}>{formatDMY(x.date)} · {x.verdict} · defects {inspectionVerdict(x).totalPct} %</option>)}</Sel></QhField>
-        <QhField label="Sorted by"><NamePicker value={f.by} options={["Our team", ...activeParties(contacts).filter((c: any) => (c.roles || [c.type]).includes("Warehouse") || (c.additionalTypes || []).includes("Warehouse")).map((c: any) => String(c.name).trim())]} onChange={(v: string) => set("by", v)} placeholder="— our team or a warehouse —" /></QhField>
+        <QhField label="Sorted by"><NamePicker value={f.by} options={["Our team", ...activeParties(contacts).filter((c: any) => rolesOf(c).includes("Warehouse")).map((c: any) => String(c.name).trim())]} onChange={(v: string) => set("by", v)} placeholder="— our team or a warehouse —" /></QhField>
         <QhField label="Hours"><input type="number" value={f.hours ?? ""} onChange={e => set("hours", e.target.value)} style={qhInp} /></QhField>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
@@ -1207,7 +1208,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
         const costPLN = Math.round(costN * fx * 100) / 100;
         const sh = {
           id: nextId(), number, purpose: "RETURN", status: "Delivered", billingStatus: "Not ready",
-          loadingDate: d.date, expectedDeliveryDate: d.date,
+          loadingDate: d.date,   // v7.28.5 (Batch L): one promised date
           legs: [{ id: 1, mode: "Road", status: "Delivered", fromLocationId: d.fromId || null, toLocationId: d.toId, carrierId: null, plannedPickupDate: d.date, plannedDeliveryDate: d.date, costAmount: costN, costCurrency: d.currency, costFxRate: fx, costPLN, notes: "Return from client" }],
           costs: costN > 0 ? [{ id: 1, type: "return_freight", supplierId: null, amount: costN, currency: d.currency, fxRate: fx, amountPLN: costPLN, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: d.reason || "Return transport" }] : [],
           documents: [], lotRefs: [selected.number], terms: "", customs: { applies: false },

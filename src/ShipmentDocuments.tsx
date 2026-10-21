@@ -7,6 +7,7 @@ import { formatDMY } from "./dates";
 import { printHtmlNode } from "./documentService";
 import { placeForPrint } from "./locations";
 import { COMPANY, Card, FieldPrint, Inp, LOGO_DATA_URL, Lbl, SectionTitle, Sel, blankTransportUnit, cargoVariance, fmtMoney, fmtNum, locationTextFromFields, parseNum, providerById, providerCosts, providerIdsForShipment, providerLegs, providerRoleForLeg, providerRolePL, providerUnitsForLeg, shipmentCostPLN, todayISO } from "./Shipments";
+import { shipmentStartPlaceId, shipmentEndPlaceId } from "./tradeFlow.domain";   // v7.28.7 (Batch L)
 
 export function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders = [], customTerms = "", pos = [], packagingTypes = [], lots = [] }: any) {
   const docNo = shipment.transportOrderNo || shipment.number;
@@ -50,12 +51,11 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
   // so we pick ONE by priority rather than adding them (which double-counted):
   //   1. Per-unit prices (most granular: each truck/container priced individually)
   //   2. Cost & Billing lines for this provider
-  //   3. Leg-level cost amounts
+  //   (v7.28.9: the leg-level amount copies are gone — the trucks own the price)
   const orderCurrency = selectedCosts[0]?.currency || firstLeg.costCurrency || "PLN";
   const costLinesTotal = selectedCosts.reduce((sum, c) => sum + parseNum(c.amount), 0);
-  const legCostTotal = selectedLegs.reduce((sum, l) => sum + parseNum(l.costAmount), 0);
   const unitPriceTotal = selectedLegs.reduce((sum, l) => sum + providerUnitsForLeg(l, effectiveProviderId, shipment).reduce((u, unit) => u + parseNum(unit.costAmount || unit.unitPrice), 0), 0);
-  const agreedPriceTotal = unitPriceTotal > 0 ? unitPriceTotal : (costLinesTotal > 0 ? costLinesTotal : legCostTotal);
+  const agreedPriceTotal = unitPriceTotal > 0 ? unitPriceTotal : costLinesTotal;   // v7.28.9 (Batch L): the trucks' prices, else the cost lines — no copy on the leg
   const agreedPriceText = agreedPriceTotal > 0
     ? fmtMoney(agreedPriceTotal, orderCurrency)
     : "TBA / per agreement";
@@ -367,7 +367,7 @@ export function TransportOrderEmailModal({ shipment, contacts, orders = [], lots
     const entries = Object.entries(byCur).filter(([, v]) => v > 0);
     return entries.length ? entries.map(([cur, v]) => fmtMoney(v, cur)).join(" + ") : fmtMoney(shipmentCostPLN(shipment), "PLN");
   })();
-  const makeBody = () => `Dear ${provider.name || provider.contact || "Carrier / Forwarder"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locationTextFromFields(firstProviderLeg.fromLocationId || shipment.originLocationId, firstProviderLeg.fromCustom || shipment.originCustom)}\nDelivery: ${locationTextFromFields(lastProviderLeg.toLocationId || shipment.destinationLocationId, lastProviderLeg.toCustom || shipment.destinationCustom)}\nDate: ${formatDMY(firstProviderLeg.plannedPickupDate || shipment.loadingDate) || "TBA"}\nFreight: ${freightText}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`;
+  const makeBody = () => `Dear ${provider.name || provider.contact || "Carrier / Forwarder"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locationTextFromFields(firstProviderLeg.fromLocationId || shipmentStartPlaceId(shipment), firstProviderLeg.fromCustom || shipment.originCustom)}\nDelivery: ${locationTextFromFields(lastProviderLeg.toLocationId || shipmentEndPlaceId(shipment), lastProviderLeg.toCustom || shipment.destinationCustom)}\nDate: ${formatDMY(firstProviderLeg.plannedPickupDate || shipment.loadingDate) || "TBA"}\nFreight: ${freightText}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`;
   const [subject, setSubject] = useState(`Transport Order ${shipment.transportOrderNo || shipment.number} / Zlecenie transportowe — ${COMPANY.name}`);
   const [body, setBody] = useState(makeBody());
   // v6.16 (#6): for multimodal there are several providers — when the user switches

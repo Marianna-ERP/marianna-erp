@@ -106,9 +106,7 @@ export default function LoadingProtocolModal({
     const out: any[] = [];
     (shipment?.legs || []).forEach((leg: any) => {
       if (leg?.mode !== "Road") return;
-      const units = (Array.isArray(leg.vehicles) && leg.vehicles.length)
-        ? leg.vehicles
-        : [{ id: `leg${leg.id}-u1`, truckPlate: leg.vehiclePlate || "", trailerPlate: leg.trailerPlate || "", driverName: leg.driverName || "" }];
+      const units = Array.isArray(leg.vehicles) ? leg.vehicles : [];   // v7.28.9 (Batch L): the trucks own their plates and drivers
       units.forEach((u: any, i: number) => {
         const plate = u.truckPlate || u.vehiclePlate || `Truck ${out.length + 1}`;
         // v7.15.2 (A-LS-3, owner 9 Oct): a truck collecting at several producers has ONE SHEET PER PRODUCER — each with only what was

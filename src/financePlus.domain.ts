@@ -25,7 +25,7 @@ const isMine = (party: any) => cid ? String(party?.id ?? "") === cid : (party?.i
   });
   const openOrders = (orders || []).filter(o => o && ["Confirmed"].includes(o.status) && isMine(o.client))
     .reduce((s, o) => s + (o.items || []).reduce((a: number, it: any) => a + (String(it.pricingUnit || "") === "box" ? num(it.boxes) : num(it.qty)) * num(it.unitPrice), 0) * (num(o.fxRate) || 1), 0);
-  const limit = num(contact?.creditLimitPLN);
+  const limit = num(contact?.terms?.creditLimitPLN);   // v7.28.1 (Batch L): the terms own the credit limit
   return { client: clientName, limitPLN: limit, exposurePLN: r2(exposure), usagePct: limit > 0 ? r2((exposure + openOrders) / limit * 100) : null, overduePLN: r2(overdue), maxOverdueDays: maxOver, openInvoices: open, lastPaymentDate: lastPay, avgDaysToPay: payDays.length ? Math.round(payDays.reduce((s, d) => s + d, 0) / payDays.length) : null, openOrdersPLN: r2(openOrders) };
 }
 export function clientRiskTable(invoices: any[], orders: any[], contacts: any[], todayISO: string): ClientRisk[] {

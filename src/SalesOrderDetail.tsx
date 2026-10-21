@@ -150,7 +150,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
 }
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpenResult = false, onOpenResult = null, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, termsFindings = [], fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userName = "" }: any) {
+export function OrderDetail({ onChangeRule = null, order, soInvoices = [], financeNotes = [], canOpenResult = false, onOpenResult = null, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, termsFindings = [], fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userName = "" }: any) {
   const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy   // v7.21.5 (SE-4): no per-browser role
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
@@ -229,7 +229,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px", background: "#FAFAFA" }}>
         <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
-          {termsFindings.length ? <div style={{ marginBottom: 16 }}><TermsFindingsBox findings={termsFindings} here={order.number} /></div> : null}{/* v7.20.0 (A-INC-2): the terms to review under this sale's incoterm */}
+          {termsFindings.length ? <div style={{ marginBottom: 16 }}><TermsFindingsBox findings={termsFindings} here={order.number} onChangeRule={onChangeRule} /></div> : null}{/* v7.20.0 (A-INC-2): the terms to review under this sale's incoterm */}
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
             <div>
@@ -238,7 +238,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                 {order.statusOverride ? <span data-status-by-hand="1" title="This status was set by hand — the shipments do not show it yet" style={{ fontSize: 11, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "2px 8px" }}>set by hand{order.statusOverrideReason ? ` — ${order.statusOverrideReason}` : ""}{order.statusOverrideAt ? ` · ${formatDMY(order.statusOverrideAt)}` : ""}</span> : null}{/* v7.11.3 (A-RV-25) */}
               </div>
               <div style={{ fontSize: 24, fontWeight: 700, color: "#111", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{order.number}</div>
-              <DatesChain steps={soDatesChain(order, { shipments: shipments || [], invoices: soInvoices || [] })} />{/* v7.27.18 (A-D-4) */}
+              <DatesChain steps={soDatesChain(order, { shipments: shipments || [], invoices: soInvoices || [], pos: pos || [], lots: lots || [] })} />{/* v7.27.18 (A-D-4) */}
               <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>{order.client?.name || "—"}</div>
             </div>
             <div style={{ textAlign: "right" }}>
@@ -246,7 +246,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
               <div style={{ fontSize: 24, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
               {order.currency !== "PLN" && order.fxRate && <div style={{ fontSize: 12, color: "#888" }}>≈ {fmtMoney(total * order.fxRate, "PLN")} · rate {order.fxRate}</div>}
               {order.currency !== "PLN" && order.fxLockedAt && <div style={{ fontSize: 10, color: "#94A3B8" }} title="v6.95.0 (SO-8): the rate is a locked fact">rate {order.fxRate} locked {formatDMY(order.fxLockedAt)}</div>}
-              {(() => { const ev = deliveryEventFor(order.sellIncoterm); const act = actualDeliveryDate(order, shipments); const d = deliveryDelayDays(order, shipments);
+              {(() => { const ev = deliveryEventFor(order.sellIncoterm); const act = actualDeliveryDate(order, shipments, { pos, lots }); const d = deliveryDelayDays(order, shipments, { pos, lots });
                 return <div style={{ fontSize: 10, color: d != null && d > 0 ? "#B45309" : "#94A3B8", marginTop: 2 }} title={`v6.95.0 (SO-3): for ${order.sellIncoterm || "these terms"} delivery means ${ev.where}`}>delivery ({ev.where}): planned {formatDMY(order.deliveryDate) || "—"}{act ? ` · actual ${act}` : " · not yet"}{d != null ? ` · ${d > 0 ? d + " day(s) late" : d < 0 ? Math.abs(d) + " day(s) early" : "on time"}` : ""}</div>; })()}
             </div>
           </div>

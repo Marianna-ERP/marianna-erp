@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S } from "./format";
+import { shipmentEndPlaceId } from "./tradeFlow.domain";   // v7.28.7 (Batch L)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // dashboard.domain.ts — v6.99.4: THE DASHBOARD'S QUESTIONS (owner decisions DA-1…DA-8)
 // Pure tile queries. Every tile = exceptions / today's events only; "none" when empty.
@@ -61,7 +62,7 @@ export function ownerTiles(closedPeriods: any[], poSettlements: any[], financeNo
 // ── DB7 · WAREHOUSE MORNING ──────────────────────────────────────────────────
 export function warehouseTiles(lots: any[], shipments: any[], inspections: any[], stockCounts: any[], locationId: any, todayISO: string): Tile[] {
   const mine = (lots || []).filter(l => l && String(l.locationId) === String(locationId));
-  const arrivals = (shipments || []).filter(s => s && String(s.purpose || "").toUpperCase() === "INBOUND" && !["Cancelled", "Delivered"].includes(String(s.status)) && (String(s.destinationLocationId) === String(locationId)) && (s.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => S(u.eta) === todayISO || S(u.plannedDeliveryDate) === todayISO))).map(s => `${s.number}${s.supplierRef ? " · " + s.supplierRef : ""}`);
+  const arrivals = (shipments || []).filter(s => s && String(s.purpose || "").toUpperCase() === "INBOUND" && !["Cancelled", "Delivered"].includes(String(s.status)) && (String(shipmentEndPlaceId(s)) === String(locationId)) && (s.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => S(u.eta) === todayISO || S(u.plannedDeliveryDate) === todayISO))).map(s => `${s.number}${s.supplierRef ? " · " + s.supplierRef : ""}`);
   const toInspect = mine.filter(l => num(l.physicalKg) > 0 && !(inspections || []).some(x => String(x.lotNumber) === String(l.number))).map(l => l.number);
   const countDue = (stockCounts || []).some(c => String(c.locationId) === String(locationId) && S(c.date) === todayISO) ? [] : (mine.some(l => num(l.physicalKg) > 0) ? ["today's count not done"] : []);
   return [tile("arr", "ARRIVALS EXPECTED TODAY", arrivals, "lots", 99), tile("insp", "LOTS AWAITING INSPECTION", toInspect, "lots", 1), tile("count", "STOCK COUNT", countDue, "lots", 1, "done today")];

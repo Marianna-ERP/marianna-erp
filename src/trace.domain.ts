@@ -59,8 +59,8 @@ export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; o
     carrier: (() => { const ids = (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => u.carrierId ?? l.carrierId ?? l.forwarderId)).filter(Boolean); const names = Array.from(new Set(ids.map((id: any) => (inp.contacts || []).find((c: any) => String(c.id) === String(id))?.name).filter(Boolean))); return names.join(", ") || s.carrierName || undefined; })(),
     from: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.pickupText || "").trim())).find(Boolean) || s.originText || s.legs?.[0]?.fromCustom || undefined,
     to: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.deliveryText || "").trim())).find(Boolean) || s.destinationText || (s.legs || []).slice(-1)[0]?.toCustom || undefined,
-    loadedAt: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.loadedAt || u.plannedLoadingDate || "").slice(0, 10))).filter(Boolean).sort()[0] || s.actualLoadingDate || s.expectedLoadingDate || undefined,
-    unloadedAt: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.unloadedAt || u.deliveredAt || u.plannedDeliveryDate || "").slice(0, 10))).filter(Boolean).sort().slice(-1)[0] || s.actualDeliveryDate || s.expectedDeliveryDate || undefined,
+    loadedAt: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.loadedAt || u.plannedLoadingDate || "").slice(0, 10))).filter(Boolean).sort()[0] || s.expectedLoadingDate || undefined,   // v7.28.7: the trucks own the actual date
+    unloadedAt: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.unloadedAt || u.deliveredAt || u.plannedDeliveryDate || "").slice(0, 10))).filter(Boolean).sort().slice(-1)[0] || s.expectedDeliveryDate || undefined,   // v7.28.7: the trucks own the actual date
     dates: [s.expectedLoadingDate, s.expectedDeliveryDate].filter(Boolean).join(" → ") || undefined,
   }));
 

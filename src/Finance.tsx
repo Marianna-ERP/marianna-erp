@@ -527,12 +527,12 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
   );
 }
 
-function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], operationalCosts = [], settledRefs = [], setSettledRefs = null, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
+function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], operationalCosts = [], advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
   const { alert: lvAlert, dialogNode: lvNode } = useConfirm(); // P2-6
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
   const today = localTodayISO();
-  const { items, totals } = buildLedger({ orders, lots, pos, invoices, financeNotes, settledRefs, todayISO: today });
+  const { items, totals } = buildLedger({ orders, lots, pos, invoices, financeNotes, todayISO: today });
 
   async function togglePaid(ref: string) {
     // Batch 5d (BP-39): for INVOICES, "mark paid" writes a tagged payment EVENT on
@@ -552,8 +552,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
       }
       return;
     }
-    if (!setSettledRefs) return;
-    setSettledRefs((prev: string[]) => (prev || []).includes(ref) ? prev.filter(r => r !== ref) : [...(prev || []), ref]);
+    // v7.28.12 (Batch L): only invoices are marked paid here (as payment events) — no other row carries a "settled" mark
   }
 
   const shown = items
@@ -878,8 +877,6 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
   lots = [],
   setLots = null,
   contacts = [],
-  settledRefs = [],
-  setSettledRefs = null,
   pos = [],
   shipments = [],
   operationalCosts = [],
@@ -905,8 +902,6 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
   lots?: any[];
   setLots?: any;
   contacts?: any[];
-  settledRefs?: string[];
-  setSettledRefs?: any;
   pos?: any[];
   shipments?: any[];
   operationalCosts?: OperationalCost[];
@@ -1065,7 +1060,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
       <div>
 
         {tab === "ledger" ? (
-          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} users={users} userName={userName} contacts={contacts} />
+          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} users={users} userName={userName} contacts={contacts} />
         ) : tab === "warehouse" ? (
           <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} invoices={invoices} setInvoices={setInvoices} packagingTypes={packagingTypes} />
         ) : tab === "pl" ? (
@@ -1084,7 +1079,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
               </div>
               {canOpenFinance(users, userName, "pl") && <ConsignmentResultsCard pos={pos} lots={lots} orders={orders} invoices={invoices} shipments={shipments} financeNotes={financeNotes} />}{/* v7.8.3 (A-PL-2) */}
               {canOpenFinance(users, userName, "pl") && <PurchaseResultsCard pos={pos} lots={lots} orders={orders} shipments={shipments} />}
-              {canOpenFinance(users, userName, "pl") && <MonthCloseCard totalAgg={totalAgg} ledgerTotals={buildLedger({ orders, lots, pos, invoices, financeNotes, settledRefs: [], todayISO: localTodayISO() }).totals} lots={lots} claims={claims} poSettlements={poSettlements} invoices={invoices} bankAccounts={bankAccounts} closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} userName={userName} canClose={canOpenFinance(users, userName, "pl")} />}
+              {canOpenFinance(users, userName, "pl") && <MonthCloseCard totalAgg={totalAgg} ledgerTotals={buildLedger({ orders, lots, pos, invoices, financeNotes, todayISO: localTodayISO() }).totals} lots={lots} claims={claims} poSettlements={poSettlements} invoices={invoices} bankAccounts={bankAccounts} closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} userName={userName} canClose={canOpenFinance(users, userName, "pl")} />}
               {canOpenFinance(users, userName, "budget") && typeof setBudgets === "function" && (() => {
                 const period = localTodayISO().slice(0, 7);
                 const actuals: any = { revenue: totalAgg.totalRevenuePLN, contribution: totalAgg.totalContributionPLN, overhead: totalAgg.totalOverheadPLN, net: totalAgg.totalNetMarginPLN ?? 0 };
@@ -1146,7 +1141,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
                 (claims || []).forEach((c: any) => {
                   const lotRef = (c.subjects || []).find((x: any) => x.kind === "LOT")?.ref || "";
                   const other = (c.subjects || []).find((x: any) => x.kind === "PO" || x.kind === "SO" || x.kind === "SHIPMENT")?.ref || "";
-                  const amt = c.acceptedEUR != null && c.acceptedEUR !== "" ? c.acceptedEUR : c.requestedEUR;
+                  const amt = c.acceptedAmount != null && c.acceptedAmount !== "" ? c.acceptedAmount : c.requestedAmount;
                   rows.push({
                     kind: c.direction === "CONCESSION" ? "Client" : (c.respondent?.kind || "Supplier"),
                     ref: c.number || "(draft)", date: c.date || "",
@@ -1154,7 +1149,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
                     detail: [
                       c.cause || "",
                       c.defectPct ? `${c.defectPct}% defect` : "",
-                      Number(amt) ? `€${Number(amt).toLocaleString("pl-PL")}${c.acceptedEUR != null && c.acceptedEUR !== "" ? " agreed" : " requested"}` : "",
+                      Number(amt) ? `€${Number(amt).toLocaleString("pl-PL")}${c.acceptedAmount != null && c.acceptedAmount !== "" ? " agreed" : " requested"}` : "",
                       c.respondent?.name || "",
                     ].filter(Boolean).join(" · "),
                     status: c.status || "Draft",
@@ -1226,7 +1221,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
                         <div style={{ textAlign: "right", color: "#94A3B8" }}>{m.netMarginPct}%</div>
                       </div>
                       {plOpenSO === o.id && <div style={{ padding: "4px 8px 14px" }}>{/* v7.1.3 (A-PL-1): the breakdown that used to sit on the sale */}
-                        <SOMarginCard order={o} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={orders} invoices={invoices} financeNotes={financeNotes} />
+                        <SOMarginCard order={o} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={orders} invoices={invoices} financeNotes={financeNotes} poSettlements={poSettlements} />
                       </div>}</React.Fragment>
                     ))}
                   </div>

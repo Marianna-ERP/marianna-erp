@@ -1114,8 +1114,8 @@ T("truck+container entered on LEGS after creation now reach lot landed cost", ()
     id: 7, number: "SHP-F", status: "Delivered", soRefs: ["SO-F"], lotRefs: ["LOT-F"],
     goods: [{ lotRef: "LOT-F", soRef: "SO-F", qtyKg: 21000 }],
     legs: [
-      { mode: "Road", costAmount: 4500, costCurrency: "PLN", costFxRate: 1, costPLN: 4500 },
-      { mode: "Sea", costAmount: 2000, costCurrency: "USD", costFxRate: 4, costPLN: 8000 },
+      { mode: "Road", costCurrency: "PLN", costFxRate: 1, vehicles: [{ costAmount: 4500 }] },
+      { mode: "Sea", costCurrency: "USD", costFxRate: 4, vehicles: [{ costAmount: 2000 }] },
     ],
     costs: [ // creation-time snapshot (legs were 0) + customs auto-line
       { id: 1, type: "road_freight", amount: 0, amountPLN: 0, invoiceStatus: "Expected" },
@@ -1135,15 +1135,15 @@ T("truck+container entered on LEGS after creation now reach lot landed cost", ()
   assert.deepEqual(plns, [1200, 4500, 8000], "truck + container + customs all in lot landed cost");
 });
 T("re-sync preserves invoiceStatus/invoiceRef; clearing the leg cost removes the line", () => {
-  const sh = { id: 3, number: "SHP-R", legs: [{ mode: "Road", costAmount: 4500, costFxRate: 1, costPLN: 4500 }], costs: [] };
+  const sh = { id: 3, number: "SHP-R", legs: [{ mode: "Road", costFxRate: 1, vehicles: [{ costAmount: 4500 }] }], costs: [] };
   let s1 = syncLegFreightCostLines(sh);
   s1.costs[0].invoiceStatus = "Received"; s1.costs[0].invoiceRef = "FV/9/2026";
-  let s2 = syncLegFreightCostLines({ ...s1, legs: [{ mode: "Road", costAmount: 5200, costFxRate: 1, costPLN: 5200 }] });
+  let s2 = syncLegFreightCostLines({ ...s1, legs: [{ mode: "Road", costFxRate: 1, vehicles: [{ costAmount: 5200 }] }] });
   const line = s2.costs.find(c => c.source === "leg-freight:1");
   assert.equal(line.amountPLN, 5200, "amount follows the leg");
   assert.equal(line.invoiceStatus, "Received", "status preserved");
   assert.equal(line.invoiceRef, "FV/9/2026", "ref preserved");
-  const s3 = syncLegFreightCostLines({ ...s2, legs: [{ mode: "Road", costAmount: 0 }] });
+  const s3 = syncLegFreightCostLines({ ...s2, legs: [{ mode: "Road", vehicles: [{ costAmount: 0 }] }] });
   assert.ok(!s3.costs.some(c => c.source === "leg-freight:1"), "cleared leg cost → managed line removed");
 });
 T("accrual (ruling A): Expected cost counts in ACTUAL P/L once the shipment is Delivered", () => {
@@ -1522,9 +1522,9 @@ T("queries find claims by lot, SO and shipment", () => {
 T("incident net: conceded minus recovered, gap reported not flagged", () => {
   // client conceded 6000; recovered 4000 from the supplier and 1000 from the line
   const claims = [
-    CL.blankClaim({ id: 1, direction: "CONCESSION", requestedEUR: 6500, acceptedEUR: 6000 }),
-    CL.blankClaim({ id: 2, direction: "RECOVERY", parentClaimId: 1, requestedEUR: 6179.93, acceptedEUR: 4000 }),
-    CL.blankClaim({ id: 3, direction: "RECOVERY", parentClaimId: 1, requestedEUR: 1500, acceptedEUR: 1000 }),
+    CL.blankClaim({ id: 1, direction: "CONCESSION", requestedAmount: 6500, acceptedAmount: 6000 }),
+    CL.blankClaim({ id: 2, direction: "RECOVERY", parentClaimId: 1, requestedAmount: 6179.93, acceptedAmount: 4000 }),
+    CL.blankClaim({ id: 3, direction: "RECOVERY", parentClaimId: 1, requestedAmount: 1500, acceptedAmount: 1000 }),
   ];
   const n = CL.incidentNet(claims, 1);
   assert.equal(n.conceded, 6000, "accepted amount wins over requested");
@@ -1534,9 +1534,9 @@ T("incident net: conceded minus recovered, gap reported not flagged", () => {
 });
 T("summary: open value, overdue notices, claims with no evidence", () => {
   const claims = [
-    CL.blankClaim({ id: 1, number: "CLM-1", direction: "RECOVERY", status: "Submitted", requestedEUR: 1000, noticeDeadline: "2026-07-01" }),
-    CL.blankClaim({ id: 2, number: "CLM-2", direction: "CONCESSION", status: "Settled", requestedEUR: 500 }),
-    CL.blankClaim({ id: 3, number: "CLM-3", direction: "RECOVERY", status: "Draft", requestedEUR: 200, evidence: [{ kind: "CMR", ref: "1", link: "https://www.dropbox.com/s/a/b.pdf" }] }),
+    CL.blankClaim({ id: 1, number: "CLM-1", direction: "RECOVERY", status: "Submitted", requestedAmount: 1000, noticeDeadline: "2026-07-01" }),
+    CL.blankClaim({ id: 2, number: "CLM-2", direction: "CONCESSION", status: "Settled", requestedAmount: 500 }),
+    CL.blankClaim({ id: 3, number: "CLM-3", direction: "RECOVERY", status: "Draft", requestedAmount: 200, evidence: [{ kind: "CMR", ref: "1", link: "https://www.dropbox.com/s/a/b.pdf" }] }),
   ];
   const s = CL.claimsSummary(claims, "2026-07-30");
   assert.equal(s.total, 3); assert.equal(s.open, 2, "Settled is terminal");
@@ -1552,24 +1552,24 @@ T("basis COSTS: a claim with no damaged cargo at all (wrong terminal, demurrage)
   assert.equal(CL.requestedFromBasis(c), 800, "pure caused costs — no defect %");
 });
 T("basis MIXED: the real transport claim — cargo lost AND cost to repalletise", () => {
-  const c = CL.blankClaim({ basis: "MIXED", lostValueEUR: 1200,
+  const c = CL.blankClaim({ basis: "MIXED", lostValue: 1200,
     causedCosts: [{ label: "Repalletising before loading", amountEUR: 350 }],
-    defectValueEUR: 0, recoveredEUR: 0 });
+    defectValue: 0, recovered: 0 });
   assert.equal(CL.requestedFromBasis(c), 1550);
 });
 T("basis DEFECT still runs the paper form's maths", () => {
-  const c = CL.blankClaim({ basis: "DEFECT", defectValueEUR: 7474.31, recoveredEUR: 1294.38 });
+  const c = CL.blankClaim({ basis: "DEFECT", defectValue: 7474.31, recovered: 1294.38 });
   assert.equal(CL.requestedFromBasis(c), 6179.93, "matches the signed Claim Request Form");
 });
 T("only an ACCEPTED amount posts anything", () => {
-  const base = { number: "CLM-2026-0001", direction: "RECOVERY", plnPerEur: 4.3,
+  const base = { number: "CLM-2026-0001", direction: "RECOVERY", fxToPLN: 4.3,
     subjects: [{ kind: "LOT", ref: "LOT-1", affectedKg: 1000 }] };
-  assert.equal(CL.buildClaimPostings({ ...base, status: "Submitted", acceptedEUR: 1000 }).postings.length, 0);
-  assert.equal(CL.buildClaimPostings({ ...base, status: "Accepted", acceptedEUR: 0 }).postings.length, 0);
-  assert.equal(CL.buildClaimPostings({ ...base, status: "Accepted", acceptedEUR: 1000 }).postings.length, 1);
+  assert.equal(CL.buildClaimPostings({ ...base, status: "Submitted", acceptedAmount: 1000 }).postings.length, 0);
+  assert.equal(CL.buildClaimPostings({ ...base, status: "Accepted", acceptedAmount: 0 }).postings.length, 0);
+  assert.equal(CL.buildClaimPostings({ ...base, status: "Accepted", acceptedAmount: 1000 }).postings.length, 1);
 });
 T("RECOVERY from the producer credits the lots pro-rata by affected kg", () => {
-  const c = { number: "CLM-2026-0002", direction: "RECOVERY", status: "Accepted", acceptedEUR: 1000, plnPerEur: 4,
+  const c = { number: "CLM-2026-0002", direction: "RECOVERY", status: "Accepted", acceptedAmount: 1000, fxToPLN: 4,
     respondent: { kind: "Supplier", name: "Konkret" },
     subjects: [{ kind: "LOT", ref: "LOT-A", affectedKg: 3000 }, { kind: "LOT", ref: "LOT-B", affectedKg: 1000 }] };
   const { postings } = CL.buildClaimPostings(c);
@@ -1580,7 +1580,7 @@ T("RECOVERY from the producer credits the lots pro-rata by affected kg", () => {
   assert.ok(postings.every(p => p.kind === "LOT_COST" && p.source === "claim:CLM-2026-0002"));
 });
 T("CONCESSION to the client reduces the sales order's revenue", () => {
-  const c = { number: "CLM-2026-0003", direction: "CONCESSION", status: "Settled", acceptedEUR: 500, plnPerEur: 4.3,
+  const c = { number: "CLM-2026-0003", direction: "CONCESSION", status: "Settled", acceptedAmount: 500, fxToPLN: 4.3,
     respondent: { kind: "Client", name: "Cairo Fruits" }, subjects: [{ kind: "SO", ref: "SO-2026-0002" }] };
   const { postings } = CL.buildClaimPostings(c);
   assert.equal(postings.length, 1);
@@ -1590,7 +1590,7 @@ T("CONCESSION to the client reduces the sales order's revenue", () => {
 });
 T("posting a lot credit is source-tagged, additive and re-postable", () => {
   const lots = [{ number: "LOT-A", costs: [{ type: "purchase", pln: 58266, source: "po:PO-1" }] }];
-  const c = { number: "CLM-2026-0004", direction: "RECOVERY", status: "Accepted", acceptedEUR: 1000, plnPerEur: 4,
+  const c = { number: "CLM-2026-0004", direction: "RECOVERY", status: "Accepted", acceptedAmount: 1000, fxToPLN: 4,
     respondent: { kind: "Carrier", name: "TransPol" }, subjects: [{ kind: "LOT", ref: "LOT-A", affectedKg: 500 }] };
   const p1 = CL.buildClaimPostings(c).postings;
   let out = CL.applyPostingsToLots(lots, p1);
@@ -1598,17 +1598,17 @@ T("posting a lot credit is source-tagged, additive and re-postable", () => {
   assert.equal(out[0].costs[1].pln, -4000);
   assert.equal(out[0].costs[0].pln, 58266, "purchase line never rewritten");
   // re-post after renegotiation — replaces, never duplicates
-  const p2 = CL.buildClaimPostings({ ...c, acceptedEUR: 800 }).postings;
+  const p2 = CL.buildClaimPostings({ ...c, acceptedAmount: 800 }).postings;
   out = CL.applyPostingsToLots(out, p2);
   assert.equal(out[0].costs.length, 2, "replaced by source");
   assert.equal(out[0].costs[1].pln, -3200);
 });
 T("reversing a claim removes exactly its own postings", () => {
   const lots = CL.applyPostingsToLots([{ number: "L1", costs: [{ pln: 100, source: "po:X" }] }],
-    CL.buildClaimPostings({ number: "CLM-9", direction: "RECOVERY", status: "Accepted", acceptedEUR: 10, plnPerEur: 4,
+    CL.buildClaimPostings({ number: "CLM-9", direction: "RECOVERY", status: "Accepted", acceptedAmount: 10, fxToPLN: 4,
       subjects: [{ kind: "LOT", ref: "L1", affectedKg: 1 }] }).postings);
   const orders = CL.applyPostingsToOrders([{ number: "SO-1" }],
-    CL.buildClaimPostings({ number: "CLM-9", direction: "CONCESSION", status: "Accepted", acceptedEUR: 10, plnPerEur: 4,
+    CL.buildClaimPostings({ number: "CLM-9", direction: "CONCESSION", status: "Accepted", acceptedAmount: 10, fxToPLN: 4,
       subjects: [{ kind: "SO", ref: "SO-1" }] }).postings);
   assert.equal(lots[0].costs.length, 2);
   assert.equal(orders[0].claimAdjustments.length, 1);
@@ -1617,10 +1617,10 @@ T("reversing a claim removes exactly its own postings", () => {
   assert.equal(rev.orders[0].claimAdjustments.length, 0);
 });
 T("posting refuses when the claim has nothing to land on", () => {
-  const noLots = CL.buildClaimPostings({ number: "C", direction: "RECOVERY", status: "Accepted", acceptedEUR: 100, plnPerEur: 4, subjects: [] });
+  const noLots = CL.buildClaimPostings({ number: "C", direction: "RECOVERY", status: "Accepted", acceptedAmount: 100, fxToPLN: 4, subjects: [] });
   assert.equal(noLots.postings.length, 0);
   assert.ok(noLots.warnings[0].includes("no lots"));
-  const noRate = CL.buildClaimPostings({ number: "C", direction: "RECOVERY", status: "Accepted", acceptedEUR: 100, subjects: [{ kind: "LOT", ref: "L" }] });
+  const noRate = CL.buildClaimPostings({ number: "C", direction: "RECOVERY", status: "Accepted", acceptedAmount: 100, subjects: [{ kind: "LOT", ref: "L" }] });
   assert.ok(noRate.warnings[0].includes("rate"));
 });
 T("the SO's margin actually moves when a concession is posted", () => {
@@ -1628,7 +1628,7 @@ T("the SO's margin actually moves when a concession is posted", () => {
     items: [{ product: "Apples", qty: 1000, unitPrice: 1, sourceType: "STOCK", sourceRef: "LOT-M" }] };
   const before = MC.computeSOMargin(order, [], [], [], "forecast");
   const posted = CL.applyPostingsToOrders([order], CL.buildClaimPostings({
-    number: "CLM-M", direction: "CONCESSION", status: "Settled", acceptedEUR: 200, plnPerEur: 4,
+    number: "CLM-M", direction: "CONCESSION", status: "Settled", acceptedAmount: 200, fxToPLN: 4,
     subjects: [{ kind: "SO", ref: "SO-M" }] }).postings)[0];
   const after = MC.computeSOMargin(posted, [], [], [], "forecast");
   assert.equal(before.revenueSO, 1000);
@@ -1639,7 +1639,7 @@ T("the SO's margin actually moves when a concession is posted", () => {
 // ── v6.50.0: test round on v6.49.0 ──
 console.log("── v6.50.0: freight preserved, leg cascade, SO derivation ──");
 T("FINDING 3: a leg-managed freight line carrying money is RELEASED, never deleted", () => {
-  const sh = { id: 1, legs: [{ mode: "Road", costAmount: 0 }, { mode: "Sea", costAmount: 0 }],
+  const sh = { id: 1, legs: [{ mode: "Road", vehicles: [{ costAmount: 0 }] }, { mode: "Sea", vehicles: [{ costAmount: 0 }] }],
     costs: [
       { id: 11, source: "leg-freight:1", type: "road_freight", amount: 7140, amountPLN: 7140, notes: "Road leg 1" },
       { id: 12, source: "leg-freight:2", type: "sea_freight", amount: 8400, amountPLN: 8400, notes: "Sea leg 2" },
@@ -1654,19 +1654,19 @@ T("FINDING 3: a leg-managed freight line carrying money is RELEASED, never delet
   assert.ok(!road.source && !sea.source, "released to manual lines — the leg stops managing them");
 });
 T("an EMPTY managed line is still cleaned up", () => {
-  const sh = { id: 1, legs: [{ mode: "Road", costAmount: 0 }],
+  const sh = { id: 1, legs: [{ mode: "Road", vehicles: [{ costAmount: 0 }] }],
     costs: [{ id: 11, source: "leg-freight:1", type: "road_freight", amount: 0, amountPLN: 0 }] };
   assert.equal(SD.syncLegFreightCostLines(sh).costs.length, 0);
 });
 T("a leg WITH a cost still manages its line normally", () => {
-  const sh = { id: 1, legs: [{ mode: "Road", costAmount: 900, costFxRate: 1 }], costs: [] };
+  const sh = { id: 1, legs: [{ mode: "Road", costFxRate: 1, vehicles: [{ costAmount: 900 }] }], costs: [] };
   const out = SD.syncLegFreightCostLines(sh);
   assert.equal(out.costs.length, 1);
   assert.equal(out.costs[0].source, "leg-freight:1");
   assert.equal(out.costs[0].amountPLN, 900);
 });
 T("manual freight typed straight onto the shipment is never touched", () => {
-  const sh = { id: 1, legs: [{ mode: "Road", costAmount: 0 }],
+  const sh = { id: 1, legs: [{ mode: "Road", vehicles: [{ costAmount: 0 }] }],
     costs: [{ id: 5, type: "road_freight", amount: 7140, amountPLN: 7140 }] };
   const out = SD.syncLegFreightCostLines(sh);
   assert.equal(out.costs.length, 1);
@@ -2406,7 +2406,7 @@ T("THE POINT: the client's own costs have no home in our books and must be enter
     { label: "Client's transport, port to their warehouse", amountPLN: 4100 },
     { label: "An empty prompt nobody filled", amountPLN: "" },
   ];
-  const chain = CC.buildCostChain({ lots: chainLots(), lotRefs: ["LOT-1"], affectedShare: 0.42, clientLines: client, plnPerEur: 4.25 });
+  const chain = CC.buildCostChain({ lots: chainLots(), lotRefs: ["LOT-1"], affectedShare: 0.42, clientLines: client, fxToPLN: 4.25 });
   assert.equal(chain.clientPLN, 7300, "his clearance and haulage — nothing in this system could derive them");
   assert.equal(chain.oursPLN, 25200);
   assert.equal(chain.totalPLN, 32500);
@@ -2425,7 +2425,7 @@ T("gaps name what would weaken the claim", () => {
 });
 
 T("chain lines convert into the claim's existing cost-line shape", () => {
-  const chain = CC.buildCostChain({ lots: chainLots(), lotRefs: ["LOT-1"], clientLines: [{ label: "His clearance", amountPLN: 3200 }], plnPerEur: 4.25 });
+  const chain = CC.buildCostChain({ lots: chainLots(), lotRefs: ["LOT-1"], clientLines: [{ label: "His clearance", amountPLN: 3200 }], fxToPLN: 4.25 });
   const claimLines = CC.toClaimCostLines(chain.lines, 4.25);
   assert.ok(claimLines.every(l => l.currency === "PLN" && l.rate === 4.25));
   const clientLine = claimLines.find(l => l.party === "Client");
@@ -2526,24 +2526,24 @@ T("the evidence warning explains, and never blocks", () => {
 T("the agreed amount and the credit note must say the same thing", () => {
   const notes = [{ id: 9, number: "CN-1", noteType: "CREDIT", currency: "EUR", amount: 6180 }];
   const find = (id) => notes.find(x => String(x.id) === String(id));
-  assert.equal(CR.reconcileClaimNote({ status: "Settled", acceptedEUR: 6180, financeNoteId: 9 }, find).state, "matched");
-  const noNote = CR.reconcileClaimNote({ status: "Settled", acceptedEUR: 6180, financeNoteId: null }, find);
+  assert.equal(CR.reconcileClaimNote({ status: "Settled", acceptedAmount: 6180, financeNoteId: 9 }, find).state, "matched");
+  const noNote = CR.reconcileClaimNote({ status: "Settled", acceptedAmount: 6180, financeNoteId: null }, find);
   assert.equal(noNote.state, "no-note");
   assert.ok(noNote.message.includes("P/L has moved and the legal document does not exist"));
-  const differs = CR.reconcileClaimNote({ status: "Settled", acceptedEUR: 6180, financeNoteId: 9 }, () => ({ id: 9, number: "CN-1", currency: "EUR", amount: 6000 }));
+  const differs = CR.reconcileClaimNote({ status: "Settled", acceptedAmount: 6180, financeNoteId: 9 }, () => ({ id: 9, number: "CN-1", currency: "EUR", amount: 6000 }));
   assert.equal(differs.state, "differs");
-  assert.equal(differs.differenceEUR, 180);
+  assert.equal(differs.differenceAmount, 180);
   assert.ok(differs.message.includes("the P/L follows the claim, the ledger follows the note"));
-  assert.equal(CR.reconcileClaimNote({ status: "Draft", acceptedEUR: 0 }, find).state, "no-amount");
+  assert.equal(CR.reconcileClaimNote({ status: "Draft", acceptedAmount: 0 }, find).state, "no-amount");
 });
 
 T("register-wide: every settled claim whose money and paper disagree", () => {
   const notes = [{ id: 9, currency: "EUR", amount: 6000 }];
   const find = (id) => notes.find(x => String(x.id) === String(id));
   const claims = [
-    { number: "CLM-1", status: "Settled", acceptedEUR: 6180, financeNoteId: 9 },
-    { number: "CLM-2", status: "Settled", acceptedEUR: 500, financeNoteId: null },
-    { number: "CLM-3", status: "Draft", acceptedEUR: 900, financeNoteId: null },
+    { number: "CLM-1", status: "Settled", acceptedAmount: 6180, financeNoteId: 9 },
+    { number: "CLM-2", status: "Settled", acceptedAmount: 500, financeNoteId: null },
+    { number: "CLM-3", status: "Draft", acceptedAmount: 900, financeNoteId: null },
   ];
   const bad = CR.claimNoteMismatches(claims, find);
   assert.deepEqual(bad.map(b => b.number), ["CLM-1", "CLM-2"], "a draft has agreed nothing yet");

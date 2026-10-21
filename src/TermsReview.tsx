@@ -11,7 +11,7 @@ export const TERMS_REVIEW = "Terms to review";
 
 /** One finding. `here` is the record being viewed (its own number is not repeated as a link); a shipment record opens with
  *  `onOpenShipment` when the Shipments module gives one, every other record through its document link. */
-export function TermsFindingLine({ f, here = "", onOpenShipment = null }: any) {
+export function TermsFindingLine({ f, here = "", onOpenShipment = null, onChangeRule = null }: any) {
   const rec = String(f?.record || ""), doc = String(f?.doc || "");
   const link = (n: string) => <DocLink num={n}><span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700}}>{n}</span></DocLink>;
   const recNode = !rec || rec === here || rec === doc ? null
@@ -19,6 +19,7 @@ export function TermsFindingLine({ f, here = "", onOpenShipment = null }: any) {
       ? <button type="button" onClick={e => { e.stopPropagation(); onOpenShipment(rec); }} title={`Open ${rec}`} style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700, fontSize: 11, color: "#1D4ED8" }}>{rec}</button>
       : link(rec);
   return <div data-terms-finding={f?.kind} style={{ padding: "7px 10px", borderTop: "1px solid #FDE68A" }}>
+    {f?.recommend && typeof onChangeRule === "function" && String(f.recommend.doc) === String(here) ? <div style={{ marginTop: 4 }}><button type="button" data-change-rule={f.recommend.to} onClick={e => { e.stopPropagation(); onChangeRule(f.recommend); }} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, border: "1px solid #CA8A04", background: "#fff", color: "#92400E", cursor: "pointer" }}>Change {f.recommend.doc} to {f.recommend.to}</button></div> : null}
     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 11 }}>
       <span title="The incoterm" style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 800, padding: "1px 6px", borderRadius: 5, background: "#FEF3C7", color: "#92400E" }}>{f?.term || "—"}</span>
       {doc ? <span title="The document whose term it is">{doc === here || (doc === rec && f.recordKind === "shipment") ? <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700, color: "#334155" }}>{doc}</span> : link(doc)}</span> : null}
@@ -30,11 +31,11 @@ export function TermsFindingLine({ f, here = "", onOpenShipment = null }: any) {
 }
 
 /** The findings on one record (a shipment, a sale, a purchase) — shown where the record is shown. */
-export function TermsFindingsBox({ findings = [], here = "", onOpenShipment = null }: any) {
+export function TermsFindingsBox({ findings = [], here = "", onOpenShipment = null, onChangeRule = null }: any) {
   if (!(findings || []).length) return null;
   return <div data-terms-box="1" style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 8, overflow: "hidden" }} title="v7.20.0 (A-INC-2): flagged for review, never changed">
     <div style={{ padding: "7px 10px", fontSize: 11, fontWeight: 800, color: "#92400E" }}>⚠ Terms to review ({findings.length}) — the incoterms say otherwise. Nothing was changed: whoever reviews decides whether the term or the record is wrong.</div>
-    {findings.map((f: any, i: number) => <TermsFindingLine key={i} f={f} here={here} onOpenShipment={onOpenShipment} />)}
+    {findings.map((f: any, i: number) => <TermsFindingLine key={i} f={f} here={here} onOpenShipment={onOpenShipment} onChangeRule={onChangeRule} />)}
   </div>;
 }
 

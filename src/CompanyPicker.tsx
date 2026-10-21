@@ -32,5 +32,5 @@ export function CompanyPicker({ contacts = [], value = null, typedName = "", rol
 
 /** A company the picker adds: the minimal record Counterparties holds, with the role the place it was added from asks for. */
 export function newCompanyRecord(name: string, role: string, nextId: () => any): any {
-  return { id: nextId(), name: S(name), type: role, roles: [role], country: "", nip: "", addr: {}, people: [], contacts: [], terms: {} };
+  return { id: nextId(), name: S(name), type: role, roles: [role], country: "", nip: "", addr: {}, people: [], terms: {} };
 }

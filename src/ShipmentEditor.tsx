@@ -2,11 +2,11 @@
 import LocationPicker from "./LocationPicker";
 import React, { useState } from "react";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, readCustoms, customsGaps } from "./customs.domain";
-import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection, shipmentTradeEnds } from "./tradeFlow.domain";
+import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection, shipmentTradeEnds, shipmentStartPlaceId, shipmentEndPlaceId } from "./tradeFlow.domain";
 import { SmallButton, useConfirm } from "./ui";
 import { derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
 import { clearanceLinesFor, crossCheckClearance, parseCustomsFile, findClearanceHome, applyCustomsFile, detachClearance, CLEARANCE_STATUSES, CUSTOMS_FILE_LABEL } from "./customsClearance.domain";   // v6.99.72 (A-CU-3)
-import { truckPlaceNote, fillFromBooking, followBookingPlace, containerPlaceNote, unitGaps, truckTour, moveDrop, truckLoadingStops, DOC_TYPES, docTypeOf, invoicedVsUnits } from "./shipmentModel.domain";   // v7.18.2: + DOC_TYPES, docTypeOf   // v7.15.0: + truckLoadingStops   // v6.99.75 (A-UN)
+import { truckPlaceNote, fillFromBooking, followBookingPlace, containerPlaceNote, unitGaps, truckTour, moveDrop, truckLoadingStops, DOC_TYPES, docTypeOf, invoicedVsUnits, unitLoadedAt, unitUnloadedAt } from "./shipmentModel.domain";   // v7.18.2: + DOC_TYPES, docTypeOf   // v7.15.0: + truckLoadingStops   // v6.99.75 (A-UN)
 import { isRealISODate } from "./format";
 import { containerRecorder, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, cutOffWarnings, stuffingViolations, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, carrierOfUnit, followBookingDates } from "./shipmentModel.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
@@ -19,6 +19,7 @@ import { resolveFxRate, defaultFxRate, documentFxDefault } from "./fx";
 import { locationById, placeForPrint , isPortType } from "./locations";
 import { useUnsavedGuard, dirtyEntries } from "./unsaved";
 import { COST_TYPES, Card, HEADER_MODES, Inp, LEG_MODES, LEG_STATUSES, Lbl, ModeBadge, STATUS_ORDER, SectionTitle, Sel, Stage, allUnitsCarrierNames, blankTransportUnit, costLinesByCarrierLegApply, countryOfLocation, findUnitIn, fmtMoney, fmtNum, goodsRowCap, isFreightCostType, logisticsProviders, modeChangePatch, parseNum, shipmentCostPLN, shipmentVehicleCount, syncCustomsCostLine, todayISO, transportUnitsForLeg, withStandardDocs } from "./Shipments";
+import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { carrierInvoiceOptions, exactInvoiceForTypedRef, costInvoiceDifference } from "./costInvoice.domain";   // v7.27.16 (A-AU-6)
 import { pickerParties, archivedMark } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 import { legFreightPayers, freightLineNotOurs, PAYER_LABEL, exwCarriageConflict, isSuppliersTruck, customsDuties, customsDutiesText, shipmentTermsFindings, namedPlaceIsOrigin, sellerPaysCarriage, takenAtSeller } from "./incoterms.domain";   // v7.19.0–7.19.3 (A-INC-1) · v7.20.0 (A-INC-2)
@@ -114,7 +115,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             (draft.costs || []).forEach((c: any, ci: number) => { if (!c.supplierId && (parseNum(c.amount) > 0 || c.type)) gaps.push(`cost line ${ci + 1} (${c.type || "cost"}${parseNum(c.amount) > 0 ? " · " + c.amount + " " + (c.currency || "") : ""}): no supplier`); });
             if (gaps.length && !(await uiConfirm({ title: "Please confirm", message: "Some items are incomplete:\n" + gaps.join("\n") + "\n\nSave anyway?" }))) return;
           }
-          { let fin = applyDerivedTravel(autoAllocate(autoFillSingleUnitKg(draft), 0), { catalog: productCatalog, packagingTypes, contacts });   // v7.27.9 (FZ-29): temperature, pallet, currency from their sources const cr = customsRule(fin); if (cr.known) fin = { ...fin, customs: { ...(fin.customs || {}), applies: cr.ours } };   // v7.19.3: the stored tick follows the terms
+          { let fin = applyDerivedTravel(autoAllocate(autoFillSingleUnitKg(draft), 0), { catalog: productCatalog, packagingTypes, contacts }); const cr = customsRule(fin); if (cr.known) fin = { ...fin, customs: { ...(fin.customs || {}), applies: cr.ours } };   // v7.19.3: the stored tick follows the terms   // v7.27.9 (FZ-29): temperature, pallet, currency from their sources · v7.28.5: this note had hidden the customs rule that follows it
             onSave(costLinesByCarrierLegApply(syncCustomsCostLine(fin), legFreightPayers(fin, { pos, orders }), contacts || [])); }   // v7.19.0 (A-INC-1): only legs that are ours make a line
   }
   useUnsavedGuard({ id: "shipment-editor", label: `Shipment ${draft?.number || ""}`.trim(), draft, save: () => saveShipmentDraft() });
@@ -266,7 +267,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
     const delId = inbound ? (po?.destinationLocationId ?? null) : (so?.destinationLocationId ?? null);
     const delText = inbound ? (po?.destinationText || "") : (so?.destinationText || so?.client?.address || "");
     const loadDate = inbound ? (po?.loadingDate || "") : (so?.expectedLoadingDate || "");
-    const delDate = inbound ? (po?.expectedDeliveryDate || "") : (so?.expectedDeliveryDate || "");
+    const delDate = inbound ? (po ? poExpectedArrival(po) : "") : (so?.expectedDeliveryDate || "");   // v7.28.5 (Batch L): the PO's one promised date
     return { loadId, loadText, delId, delText, loadDate, delDate, from: inbound ? po?.number : so?.number };
   }
   function addVehicle(legIdx) {
@@ -376,7 +377,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
         <TermsFindingsBox findings={termsHere.filter((x: any) => x.kind !== "exw")} here={draft.number} />{/* v7.20.0 (A-INC-2): the EXW notice above says its own */}
         <Stage title="1 · Arrange" subtitle="source · header & booking · units with carrier, price, places and expected dates → the transport order"
           open={openStages.booking} onToggle={() => toggleStage("booking")}
-          done={[draft.carrierId || draft.forwarderId, draft.loadingDate, draft.originLocationId, draft.destinationLocationId].filter(Boolean).length}
+          done={[draft.carrierId || draft.forwarderId, draft.loadingDate, shipmentStartPlaceId(draft), shipmentEndPlaceId(draft)].filter(Boolean).length}
           total={4}>
         <Card>
           <SectionTitle>Header</SectionTitle>
@@ -693,8 +694,8 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={feedersOf(u).length > 0 ? containerRecorder(u, draft) : (u.tempRecorderNo || "")} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" disabled={feedersOf(u).length > 0} /></div>
                 </div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
-                  <div><Lbl>Actual loaded on</Lbl><Inp type="date" noFuture value={u.loadedAt || u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "loadedAt", e.target.value)} /></div>
-                  <div><Lbl>Actual unloaded on</Lbl><Inp type="date" noFuture value={u.unloadedAt || u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "unloadedAt", e.target.value)} /></div>
+                  <div><Lbl>Actual loaded on</Lbl><Inp type="date" noFuture value={unitLoadedAt(u)} onChange={e => updateVehicle(i, ui, "loadedAt", e.target.value)} /></div>
+                  <div><Lbl>Actual unloaded on</Lbl><Inp type="date" noFuture value={unitUnloadedAt(u)} onChange={e => updateVehicle(i, ui, "unloadedAt", e.target.value)} /></div>
                   <div><Lbl>Kg{((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length) ? " (derived)" : ""}</Lbl>
                     {((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length)
                       ? <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F9FAFB", fontWeight: 600 }} title="v6.85.0 (D8): derived from the goods allocation / feeder trucks — never typed">{Math.round(unitKg(u, draft)).toLocaleString("pl-PL")}</div>

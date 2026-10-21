@@ -26,6 +26,7 @@ import { resolveFxRate } from "./fx";   // v6.99.133 (AUD-36): one FX fallback â
 import { nextId } from "./ids";
 import { localTodayISO } from "./dates";
 import { defaultFxRate } from "./fx";
+import { rolesOf } from "./counterparty.domain";   // v7.28.2 (Batch L)
 import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6)
 
 export const IMPORT_TAGS = ["GOODS", "FREIGHT", "CUSTOMS", "WAREHOUSE", "OVERHEAD", "SKIP"] as const;
@@ -116,7 +117,7 @@ function contactTypes(c: any): string[] {
   // previously-read "types" field never existed, so additional roles were
   // invisible to the import suggestions.
   if (!c) return [];
-  return [c.type, ...(Array.isArray(c.additionalTypes) ? c.additionalTypes : [])]
+  return rolesOf(c)
     .filter(Boolean).map((t: any) => String(t));
 }
 

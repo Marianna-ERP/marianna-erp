@@ -36,6 +36,8 @@ import { companyProfile } from "./useLocalStoredState";
 import { OrderForm } from "./PurchaseOrderForm";
 import { PackingResultWindow, SupplierTruckWindow, OrderDetail } from "./PurchaseOrderDetail";
 import { PODoc, PrintModal } from "./PurchaseOrderDocument";
+import { promisedDateKind, poPromisedDate, poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
+import { peopleOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 (Batch L)
 import { issueNumber, issueNumbers } from "./numbering";   // v7.27.8 (A-W5)
 // v7.22.4 (A-RV-16, Batch F): no hidden module copies — the packaging types and the counterparties the purchase screens and the
 // printed PO read are one value from the props (PoData), handed down through a context.
@@ -108,7 +110,7 @@ export const LOCATION_TYPES: Record<string, any> = {
 export const SUPPLIERS: any[] = [];   // v7.27.12 (A-RV-39): no company is written into the code — the forms read the directory
 
 function primaryContactValue(counterparty) {
-  const contacts = counterparty.contacts || [];
+  const contacts = peopleOf(counterparty);
   const primary = contacts.find(p => p.isPrimary) || contacts[0];
   return primary?.email || primary?.phone || counterparty.email || counterparty.contact || counterparty.phone || "";
 }
@@ -117,10 +119,10 @@ function tradingPartnerFromCounterparty(counterparty) {
   return {
     id: counterparty.id,
     name: counterparty.name,
-    country: counterparty.country || "",
+    country: companyCountryName(counterparty),   // v7.28.11 (Batch L)
     nip: counterparty.nip || "",
     vatEuId: counterparty.vatEuId || "",
-    address: counterparty.address || "",
+    address: companyAddressLine(counterparty),   // v7.28.10 (Batch L)
     contact: primaryContactValue(counterparty),
   };
 }
@@ -262,7 +264,7 @@ export function PrintLogo() {
 // email added/changed in Contacts after the PO was created is seen without a refresh.
 // Falls back to the copy embedded on the PO.
 function bestContactEmail(cp: any) {
-  const cs = (cp && cp.contacts) || [];
+  const cs = peopleOf(cp);
   const withEmail = cs.find((p: any) => p.isPrimary && p.email) || cs.find((p: any) => p.email);
   return (withEmail && withEmail.email) || (cp && cp.email) || "";
 }
@@ -712,7 +714,7 @@ export function buildExpectedLotsFromPO(order, existingLots = []) {   // v6.99.5
           expectedKg: qty,
           packaging: it.packaging || "", packagingId: it.packagingId ?? null, // v6.96.0 (IN-8) packagingId: it.packagingId ?? null, // v6.96.0 (IN-8)
           status: order.directFlow ? "Direct Expected" : "Expected",
-          arrivalDate: order.expectedDeliveryDate || null,
+          arrivalDate: (promisedDateKind(order) === "delivery" ? poPromisedDate(order) : "") || null,   // v7.28.5 (Batch L)
           consignment: isConsignment,
           // resync only the purchase cost line; keep any other cost lines (e.g. freight) intact
           costs: [
@@ -747,7 +749,7 @@ export function buildExpectedLotsFromPO(order, existingLots = []) {   // v6.99.5
       damagedKg: 0,
       packaging: it.packaging || "", packagingId: it.packagingId ?? null, // v6.96.0 (IN-8)
       status: order.directFlow ? "Direct Expected" : "Expected",
-      arrivalDate: order.expectedDeliveryDate || null,
+      arrivalDate: (promisedDateKind(order) === "delivery" ? poPromisedDate(order) : "") || null,   // v7.28.5 (Batch L)
       productionDate: null,
       consignment: isConsignment,
       settlement: isConsignment ? { status: "None" } : undefined,
@@ -1059,7 +1061,7 @@ ${blockNote}`.trim(),
         const allLots = [...(lots || []), ...((inventoryPlan && inventoryPlan.newLots) || [])];
         const withLots = { ...updated, items: (updated.items || []).map((it: any, i2: number) => ({ ...it, lotRef: (allLots.find((l: any) => String(l.poRef) === String(updated.number) && String(l.poLineId ?? "") === String(it.id ?? i2 + 1)) || {} as any).number || null })) };
         const no = await issueNumber("SHP", new Date().getFullYear(), (extShipments || []).map((x: any) => x.number));
-        const truck = supplierDeliveryFromPO(withLots, { nextId, nextNumber: () => no, todayISO: localTodayISO }, { eta: String(updated.loadingDate || "").slice(0, 10), supplierRef: updated.supplierRef || "" });
+        const truck = supplierDeliveryFromPO(withLots, { nextId, nextNumber: () => no, todayISO: localTodayISO }, { eta: poPromisedDate(updated).slice(0, 10), supplierRef: updated.supplierRef || "" });
         if (truck) { extSetShipments((prev: any[]) => [...(prev || []), truck]); recordAudit({ module: "Purchase orders", docType: "PO", docNumber: updated.number, action: "created", summary: `Supplier's truck ${truck.number} created on confirming ${updated.number} (${String(updated.buyIncoterm || "").toUpperCase()}) — plates and the driver follow when the supplier announces them` }); }
       }
       if (revertingToDraft || becomesCancelled) {
@@ -1082,7 +1084,7 @@ ${blockNote}`.trim(),
     setForm({
       number: nextNum, status: "Draft",
       orderDate: localTodayISO(),
-      loadingDate: "", expectedDeliveryDate: "", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
+      loadingDate: "", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
       paymentTerms: "30 days from invoice date", paymentTermsOther: "",
       buyIncoterm: "", flow: "",
       supplier: null, destinationLocationId: null, destinationText: "", requiresSea: false,
@@ -1264,6 +1266,7 @@ ${blockNote}`.trim(),
         }} />}
         <OrderDetail
           order={selected}
+          onChangeRule={async (r: any) => { if (!(await uiConfirm({ title: `Change ${r.doc} to ${r.to}?`, message: `The rule on ${r.doc} becomes ${r.to} (Incoterms 2020) — what the shipment records fits it. Prices and documents already issued are not changed.`, confirmLabel: `Change to ${r.to}` }))) return; setOrders((prev: any[]) => (prev || []).map((x: any) => String(x?.number) === String(r.doc) ? { ...x, buyIncoterm: r.to } : x)); }}   // v7.29.1 (FZ-41): one click, after confirming
           termsFindings={termsFindingsForDoc(termsAll, selected.number)}   // v7.20.0 (A-INC-2)
           expectedLots={deliveredAtDestination(selected.buyIncoterm)
             ? (extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))
@@ -1422,7 +1425,7 @@ ${blockNote}`.trim(),
                   </div>
                 </div>
                 <div style={{ fontSize: 11, color: isLoadingOverdue ? "#B45309" : "#444", fontWeight: isLoadingOverdue ? 600 : 400 }} title={isLoadingOverdue ? "the loading date has passed on an active PO" : undefined}>{formatDMY(o.orderDate) || formatDMY(o.loadingDate) || "—"}</div>{/* v6.99.107 (A-CLR-1, owner): amber — a timing hint, not an error */}
-                <div style={{ fontSize: 11, color: "#444" }}>{formatDMY(o.expectedDeliveryDate) || "—"}</div>
+                <div style={{ fontSize: 11, color: "#444" }}>{formatDMY(poExpectedArrival(o, extShipments || [])) || "—"}</div>
                 <div><StatusBadge status={o.status} /></div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(total, o.currency)}</div>

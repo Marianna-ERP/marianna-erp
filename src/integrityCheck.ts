@@ -49,9 +49,7 @@ export interface IntegrityInputs {
   lots?: any[];
   orders?: any[];
   shipments?: any[];
-  warehouseInvoices?: any[];
   operationalCosts?: any[];
-  creditNotes?: any[];
   invoices?: any[];
   financeNotes?: any[];
   /** v6.63.0 (D-13/audit gaps): claims and load plans join the audit. */
@@ -88,7 +86,6 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   const lots = arr(inp.lots);
   const orders = arr(inp.orders);
   const shipments = arr(inp.shipments);
-  const warehouseInvoices = arr(inp.warehouseInvoices);
 
   // Lookup sets for fast reference checks.
   const poByNumber = new Map(pos.map((p: any) => [String(p.number), p]));
@@ -234,7 +231,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // ── 6. Allocations referencing a missing warehouse invoice ─────────────────
   // Cost lines tagged with a warehouse-invoice ref whose invoice no longer exists.
   // Finance tags allocated warehouse cost lines with source `WHINV-<id>` (hyphen).
-  const whInvoiceIds = new Set([...warehouseInvoices.map((w: any) => `WHINV-${w.id}`), ...arr(inp.invoices).map((i: any) => `WHINV-${i?.id}`)]);   // v7.21.4 (A-ST-10): the register's invoices
+  const whInvoiceIds = new Set(arr(inp.invoices).map((i: any) => `WHINV-${i?.id}`));   // v7.28.12: the register only   // v7.21.4 (A-ST-10): the register's invoices
   lots.forEach((lot: any) => {
     arr(lot.costs).forEach((c: any) => {
       const src = String(c.source || "");

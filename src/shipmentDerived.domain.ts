@@ -45,7 +45,7 @@ export function palletTypeFromPackaging(rows: any[], types: any[]): { palletType
 
 /** The currency a truck's price is in: its carrier's, else the sea booking's. */
 export function unitCurrencyFrom(carrier: any, booking: any): { currency?: string; source: "carrier" | "booking" | "" } {
-  const c = S(carrier?.terms?.defaultCurrency || carrier?.defaultCurrency).toUpperCase(); if (c) return { currency: c, source: "carrier" };
+  const c = S(carrier?.terms?.defaultCurrency).toUpperCase(); if (c) return { currency: c, source: "carrier" };   // v7.28.1: the terms own it
   const b = S(booking?.currency).toUpperCase(); if (b) return { currency: b, source: "booking" };
   return { source: "" };
 }
@@ -71,7 +71,7 @@ export function applyDerivedTravel(sh: any, ctx: { catalog?: any[]; packagingTyp
       return v;
     });
     const l2: any = { ...leg, vehicles };
-    if (legCur && !(num(leg.costAmount) > 0) && leg.costCurrency !== legCur) { l2.costCurrency = legCur; l2.costFxRate = documentFxDefault(legCur); }
+    if (legCur && leg.costCurrency !== legCur) {   /* v7.28.9: no amount copy on the leg */ l2.costCurrency = legCur; l2.costFxRate = documentFxDefault(legCur); }
     return l2;
   });
   return out;

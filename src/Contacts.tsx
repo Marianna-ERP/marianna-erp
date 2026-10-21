@@ -1,5 +1,5 @@
 import { referencesToContact } from "./referenceGuards";
-import { setUserCountries } from "./counterparty.domain";
+import { setUserCountries, peopleOf, rolesOf, companyAddressLine, companyCountryName, companyCountryIso } from "./counterparty.domain";
 import { recordAudit } from "./audit";
 import { localTodayISO , formatDMY } from "./dates";   // v7.17.0
 import { currentUser } from "./permissions.domain";
@@ -14,6 +14,8 @@ import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLoca
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
 import { useUnsavedGuard } from "./unsaved";
+import { AddressCompletion } from "./AddressCompletion";   // v7.28.10 (Batch L)
+import { parseNum } from "./numbers";   // v7.28.1
 
 // v6.81.0 (D-57): commission tiers PER TRUCK — text ⇄ bands.
 function bandsToText(b: any[]): string { return (b || []).map((x: any) => `${x.fromPLN ?? 0}-${x.toPLN ?? ""}:${x.pct ?? ""}`).join("; "); }
@@ -114,7 +116,7 @@ function ServicesRow({ services, size = "normal", emptyHint = null }: any) {
 // True if the counterparty's primary OR any additional type is logistics-related (Forwarder/Carrier).
 function showServicesRow(c) {
   if (!c.services || c.services.length === 0) return false;
-  const all = [c.type, ...(c.additionalTypes || [])];
+  const all = rolesOf(c);
   return all.some(t => TYPES_WITH_SERVICES.has(t));
 }
 
@@ -127,19 +129,19 @@ export function getCounterpartiesByType(counterparties, type) {
   //    while both exist — a party given a role only in the new UI used to show in no picker at all.
   //  · the result is sorted by name (Polish collation): a counterparty added today belongs in its alphabetical place,
   //    not at the bottom of the list, which is what store order gave us.
-  const hasRole = (c) => (Array.isArray(c.roles) && c.roles.length ? c.roles.includes(type) : false) || c.type === type || (c.additionalTypes || []).includes(type);
+  const hasRole = (c) => (Array.isArray(c.roles) && c.roles.length ? c.roles.includes(type) : false) || c.type === type || rolesOf(c).includes(type);
   // v6.99.48 (A-PO-12, owner): sort on a NORMALISED key — quotes, «», brackets and stray spaces no longer throw a name out of order
   const sortKey = (c) => String(c?.name || "").replace(/^[\s"'«»„”“()[\]]+/, "").trim();
   return counterparties.filter(hasRole).slice().sort((a, b) => sortKey(a).localeCompare(sortKey(b), "pl", { sensitivity: "base" })).map(c => {
-    const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
+    const primary = peopleOf(c).find(p => p.isPrimary) || peopleOf(c)[0];
     return {
       id: c.id,
       name: c.name,
-      country: c.country,
+      country: companyCountryName(c),   // v7.28.11 (Batch L)
       nip: c.nip,
       type: c.type,
-      additionalTypes: c.additionalTypes || [],
-      address: c.address,
+      roles: rolesOf(c),   // v7.28.2 (Batch L)
+      address: companyAddressLine(c),   // v7.28.10 (Batch L)
       services: c.services || [],
       contact: primary?.name || "",
       email: primary?.email || "",
@@ -150,8 +152,8 @@ export function getCounterpartiesByType(counterparties, type) {
 // ─── COUNTERPARTY MODAL — company-level details ─────────────────────────────
 function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSeeCommission = true }: any) {
   const defaultFinance = { bankName: "", accountNumber: "", swift: "" };
-  const blank = { type: "Client", additionalTypes: [], name: "", country: "", address: "", nip: "", vatEuId: "", defaultCurrency: "PLN", paymentTerms: "30 days from invoice date", paymentTermsOther: "", services: [], finance: defaultFinance, notes: "" };
-  const [form, setForm] = useState(counterparty ? { additionalTypes: [], services: [], paymentTermsOther: "", ...counterparty, finance: { ...defaultFinance, ...(counterparty.finance || {}) } } : { ...blank, id: null });
+  const blank = { type: "Client", roles: ["Client"], name: "", country: "", address: "", nip: "", vatEuId: "", terms: { defaultCurrency: "PLN", paymentDays: 30 }, services: [], notes: "" };   // v7.28.1 (Batch L): a new company starts with its terms block
+  const [form, setForm] = useState(counterparty ? { services: [], ...counterparty, roles: rolesOf(counterparty), finance: { ...defaultFinance, ...(counterparty.finance || {}) } } : { ...blank, id: null });
   useUnsavedGuard({ id: "counterparty-form", label: form?.name ? `Party ${form.name}` : "the new party", draft: form, save: () => handleSave() });   // v6.99.58 (A-US)
   const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const sff = (k, v) => setForm(f => ({ ...f, finance: { ...(f.finance || {}), [k]: v } }));
@@ -178,18 +180,18 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
   // v6.10 (#8): a warehouse company can have more than one delivery address.
   // v6.99.40 (A-ADDR): a site keeps its persistent siteId; only its parts change. A legacy string site is read through the parser.
   // v6.99.40: the four parts live in `addr`; `country` stays the one country source and is mirrored into it.
-  const setAddr = (k: string, v: any) => setForm((f: any) => ({ ...f, addr: { ...(f.addr || {}), country: f.country || (f.addr || {}).country || "", [k]: v }, addressNeedsCheck: k === "street" ? undefined : f.addressNeedsCheck }));
+  const setAddr = (k: string, v: any) => setForm((f: any) => ({ ...f, addr: { ...(f.addr || {}), [k]: v }, addressNeedsCheck: k === "street" ? undefined : f.addressNeedsCheck }));
   const siteField = (a: any, k: string) => {
-    if (typeof a === "string") { const p = parseAddress(a, form.country); return k === "label" ? "" : (p as any)[k] || ""; }
+    if (typeof a === "string") { const p = parseAddress(a, companyCountryName(form)); return k === "label" ? "" : (p as any)[k] || ""; }
     if (k === "label") return a?.label || "";
     if (a?.addr && (a.addr.street || a.addr.city || a.addr.postcode)) return a.addr[k] || "";
-    const p = parseAddress(a?.address, form.country); return (p as any)[k] || "";
+    const p = parseAddress(a?.address, companyCountryName(form)); return (p as any)[k] || "";
   };
   const setSitePart = (i: number, k: string, v: any) => setForm((f: any) => ({ ...f, extraAddresses: (f.extraAddresses || []).map((a: any, idx: number) => {
     if (idx !== i) return a;
-    const cur = typeof a === "string" ? { address: a, addr: parseAddress(a, f.country) } : { ...a, addr: { ...(a.addr || parseAddress(a?.address, f.country)) } };
+    const cur = typeof a === "string" ? { address: a, addr: parseAddress(a, companyCountryName(f)) } : { ...a, addr: { ...(a.addr || parseAddress(a?.address, companyCountryName(f))) } };
     if (k === "label") return { ...cur, label: v };
-    const addr = { ...(cur.addr || {}), country: f.country || (cur.addr || {}).country || "", [k]: v };
+    const addr = { ...(cur.addr || {}), [k]: v };
     return { ...cur, addr, address: formatAddress(addr, { oneLine: true }) };   // the one-line text stays in step for legacy readers
   }) }));
   // v6.99.97 (A-ID-1): a new address gets its own id at once (from the counter when the formula would collide with the main one)
@@ -200,9 +202,9 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
   const addCommissionRate = () => setForm(f => ({ ...f, commissionRates: [...(f.commissionRates || []), { id: nextId(), season: "", validFrom: "", pct: "" }] }));
   const removeCommissionRate = (i) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).filter((_, idx) => idx !== i) }));
   const toggleService = (s) => setForm(f => ({ ...f, services: (f.services || []).includes(s) ? f.services.filter(x => x !== s) : [...(f.services || []), s] }));
-  const toggleAdditionalType = (t) => setForm(f => ({ ...f, additionalTypes: (f.additionalTypes || []).includes(t) ? f.additionalTypes.filter(x => x !== t) : [...(f.additionalTypes || []), t] }));
+  const toggleAdditionalType = (t) => setForm(f => ({ ...f, roles: rolesOf(f).includes(t) ? rolesOf(f).filter(x => x !== t || x === f.type) : [...rolesOf(f), t] }));   // v7.28.2 (Batch L): roles[]
   // Services field is visible if PRIMARY type OR any additional type is logistics-related
-  const allTypes = [form.type, ...(form.additionalTypes || [])];
+  const allTypes = rolesOf(form);
   const showServices = allTypes.some(t => TYPES_WITH_SERVICES.has(t));
 
   // v6.10 (#6): comma-tolerant numeric coercion applied once, on save. Empty
@@ -253,13 +255,13 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 12 }}>COMPANY</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div><Lbl>Primary type</Lbl><Sel value={form.type} onChange={e => { const v = e.target.value; setForm((f: any) => ({ ...f, type: v, additionalTypes: (f.additionalTypes || []).filter((t: string) => t !== v) })); }} title="v6.99.45 (CP-10): one role, one place — the primary cannot also be a secondary">{COUNTERPARTY_TYPES.map(t => <option key={t}>{t}</option>)}</Sel></div>
+              <div><Lbl>Primary type</Lbl><Sel value={form.type} onChange={e => { const v = e.target.value; setForm((f: any) => ({ ...f, type: v, roles: [v, ...rolesOf(f).filter((t: string) => t !== v)] })); }} title="v6.99.45 (CP-10): one role, one place — the primary cannot also be a secondary">{COUNTERPARTY_TYPES.map(t => <option key={t}>{t}</option>)}</Sel></div>
               <div><Lbl>Company name</Lbl><Inp value={form.name} onChange={e => sf("name", e.target.value)} placeholder="Company name" /></div>
               <div style={{ gridColumn: "span 2" }}>
                 <Lbl>Also acts as <span style={{ color: "#BBB", fontWeight: 400 }}>(optional — for counterparties wearing multiple hats)</span></Lbl>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {COUNTERPARTY_TYPES.filter(t => t !== form.type && t !== "Other").map(t => {
-                    const active = (form.additionalTypes || []).includes(t);
+                    const active = rolesOf(form).includes(t);
                     const palette = TYPE_COLORS[t];
                     return (
                       <button key={t} type="button" onClick={() => toggleAdditionalType(t)}
@@ -280,7 +282,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                   map 1:1 to Fakturownia's fields, and let a city be filtered. The old one-line text is kept until the DDL. */}
               {/* v7.3.5 (A-LOC-1, owner 7 Oct): the legal address is the address on documents; ticked, it is also offered as a loading / delivery place */}
               <label style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#334155", margin: "4px 0 8px" }}>
-                <input type="checkbox" checked={form.isPlace !== undefined ? !!form.isPlace : (() => { const t = [form.type, ...(form.additionalTypes || [])]; return t.includes("Supplier") || t.includes("Client") || t.includes("Warehouse"); })()} onChange={e => setForm((f: any) => ({ ...f, isPlace: e.target.checked }))} />
+                <input type="checkbox" checked={form.isPlace !== undefined ? !!form.isPlace : (() => { const t = rolesOf(form); return t.includes("Supplier") || t.includes("Client") || t.includes("Warehouse"); })()} onChange={e => setForm((f: any) => ({ ...f, isPlace: e.target.checked }))} />
                 <span><b>Goods are loaded / delivered at this address</b> <span style={{ color: "#94A3B8" }}>— offered in the location pickers as this company's place (on for producers, suppliers, clients and warehouses unless you untick it)</span></span>
               </label>
               <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: "2fr 0.8fr 1.2fr", gap: 8 }}>
@@ -292,16 +294,16 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                 <Inp value={form.addr?.note ?? ""} onChange={e => setAddr("note", e.target.value)} placeholder="Central Fruits & Vegetable Market" />
                 {form.addressNeedsCheck && <div style={{ fontSize: 10, color: "#B45309", marginTop: 3 }}>⚠ this address came from one line and could not be split — check the parts above (the original read: {form.address})</div>}
               </div>
-              <div><Lbl>Country</Lbl><Sel value={form.country || ""} onChange={e => { const v = e.target.value; setForm((f: any) => ({ ...f, country: v, addr: { ...(f.addr || {}), country: v } })); }} title="v6.99.14: the list is edited in the Countries tab"><option value="">— country —</option><optgroup label="EU">{readCountries().filter(x => x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup><optgroup label="Other">{readCountries().filter(x => !x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup>{form.country && !readCountries().some(x => x.name === form.country) && <option value={form.country}>{form.country}</option>}</Sel></div>{false && <Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" />}
+              <div><Lbl>Country</Lbl><Sel value={companyCountryIso(form)} onChange={e => { const v = e.target.value; setForm((f: any) => { const n: any = { ...f, countryIso: v }; delete n.country; if (n.addr && "country" in n.addr) { const a = { ...n.addr }; delete a.country; n.addr = a; } return n; }); }} title="v6.99.14: the list is edited in the Countries tab · v7.28.11: chosen by its code"><option value="">{!companyCountryIso(form) && form.country ? `"${form.country}" — pick it from the list` : "-- country --"}</option><optgroup label="EU">{readCountries().filter(x => x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso} value={String(x.iso).toUpperCase()}>{x.name}</option>)}</optgroup><optgroup label="Other">{readCountries().filter(x => !x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso} value={String(x.iso).toUpperCase()}>{x.name}</option>)}</optgroup></Sel></div>
               <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
               {/* v6.99.2 (CP-2/CP-3/CP-4/CP-7): TERMS block · people with role & e-mail · archive · producer agreements */}
               <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 10px" }}>
                 <div style={{ gridColumn: "1 / -1", fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>TERMS (inherited by documents)</div>
-                <div><Lbl>Payment terms (days) <span style={{ color: "#94A3B8", fontWeight: 400 }}>· from invoice</span></Lbl><Inp type="number" value={form.terms?.paymentDays ?? form.paymentTermsDays ?? ""} onChange={e => { const v = parseFloat(e.target.value) || 0; sf("terms", { ...(form.terms || {}), paymentDays: v }); sf("paymentTermsDays", v); }} /></div>
-              <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.creditLimitPLN ?? ""} onChange={e => sf("creditLimitPLN", e.target.value)} type="number" placeholder="blank = unlimited" /></div>
+                <div><Lbl>Payment terms (days) <span style={{ color: "#94A3B8", fontWeight: 400 }}>· from invoice</span></Lbl><Inp type="number" value={form.terms?.paymentDays ?? ""} onChange={e => { const v = parseFloat(e.target.value) || 0; sf("terms", { ...(form.terms || {}), paymentDays: v }); }} /></div>
+              <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.terms?.creditLimitPLN ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), creditLimitPLN: e.target.value === "" ? undefined : parseNum(e.target.value) })} type="number" placeholder="blank = unlimited" /></div>
                 <div><Lbl>Notice days (claims)</Lbl><Inp type="number" value={form.terms?.noticeDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), noticeDays: parseFloat(e.target.value) || 0 })} placeholder="legal default" /></div>
                 <div><Lbl>QC report days (producer)</Lbl><Inp type="number" value={form.terms?.qualityReportDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), qualityReportDays: parseFloat(e.target.value) || 0 })} /></div>
-                <div><Lbl>Default currency</Lbl><Sel value={form.terms?.defaultCurrency || form.defaultCurrency || "PLN"} onChange={e => sf("terms", { ...(form.terms || {}), defaultCurrency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
+                <div><Lbl>Default currency</Lbl><Sel value={form.terms?.defaultCurrency || "PLN"} onChange={e => sf("terms", { ...(form.terms || {}), defaultCurrency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
                 <div><Lbl>Default VAT rate (invoices)</Lbl><Sel value={form.terms?.defaultVatRate ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), defaultVatRate: e.target.value === "" ? null : Number(e.target.value) })}><option value="">— none —</option>{[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}</Sel></div>{/* v7.18.7 (BP-46): optional — an invoice draft for this company starts at it */}
                 <div style={{ gridColumn: "1 / -1" }}><Lbl>Receiving hours (delivery window) — e.g. Mon–Fri 06:00–14:00</Lbl><Inp value={form.receivingHours || ""} onChange={e => sf("receivingHours", e.target.value)} placeholder="when this site receives trucks — a planned delivery outside it will warn" /></div>
                 <label style={{ gridColumn: "1 / -1", fontSize: 11, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={!!form.archived} onChange={e => sf("archived", e.target.checked)} /> Archived — hidden from every picker, kept on its documents (CP-4)</label>
@@ -486,7 +488,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
       {cdNode}
       <div style={{ padding: "16px 20px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <TypeBadge type={counterparty.type} />
-        {(counterparty.additionalTypes || []).map(t => (
+        {rolesOf(counterparty).filter((r: any) => r !== counterparty.type).map(t => (
           <span key={t} title={`Also acts as ${t}`}
             style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "2px 8px", borderRadius: 16, fontSize: 10, fontWeight: 700 }}>
             + {t}
@@ -503,12 +505,12 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
             <Avatar label={counterparty.name} bg={typeStyle.bg} color={typeStyle.color} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#111", lineHeight: 1.2 }}>{counterparty.name}</div>
-              <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{counterparty.country || "—"} · {counterparty.defaultCurrency}</div>
+              <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{companyCountryName(counterparty) || "—"} · {counterparty.terms?.defaultCurrency || ""}</div>
             </div>
           </div>
           {[
             { label: "NIP / Local Tax ID / EU VAT number", value: counterparty.nip || counterparty.vatEuId },
-            { label: "Address", value: counterparty.address },
+            { label: "Address", value: companyAddressLine(counterparty) },
             { label: "Payment terms", value: counterparty.paymentTerms === "Other" ? (counterparty.paymentTermsOther || "Other (unspecified)") : counterparty.paymentTerms },
           ].map(({ label, value }) => value ? (
             <div key={label} style={{ marginBottom: 10 }}>
@@ -582,7 +584,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
           </div>
         <div style={{ margin: "0 20px 20px", paddingTop: 10, borderTop: "1px solid #F3F4F6" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em" }}>CONTACT PEOPLE ({counterparty.contacts.length})</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em" }}>CONTACT PEOPLE ({peopleOf(counterparty).length})</div>
             {editingPersonId !== "new" && (
               <button onClick={() => setEditingPersonId("new")} style={{ background: "#16A34A", border: "1px solid #16A34A", borderRadius: 6, fontSize: 11, padding: "3px 10px", cursor: "pointer", color: "#fff", fontWeight: 600 }}>+ Add contact</button>
             )}
@@ -592,7 +594,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
             <PersonEditor onSave={handleSavePerson} onCancel={() => setEditingPersonId(null)} />
           )}
 
-          {counterparty.contacts.map(p => editingPersonId === p.id ? (
+          {peopleOf(counterparty).map(p => editingPersonId === p.id ? (
             <PersonEditor key={p.id} person={p} onSave={handleSavePerson} onCancel={() => setEditingPersonId(null)} />
           ) : (
             <div key={p.id} style={{ padding: 12, border: "1px solid #F3F4F6", borderRadius: 10, marginBottom: 8, background: "#fff" }}>
@@ -608,7 +610,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
                   {p.email && <button onClick={() => onEmail(counterparty, p)} title="Email" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>✉</button>}
                   {!p.isPrimary && <button onClick={() => onSetPrimary(counterparty.id, p.id)} title="Make primary" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>★</button>}
                   <button onClick={() => setEditingPersonId(p.id)} title="Edit contact" style={{ background: "#fff", border: "1px solid #2563EB", borderRadius: 4, fontSize: 11, padding: "2px 8px", cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit contact</button>
-                  {counterparty.contacts.length > 1 && (
+                  {peopleOf(counterparty).length > 1 && (
                     <button onClick={async () => { if (await cdConfirm({ tone: "danger", title: `Remove ${p.name}?`, confirmLabel: "Remove" })) onDeletePerson(counterparty.id, p.id); }} title="Delete" style={{ background: "none", border: "1px solid #FECACA", color: "#DC2626", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>🗑</button>
                   )}
                 </div>
@@ -624,7 +626,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
           ))}
           {(counterparty.deletedContacts || []).map((p: any) => <div key={"del-" + p.id} data-deleted-person="1" style={{ padding: "6px 0", fontSize: 12, color: "#9CA3AF", textDecoration: "line-through" }}>{p.name}{p.role ? ` · ${p.role}` : ""}{p.email ? ` · ${p.email}` : ""} — deleted {formatDMY(p.deletedAt) || ""}</div>)}{/* v7.17.1 (A-RV-07) */}
 
-          {counterparty.contacts.length === 0 && editingPersonId !== "new" && (
+          {peopleOf(counterparty).length === 0 && editingPersonId !== "new" && (
             <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12, border: "1px dashed #E5E7EB", borderRadius: 8 }}>
               No contact people yet. Click <strong>+ Add</strong> above.
             </div>
@@ -634,7 +636,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
 
       <div style={{ padding: "12px 20px", borderTop: "1px solid #F3F4F6", display: "flex", gap: 8 }}>
         <button onClick={() => onEditCompany(counterparty)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit company</button>
-        <button onClick={async () => { if (await cdConfirm({ tone: "danger", title: `Delete ${counterparty.name}?`, message: `This deletes the company and all ${counterparty.contacts.length} contact(s).`, confirmLabel: "Delete" })) { onDeleteCompany(counterparty.id); onClose(); } }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑</button>
+        <button onClick={async () => { if (await cdConfirm({ tone: "danger", title: `Delete ${counterparty.name}?`, message: `This deletes the company and all ${peopleOf(counterparty).length} contact(s).`, confirmLabel: "Delete" })) { onDeleteCompany(counterparty.id); onClose(); } }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑</button>
       </div>
     </div>
   );
@@ -805,13 +807,12 @@ function parseFakturowniaRow(row, existingCounterparties) {
     _duplicate: duplicateOf,
     // Counterparty fields
     type: assignDefaultType({ isCompany, country, hasNip }),
-    additionalTypes: [],
     name,
     country,
     address: composeAddress(row["Street"], row["Postcode"], row["City"]),
     nip: taxId.nip,
     vatEuId: taxId.vatEuId,
-    defaultCurrency: defaultCurrencyByCountry(country),
+    terms: { defaultCurrency: defaultCurrencyByCountry(country) },   // v7.28.1 (Batch L): the terms own it
     paymentTerms: "30 days from invoice date",
     paymentTermsOther: "",
     services: [],
@@ -896,9 +897,9 @@ function parseOwnCsv(text: string, existingCounterparties: any[]) {
     out.push({
       _row: name, _selected: !duplicateOf, _duplicate: duplicateOf,
       type: get(r0, idx.type) || "Other",
-      additionalTypes: splitList(get(r0, idx.addt)),
+      roles: splitList(get(r0, idx.addt)),   // v7.28.2 (Batch L): the tidy-up adds the primary type
       name, country, address: get(r0, idx.address), nip, vatEuId,
-      defaultCurrency: get(r0, idx.currency) || defaultCurrencyByCountry(country),
+      terms: { defaultCurrency: get(r0, idx.currency) || defaultCurrencyByCountry(country) },   // v7.28.1 (Batch L)
       paymentTerms: get(r0, idx.terms) || "30 days from invoice date", paymentTermsOther: "",
       services: splitList(get(r0, idx.services)),
       finance: { bankName: "", accountNumber: "", swift: "" },
@@ -1124,14 +1125,14 @@ function ImportModal({ existingCounterparties, onCancel, onImport, source = "fak
                         <td style={{ padding: "8px 10px" }}>
                           <div style={{ fontWeight: 600, color: "#111", maxWidth: 280, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.name}>{r.name}</div>
                           {r.address && <div style={{ fontSize: 10, color: "#999", maxWidth: 280, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.address}>{r.address}</div>}
-                          {r.contacts[0]?.name && r.contacts[0].name !== "—" && (
-                            <div style={{ fontSize: 10, color: "#666" }}>👤 {r.contacts[0].name}</div>
+                          {peopleOf(r)[0]?.name && peopleOf(r)[0].name !== "—" && (
+                            <div style={{ fontSize: 10, color: "#666" }}>👤 {peopleOf(r)[0].name}</div>
                           )}
                         </td>
                         <td style={{ padding: "8px 10px", color: "#555" }}>{r.country || <span style={{ color: "#CCC" }}>—</span>}</td>
                         <td style={{ padding: "8px 10px", color: "#555", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>{r.nip || <span style={{ color: "#CCC" }}>—</span>}</td>
                         <td style={{ padding: "8px 10px", color: "#555", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>{r.vatEuId || <span style={{ color: "#CCC" }}>—</span>}</td>
-                        <td style={{ padding: "8px 10px", color: "#2563EB", fontSize: 11, maxWidth: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.contacts[0]?.email}>{r.contacts[0]?.email || <span style={{ color: "#CCC" }}>—</span>}</td>
+                        <td style={{ padding: "8px 10px", color: "#2563EB", fontSize: 11, maxWidth: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={peopleOf(r)[0]?.email}>{peopleOf(r)[0]?.email || <span style={{ color: "#CCC" }}>—</span>}</td>
                         <td style={{ padding: "8px 10px", color: "#666", fontSize: 11 }}>
                           {r.finance.bankName && <div style={{ maxWidth: 120, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.finance.bankName}>{r.finance.bankName}</div>}
                           {r.finance.accountNumber && <div style={{ color: "#AAA", fontSize: 10, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>✓ acct</div>}
@@ -1285,15 +1286,15 @@ function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
     merged.nip = taxSide.nip ?? "";
     merged.vatEuId = taxSide.vatEuId ?? "";
     // Union of secondary types and services
-    merged.additionalTypes = Array.from(new Set([...(keep.additionalTypes || []), ...(incoming.additionalTypes || []), ...(incoming.type && incoming.type !== merged.type ? [incoming.type] : [])])).filter(t => t !== merged.type);
+    merged.roles = Array.from(new Set([...rolesOf(keep), ...rolesOf(incoming)])); delete merged.additionalTypes;   // v7.28.2 (Batch L): one roles[]
     merged.services = Array.from(new Set([...(keep.services || []), ...(incoming.services || [])]));
     // Combine people (dedupe by name+email) and linked docs
-    const people = [...(keep.contacts || [])];
-    (incoming.contacts || []).forEach(p => {
+    const people = [...peopleOf(keep)];
+    peopleOf(incoming).forEach(p => {
       const dup = people.find(x => String(x.name || "").trim().toLowerCase() === String(p.name || "").trim().toLowerCase() && String(x.email || "").trim().toLowerCase() === String(p.email || "").trim().toLowerCase());
       if (!dup) people.push({ ...p, id: nextId(), isPrimary: false });
     });
-    merged.contacts = people;
+    merged.people = people; delete merged.contacts;
     merged.linkedDocs = Array.from(new Set([...(keep.linkedDocs || []), ...(incoming.linkedDocs || [])]));
     // Finance: keep's unless empty
     merged.finance = {
@@ -1490,7 +1491,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
           const tail = String(r.text).split(",").map((s: string) => s.replace(/\d{2}-\d{3}|\b\d{4,6}\b/g, "").trim()).filter(Boolean).pop() || "site";
           const name = `${c.name} — ${tail}`.slice(0, 80);
           if (!(await uiConfirm({ title: "Please confirm", message: `Add "${name}" as a location of ${c.name} (address: ${r.text}) and link ${r.orders.length} sale(s) to it?\n\n${r.orders.join(", ")}` }))) return;
-          const loc: any = addCustomLocation({ name, country: c.country || r.country || "", type: "ClientFacility" as any, address: r.text, ownerId: c.id });
+          const loc: any = addCustomLocation({ name, country: companyCountryName(c) || r.country || "", type: "ClientFacility" as any, address: r.text, ownerId: c.id });
           onLinkSaleDestination(r.key, { id: loc.id, name: loc.name }); force((x: number) => x + 1);
         };
         return <div data-typed-destinations="1" style={{ background: "#fff", border: "1px solid #FDE68A", borderLeft: "4px solid #F59E0B", borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
@@ -1576,7 +1577,7 @@ function CountriesView() {
   );
 }
 
-export default function Contacts({ lots = [], contacts: extContacts, setContacts: extSetContacts, pos = [], orders = [], shipments = [], invoices = [], claims = [], warehouseInvoices = [], users = [], userName = "", onLinkSaleDestination = null }: any = {}) {
+export default function Contacts({ lots = [], contacts: extContacts, setContacts: extSetContacts, pos = [], orders = [], shipments = [], invoices = [], claims = [], users = [], userName = "", onLinkSaleDestination = null }: any = {}) {
   // v6.81.0 (D-57): commission terms visible to the owner and the finance role (finance.pl) only; with no users defined, everyone.
   const _cu = currentUser(users, userName);
   const canSeeCommission = _cu === null ? true : !!(_cu && (_cu.isOwner || _cu.finance?.pl === true));
@@ -1610,15 +1611,15 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
     const sortKey = (x: any) => String(x?.name || "").replace(/^[\s"'«»„”“()[\]]+/, "").trim();   // v6.99.48 (A-PO-12): same key as the pickers
     return counterparties.slice().sort((a: any, b: any) => sortKey(a).localeCompare(sortKey(b), "pl", { sensitivity: "base" })).filter(c => {
       if ((filterType === "Deleted") !== !!c.deleted) return false;   // v7.17.0 (A-DEL-5): deleted companies show only under 'Deleted'
-      const matchType = filterType === "All" || filterType === "Deleted" || c.type === filterType || (c.additionalTypes || []).includes(filterType);
+      const matchType = filterType === "All" || filterType === "Deleted" || c.type === filterType || rolesOf(c).includes(filterType);
       if (!matchType) return false;
       if (!q) return true;
       return c.name.toLowerCase().includes(q)
-        || (c.country || "").toLowerCase().includes(q)
+        || companyCountryName(c).toLowerCase().includes(q)
         || (c.nip || "").toLowerCase().includes(q)
         || (c.vatEuId || "").toLowerCase().includes(q)
         || (c.services || []).some(s => s.toLowerCase().includes(q))
-        || c.contacts.some(p =>
+        || peopleOf(c).some(p =>
           (p.name || "").toLowerCase().includes(q)
           || (p.email || "").toLowerCase().includes(q)
           || (p.role || "").toLowerCase().includes(q));
@@ -1630,8 +1631,8 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
     const q = search.trim().toLowerCase();
     const rows = [];
     counterparties.forEach(c => {
-      if (filterType !== "All" && c.type !== filterType && !(c.additionalTypes || []).includes(filterType)) return;
-      c.contacts.forEach(p => {
+      if (filterType !== "All" && c.type !== filterType && !rolesOf(c).includes(filterType)) return;
+      peopleOf(c).forEach(p => {
         const matches = !q
           || (p.name || "").toLowerCase().includes(q)
           || (p.email || "").toLowerCase().includes(q)
@@ -1647,7 +1648,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
   const counts = useMemo(() => {
     const live = counterparties.filter((x: any) => !x.deleted); const c: Record<string, number> = { All: live.length, Deleted: counterparties.length - live.length };   // v7.17.0
     COUNTERPARTY_TYPES.forEach(t => {
-      c[t] = live.filter(x => x.type === t || (x.additionalTypes || []).includes(t)).length;
+      c[t] = live.filter(x => x.type === t || rolesOf(x).includes(t)).length;
     });
     return c;
   }, [counterparties]);
@@ -1657,9 +1658,9 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
     // v6.99.29 (A-R19-2): the two role vocabularies are written together until the DDL retires the legacy pair,
     // so a party can never be a client in one list and invisible in another.
     {
-      const roles = Array.from(new Set([...(c.roles || []), c.type, ...(c.additionalTypes || [])].map(x => String(x || "").trim()).filter(Boolean)));
-      c = { ...c, roles, type: c.type || roles[0] || "Client", additionalTypes: roles.filter(r => r !== (c.type || roles[0])) };
-      if (Array.isArray(c.contacts)) c = { ...c, people: c.contacts };   // v6.99.45 (CP-13)
+      const roles = Array.from(new Set(rolesOf(c).map(x => String(x || "").trim()).filter(Boolean)));
+      c = { ...c, roles, type: c.type || roles[0] || "Client" }; delete c.additionalTypes;   // v7.28.2 (Batch L)
+      if (Array.isArray(peopleOf(c))) c = { ...c, people: peopleOf(c) };   // v6.99.45 (CP-13)
     }
     // v6.3.0: duplicate guard — on a NEW record, or when an existing record's
     // name/tax-ID changed, check for matches (tax-ID strict, name fuzzy) and
@@ -1686,7 +1687,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
   function commitCounterparty(c) {
     setCounterparties(prev => {
       if (c.id) return prev.map(p => p.id === c.id ? { ...p, ...c } : p);
-      const newC = { ...c, id: nextId(), contacts: [], linkedDocs: [] };
+      const newC = { ...c, id: nextId(), people: [] };   // v7.28.2 (Batch L): no old persons list, no retired cache
       setSelectedId(newC.id);
       return [...prev, newC];
     });
@@ -1730,7 +1731,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
     // pattern as the lot delete: list the blockers, block the delete, suggest the
     // path (unlink or keep the record). Cancelled documents still block — under the
     // keep-everything ruling their snapshots must stay resolvable for the record.
-    const refs = referencesToContact(id, { pos, orders, shipments, invoices, claims, warehouseInvoices });
+    const refs = referencesToContact(id, { pos, orders, shipments, invoices, claims });
     if (refs.total > 0) {
       await guardAlert({
         tone: "warn",
@@ -1751,11 +1752,11 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       if (c.id !== counterpartyId) return c;
       let nextContacts;
       if (person.id) {
-        nextContacts = c.contacts.map(p => p.id === person.id ? { ...p, ...person } : p);
+        nextContacts = peopleOf(c).map(p => p.id === person.id ? { ...p, ...person } : p);
       } else {
         const newId = nextId();
-        const isFirstPrimary = c.contacts.length === 0;
-        nextContacts = [...c.contacts, { ...person, id: newId, isPrimary: person.isPrimary || isFirstPrimary }];
+        const isFirstPrimary = peopleOf(c).length === 0;
+        nextContacts = [...peopleOf(c), { ...person, id: newId, isPrimary: person.isPrimary || isFirstPrimary }];
       }
       // Ensure exactly one primary if the new/edited record is primary
       if (person.isPrimary) {
@@ -1768,30 +1769,30 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       if (!nextContacts.some(p => p.isPrimary) && nextContacts.length > 0) {
         nextContacts = nextContacts.map((p, i) => i === 0 ? { ...p, isPrimary: true } : p);
       }
-      return { ...c, contacts: nextContacts, people: nextContacts };   // v6.99.45 (CP-13): the mirror is written with the fact, not only healed on load
+      return { ...c, people: nextContacts };   // v7.28.2 (Batch L): the one list of persons
     }));
   }
   async function deletePerson(counterpartyId, personId) {
-    { const cp = counterparties.find(c => c.id === counterpartyId); const p = (cp?.contacts || []).find((x: any) => x.id === personId);
+    { const cp = counterparties.find(c => c.id === counterpartyId); const p = peopleOf(cp).find((x: any) => x.id === personId);
       const ok = await guardConfirm({ tone: "danger", title: `Delete ${p?.name || "this contact person"}?`, message: `The person is removed from ${cp?.name || "the party"}.`, confirmLabel: "Delete", cancelLabel: "Keep" }); if (!ok) return; }   // v6.99.69 (A-CF-1)
     setCounterparties(prev => prev.map(c => {
       if (c.id !== counterpartyId) return c;
       // v7.17.1 (A-RV-07): a deleted person stays on the company's record, struck through (deletedContacts); no document points at a person
-      const gone = c.contacts.find(p => p.id === personId); const nextContacts = c.contacts.filter(p => p.id !== personId);
+      const gone = peopleOf(c).find(p => p.id === personId); const nextContacts = peopleOf(c).filter(p => p.id !== personId);
       const deletedContacts = gone ? [...(c.deletedContacts || []), { ...gone, isPrimary: false, deletedAt: localTodayISO() }] : (c.deletedContacts || []);
       // If we removed the primary, promote the first remaining person
       if (!nextContacts.some(p => p.isPrimary) && nextContacts.length > 0) {
         nextContacts[0] = { ...nextContacts[0], isPrimary: true };
       }
-      return { ...c, contacts: nextContacts, people: nextContacts, deletedContacts };
+      return { ...c, people: nextContacts, deletedContacts };   // v7.28.2 (Batch L)
     }));
-    { const cp = counterparties.find(c => c.id === counterpartyId); const p = (cp?.contacts || []).find((x: any) => x.id === personId);
+    { const cp = counterparties.find(c => c.id === counterpartyId); const p = peopleOf(cp).find((x: any) => x.id === personId);
       recordAudit({ module: "Counterparties", docType: "Person", docNumber: String(cp?.name || counterpartyId), action: "deleted", summary: `${p?.name || "Contact person"} deleted from ${cp?.name || "the company"} — kept on record` }); }   // v7.17.4 (A-RV-12)
   }
   function setPrimary(counterpartyId, personId) {
     setCounterparties(prev => prev.map(c => {
       if (c.id !== counterpartyId) return c;
-      return { ...c, contacts: c.contacts.map(p => ({ ...p, isPrimary: p.id === personId })) };
+      return { ...c, people: peopleOf(c).map(p => ({ ...p, isPrimary: p.id === personId })) };
     }));
   }
 
@@ -1815,12 +1816,12 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
     counterparties.forEach(c => {
       const services = (c.services || []).join("; ");
       const terms = c.paymentTerms === "Other" ? (c.paymentTermsOther || "Other") : c.paymentTerms;
-      const addt = (c.additionalTypes || []).join("; ");
-      if (c.contacts.length === 0) {
-        rows.push([c.type, addt, c.name, c.country, c.nip, c.vatEuId, c.address, c.defaultCurrency, terms, services, "", "", "", "", "", c.notes]);
+      const addt = rolesOf(c).filter((r: any) => r !== c.type).join("; ");   // v7.28.2: the export keeps its column
+      if (peopleOf(c).length === 0) {
+        rows.push([c.type, addt, c.name, companyCountryName(c), c.nip, c.vatEuId, companyAddressLine(c), c.terms?.defaultCurrency || "", terms, services, "", "", "", "", "", c.notes]);
       } else {
-        c.contacts.forEach(p => {
-          rows.push([c.type, addt, c.name, c.country, c.nip, c.vatEuId, c.address, c.defaultCurrency, terms, services, p.name, p.role, p.email, p.phone, p.isPrimary ? "yes" : "", p.notes]);
+        peopleOf(c).forEach(p => {
+          rows.push([c.type, addt, c.name, companyCountryName(c), c.nip, c.vatEuId, companyAddressLine(c), c.terms?.defaultCurrency || "", terms, services, p.name, p.role, p.email, p.phone, p.isPrimary ? "yes" : "", p.notes]);
         });
       }
     });
@@ -1913,6 +1914,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
             ))}
           </div>
 
+          {viewMode === "companies" && <AddressCompletion companies={counterparties} setCompanies={setCounterparties} />}{/* v7.28.10 (Batch L): until no company address is one line only */}
           {/* Search */}
           <div style={{ padding: "12px 28px", flexShrink: 0 }}>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder={viewMode === "companies" ? "Search companies, NIP, contacts…" : "Search people, role, email, company…"}
@@ -1936,7 +1938,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
                   onEdit={c => setModal(c)}
                   onDelete={deleteCounterparty}
                   onEmail={(c) => {
-                    const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
+                    const primary = peopleOf(c).find(p => p.isPrimary) || peopleOf(c)[0];
                     if (primary && primary.email) setEmailTarget({ counterparty: c, person: primary });
                   }}
                 />
@@ -1950,7 +1952,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
             </div>
             <div style={{ marginTop: 12, fontSize: 12, color: "#AAA", textAlign: "right" }}>
               Showing {viewMode === "companies" ? filteredCompanies.length : filteredPeople.length}
-              {viewMode === "companies" ? ` of ${counterparties.length} companies` : ` of ${counterparties.reduce((s, c) => s + c.contacts.length, 0)} people`}
+              {viewMode === "companies" ? ` of ${counterparties.length} companies` : ` of ${counterparties.reduce((s, c) => s + peopleOf(c).length, 0)} people`}
             </div>
             </>)}
           </div>
@@ -1960,7 +1962,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
         {selected && viewMode === "companies" && (   // v6.99.87 (A-PT-3): the company panel shows on its own tab only; the selection is kept for coming back
           <CounterpartyDetailPanel
             counterparty={selected}
-            onAddLocation={(c: any) => { setNewLocFor({ id: c.id, name: c.name, country: c.country }); setViewMode("ports"); }}
+            onAddLocation={(c: any) => { setNewLocFor({ id: c.id, name: c.name, country: companyCountryName(c) }); setViewMode("ports"); }}
             onEditCompany={c => setModal(c)}
             onDeleteCompany={deleteCounterparty}
             onClose={() => setSelectedId(null)}
@@ -1995,7 +1997,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
       </div>
       {rows.length === 0 && <div style={{ padding: "50px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No counterparties found.</div>}
       {rows.map((c, idx) => {
-        const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
+        const primary = peopleOf(c).find(p => p.isPrimary) || peopleOf(c)[0];
         return (
           <div key={c.id} data-company-row={c.id}
             onClick={() => { if (!c.deleted) onSelect(c.id); }}
@@ -2005,9 +2007,9 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
               <TypeBadge type={c.type} />
-              {(c.additionalTypes || []).length > 0 && (
+              {rolesOf(c).filter((r: any) => r !== c.type).length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                  {c.additionalTypes.map(t => (
+                  {rolesOf(c).filter((r: any) => r !== c.type).map(t => (
                     <span key={t} title={`Also acts as ${t}`}
                       style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "0 6px", borderRadius: 3, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em" }}>
                       +{t}
@@ -2027,10 +2029,10 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
               <div style={{ fontSize: 13, color: "#333" }}>{primary?.name || <span style={{ color: "#CCC", fontStyle: "italic" }}>no contact</span>}</div>
               <div style={{ fontSize: 11, color: "#AAA" }}>{primary?.role || ""}{primary?.email ? ` · ${primary.email}` : ""}</div>
             </div>
-            <div style={{ fontSize: 12, color: "#555" }}>{c.country || "—"}</div>
+            <div style={{ fontSize: 12, color: "#555" }}>{companyCountryName(c) || "—"}</div>
             <div style={{ fontSize: 12, fontWeight: 600, color: "#555" }}>
-              {c.contacts.length}
-              {c.contacts.length > 1 && <span style={{ fontSize: 10, color: "#AAA", marginLeft: 4 }}>👥</span>}
+              {peopleOf(c).length}
+              {peopleOf(c).length > 1 && <span style={{ fontSize: 10, color: "#AAA", marginLeft: 4 }}>👥</span>}
             </div>
             <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
               {primary?.email && <button onClick={() => onEmail(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Email primary">✉</button>}
@@ -2068,7 +2070,7 @@ function PeopleTable({ rows, onOpenCompany, onEmail }: any) {
           <div style={{ fontSize: 13, color: "#333" }}>{counterparty.name}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
             <TypeBadge type={counterparty.type} />
-            {(counterparty.additionalTypes || []).slice(0, 2).map(t => (
+            {rolesOf(counterparty).filter((r: any) => r !== counterparty.type).slice(0, 2).map(t => (
               <span key={t} title={`Also acts as ${t}`}
                 style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "0 5px", borderRadius: 3, fontSize: 10, fontWeight: 700 }}>
                 +{t.slice(0, 3)}

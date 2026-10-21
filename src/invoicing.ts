@@ -179,8 +179,6 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
 
 export function migrateLegacyInvoices(opts: {
   existing: Invoice[];
-  orders: any[];
-  warehouseInvoices: any[];
   operationalCosts: any[];
 }): Invoice[] {
   const existing = arr<Invoice>(opts.existing);
@@ -193,54 +191,15 @@ export function migrateLegacyInvoices(opts: {
     haveSource.add(source);
   };
 
-  // 1. SALES invoices from SO pendingInvoices — same builder as the live A3-6
-  // path (salesInvoiceFromSODraft), so folded and API-created invoices are one
-  // shape and one source-tag namespace.
-  arr(opts.orders).forEach((o: any) => {
-    arr(o.pendingInvoices).forEach((pi: any) => {
-      const src = salesInvoiceSourceTag(o.number, pi.number || pi.id);
-      pushIf(src, () => salesInvoiceFromSODraft(o, pi));
-    });
-  });
-
-  // 2. COST / WAREHOUSE from warehouseInvoices (monthly shared)
-  // v6.64.1 (D-17): number-level twin guard. The fold's pushIf only knows its own
-  // source markers, so a register invoice written DIRECTLY (e.g. by an import)
-  // with the same legal number + counterparty was invisible to it and got folded
-  // again. Same number from a DIFFERENT counterparty is legitimate and still folds.
+  // v7.28.12 (Batch L · FZ-01): the folds of the old sales drafts (SO pendingInvoices) and of the old warehouse-invoice store are gone
+  // — neither exists in the data any more; what stays is the operational cost that carries an invoice number
+  // v6.64.1 (D-17): number-level twin guard — a register invoice written DIRECTLY (e.g. by an import) with the same legal number +
+  // counterparty is not folded again; the same number from a DIFFERENT counterparty is legitimate and still folds
   const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
   const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
-  const registerTwins = new Set(
-    arr(opts.existing)
-      .filter((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim())
-      .map((i: any) => normNo(i.number) + "|" + normParty(i.counterparty?.name)));
+  const registerTwins = new Set(arr(opts.existing).filter((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim()).map((i: any) => normNo(i.number) + "|" + normParty(i.counterparty?.name)));
   const hasTwin = (number: any, party: any) => registerTwins.has(normNo(number) + "|" + normParty(party));
-
-  arr(opts.warehouseInvoices).forEach((w: any) => {
-    if (hasTwin(w.invoiceNo, w.warehouseName)) return; // v6.64.1 (D-17)
-    const src = `migrated:warehouseInvoice:${w.id}`;
-    pushIf(src, () => {
-      const fx = resolveFxRate(w.fxRate, w.currency);
-      const net = r2(n(w.amount) || n(w.amountPLN) / (fx || 1));
-      return {
-        id: nextId(), kind: "COST", category: "WAREHOUSE", costScope: scopeOf("WAREHOUSE"),
-        number: w.invoiceNo || "", counterparty: { name: w.warehouseName || "Warehouse" },
-        issueDate: w.date || "", saleDate: w.date || "", dueDate: w.dueDate || "",
-        paymentMethod: "Transfer", currency: w.currency || "PLN", fxRate: fx,
-        netAmount: net, vatRate: 0, vatAmount: 0, grossAmount: r2(net),
-        netPLN: r2(n(w.amountPLN) || net * fx), grossPLN: r2(n(w.amountPLN) || net * fx),
-        periodFrom: w.period ? `${w.period}-01` : undefined, periodTo: undefined,
-        positions: [], links: [],
-        paymentStatus: (w.status === "Approved" ? "Issued" : (w.status as PaymentStatus)) || "Issued",
-        paidAmount: 0, notes: w.notes || "", attachment: null,
-        allocation: w.allocatedLots ? { method: w.allocationMethod || "by_kg_days", lots: w.allocatedLots } : null,
-        fakturownia: { exported: false },
-        source: src, createdAt: w.date || "",
-      };
-    });
-  });
-
-  // 3. COST from operationalCosts that carry an invoice number
+  // COST from operationalCosts that carry an invoice number
   arr(opts.operationalCosts).forEach((c: any) => {
     if (!String(c.invoiceNo || "").trim()) return; // payroll/taxes without an invoice stay out
     if (String(c.source || "").startsWith("invoice:")) return; // v6.68.0 (D-34): this opCost IS a mirror of a register invoice — folding it back would loop

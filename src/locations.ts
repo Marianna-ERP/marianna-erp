@@ -1,6 +1,7 @@
 import { nextId } from "./ids";
 import { dataKey, writeSharedStoreValue } from "./useLocalStoredState";
 import { formatAddress as _fmtAddr } from "./address.domain";
+import { rolesOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 · v7.28.10 (Batch L)
 const formatAddressOneLine = (a: any) => _fmtAddr(a, { oneLine: true });
 // ─── SHARED LOCATIONS (v5.8 trunk, Option B consolidation) ──────────────────
 //
@@ -146,7 +147,8 @@ export const CUSTOM_LOCATION_ID_BASE = 10000;
 // hardcoded. Post-migration adds/edits landed in the stale safety copy (invisible
 // to the live app and to exports). Fixed: address the current version, and adopt
 // the v1 store ONE TIME below (it was the de-facto authoritative store until now).
-const CUSTOM_LOCATIONS_KEY = dataKey("customLocations");
+// v7.29.4: read when used, not while the module loads — the storage module and this one meet in a loop of imports
+const customLocationsKey = () => dataKey("customLocations");
 
 /** v7.27.3 (FZ-26 — owner rulings A-RV-37 and FZ-21: a place is read from its TYPE, no old word kept readable): the group a screen
  *  shows a place under — our warehouse, a supplier's or a client's site, a port (with port warehouses and cargo airports), customs —
@@ -203,7 +205,7 @@ function legacyTypeFor(type: LocationType): string {
 export function readCustomLocations(): Location[] {
   if (typeof window === "undefined" || !window.localStorage) return [];
   try {
-    const raw = window.localStorage.getItem(CUSTOM_LOCATIONS_KEY);
+    const raw = window.localStorage.getItem(customLocationsKey());
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -321,7 +323,7 @@ readCustomLocations().forEach(cl => {
 // bootstrap re-runs, exactly like the legacy custom-locations did.
 
 export const LOGISTICS_POINT_BASE = 800000;
-const LOGISTICS_POINTS_KEY = dataKey("logisticsPoints");
+const logisticsPointsKey = () => dataKey("logisticsPoints");
 
 export const LOGISTICS_POINT_KINDS: { key: string; label: string; type: LocationType; legacyType: string }[] = [
   { key: "PortLoading",   label: "Port of loading",       type: "Port",       legacyType: "PORT" },
@@ -337,7 +339,7 @@ export function logisticsPointLocId(id: any): number {
 export function readLogisticsPoints(): any[] {
   if (typeof window === "undefined" || !window.localStorage) return [];
   try {
-    const raw = window.localStorage.getItem(LOGISTICS_POINTS_KEY);
+    const raw = window.localStorage.getItem(logisticsPointsKey());
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -420,7 +422,7 @@ export function allLocations(): Location[] {
 export const WAREHOUSE_CP_LOC_BASE = 900000;
 
 export function isWarehouseContact(c: any): boolean {
-  return !!c && (c.type === "Warehouse" || (c.additionalTypes || []).includes("Warehouse"));
+  return !!c && (c.type === "Warehouse" || rolesOf(c).includes("Warehouse"));
 }
 
 // Every address a counterparty has: its primary address (index 0) plus any
@@ -430,7 +432,7 @@ export function contactAddresses(c: any): { address: string; index: number; site
   // index-based id is only the first-time default, so re-ordering addresses never moves a lot.
   const list: { address: string; index: number; siteId?: any }[] = [];
   // v6.99.40 (A-ADDR): the structured address is the source; the legacy one-line text is the fallback.
-  const own = c?.addr && (c.addr.street || c.addr.city || c.addr.postcode) ? formatAddressOneLine(c.addr) : String(c?.address || "");
+  const own = companyAddressLine(c, { withCountry: true });   // v7.28.10 (Batch L): the one reader — a place's line keeps the country, as before
   if (own) list.push({ address: own, index: 0, siteId: c?.siteId });
   (c?.extraAddresses || []).forEach((a: any, i: number) => {
     const addr = typeof a === "string" ? a : (a?.addr && (a.addr.street || a.addr.city) ? formatAddressOneLine(a.addr) : (a?.address || ""));
@@ -449,7 +451,7 @@ export function stampSiteIds(contacts: any[]): { contacts: any[]; changed: boole
   const next = (contacts || []).map((c: any) => {
     if (!c) return c;
     let n = { ...c };
-    if (c.address && c.siteId == null) { n.siteId = warehouseCpLocId(c.id, 0); changed = true; }
+    if (companyAddressLine(c) && c.siteId == null) { n.siteId = warehouseCpLocId(c.id, 0); changed = true; }
     if (Array.isArray(c.extraAddresses)) {
       n.extraAddresses = c.extraAddresses.map((a: any, i: number) => {
         const obj = typeof a === "string" ? { address: a } : { ...a };
@@ -486,7 +488,7 @@ export function warehouseAddressLocations(contacts: any[]): Location[] {
     contactAddresses(c).forEach(({ address, index, siteId }) => {
       const id = siteId ?? warehouseCpLocId(c.id, index);   // v6.99.97 (A-ID-1): the stored id owns it
       const name = index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`;
-      out.push({ id, type: "RentedWarehouse", legacyType: "OWN", name, country: c.country || "", address: address || undefined });
+      out.push({ id, type: "RentedWarehouse", legacyType: "OWN", name, country: companyCountryName(c), address: address || undefined });
     });
   });
   out.forEach(loc => {
@@ -510,7 +512,7 @@ export function warehouseAddressLocations(contacts: any[]): Location[] {
 
 function counterpartyLocationRole(c: any): { legacyType: string; type: LocationType } | null {
   if (isWarehouseContact(c)) return { legacyType: "OWN", type: "RentedWarehouse" };
-  const types = [c?.type, ...((c?.additionalTypes) || [])];
+  const types = rolesOf(c);
   if (types.includes("Supplier")) return { legacyType: "SUPPLIER", type: "SupplierFacility" };
   if (types.includes("Client")) return { legacyType: "CLIENT", type: "ClientFacility" };
   if (c?.isPlace === true) return { legacyType: "OTHER", type: "ClientFacility" };   // v7.3.5 (A-LOC-1): any company may be ticked as a place
@@ -531,7 +533,7 @@ export function counterpartyLocations(contacts: any[]): Location[] {
         id: (siteIdOf(c, index) ?? warehouseCpLocId(c.id, index)),
         type: role.type, legacyType: role.legacyType,
         name: index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`,
-        country: c.country || "", address: address || undefined,
+        country: companyCountryName(c), address: address || undefined,
         // v7.3.5 (A-LOC-1, owner 7 Oct): "goods are loaded / delivered here" — unticked, the address still resolves for every document
         // and print (same id), but it is no longer OFFERED in the location pickers
         ...({ ownerId: c.id, pickable: c.isPlace !== false } as any),
@@ -643,8 +645,8 @@ export function typedSaleDestinations(orders: any[], contacts: any[]): TypedDest
     if (!e) {
       const c = (contacts || []).find((x: any) => String(x.id) === String(o.client?.id)) || null;
       const legal = c && c.isPlace !== false ? counterpartyLocations([c]).find((l: any) => String(l.name) === String(c.name)) : null;
-      const same = !!legal && [legal.address, c.address].some((a: any) => !!addressKey(a) && addressKey(a) === addressKey(text));
-      e = { key, text: text.replace(/\s+/g, " "), clientId: c ? c.id : (o.client?.id ?? null), clientName: String(c?.name || o.client?.name || "—").trim(), country: String(c?.country || o.client?.country || ""), orders: [], legalSiteId: same ? legal!.id : null };
+      const same = !!legal && [legal.address, companyAddressLine(c)].some((a: any) => !!addressKey(a) && addressKey(a) === addressKey(text));
+      e = { key, text: text.replace(/\s+/g, " "), clientId: c ? c.id : (o.client?.id ?? null), clientName: String(c?.name || o.client?.name || "—").trim(), country: String((c ? companyCountryName(c) : "") || o.client?.country || ""), orders: [], legalSiteId: same ? legal!.id : null };
       map.set(key, e);
     }
     e.orders.push(String(o.number));

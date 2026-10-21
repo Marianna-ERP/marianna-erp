@@ -22,7 +22,8 @@ import { noteNames } from "./format";
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { findLotForSOLine } from "./salesOrders.domain";
-import { unitKg as derivedUnitKg } from "./shipmentModel.domain";
+import { unitKg as derivedUnitKg, shipmentDates } from "./shipmentModel.domain";
+import { shipmentEndPlaceId } from "./tradeFlow.domain";   // v7.28.7
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 function num(v: any): number {
@@ -68,7 +69,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     let qty = relatedGoods.reduce((s: number, g: any) => s + num(g.qtyKg), 0);
     const lastLeg = (sh.legs || [])[((sh.legs || []).length || 1) - 1] || {};
     const firstLeg = (sh.legs || [])[0] || {};
-    const destId = lastLeg.toLocationId || sh.destinationLocationId || lot.locationId;
+    const destId = shipmentEndPlaceId(sh) || lot.locationId;   // v7.28.7 (Batch L): the route's end
       // v6.99.16 (A-R12-4): the unit's delivery place is the real destination when set
       const unitDest = (sh.legs || []).flatMap((l: any) => l.vehicles || []).map((u: any) => u.deliveryLocationId).find((x: any) => x != null && x !== "");
       const destIdFinal = unitDest ?? destId;
@@ -85,8 +86,8 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     // day the record was created. Storage days and every date-based report depend
     // on this. Preference: actual delivery > planned delivery on the last leg >
     // loading date > pickup on the first leg > today (last resort).
-    const date = sh.actualDeliveryDate
-      || lastLeg.plannedDeliveryDate || sh.expectedDeliveryDate
+    const date = shipmentDates(sh).delivered   // v7.28.7 (Batch L): the trucks' unloading (the shipment's own copy is gone)
+    || lastLeg.plannedDeliveryDate || sh.expectedDeliveryDate
       || sh.loadingDate || firstLeg.plannedPickupDate
       || deps.todayISO();
     changed.push(lot.number);
@@ -190,7 +191,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         physicalKg: currentPhysical, // net zero — never in our stock
         locationId: destId,
         status: "Delivered (direct)",
-        arrivalDate: sh.actualDeliveryDate || lot.arrivalDate || date,
+        arrivalDate: shipmentDates(sh).delivered || lot.arrivalDate || date,   // v7.28.7: the trucks' unloading
         movements: [...(lot.movements || []), inMove, ...outMovesI],
       };
     }
@@ -203,7 +204,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000,
         physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000,
         status: "In Stock",
-        arrivalDate: sh.actualDeliveryDate || lot.arrivalDate || date,
+        arrivalDate: shipmentDates(sh).delivered || lot.arrivalDate || date,   // v7.28.7: the trucks' unloading
         movements: [...(lot.movements || []), movement],
       };
     }
@@ -410,11 +411,10 @@ export function syncLegFreightCostLines(sh: any, payers?: Array<{ payer: string 
     const type = FREIGHT_TYPE_BY_MODE[leg?.mode] || "sea_freight";
     // v6.82.0 (Round 6): the leg amount is the SUM of the unit prices when any unit
     // carries one — this is the path the save actually runs (D-49 patched the other).
-    const units = (leg?.vehicles || leg?.transportUnits || []);
-    const unitSum = units.reduce((s: number, u: any) => s + numv(u?.costAmount ?? u?.unitPrice), 0);
-    const amt = unitSum > 0 ? unitSum : numv(leg?.costAmount);
+    const units = (leg?.vehicles || []);   // v7.28.9 (Batch L): the trucks own the price — no amount copy on the leg
+    const amt = units.reduce((s: number, u: any) => s + numv(u?.costAmount ?? u?.unitPrice), 0);
     const fx = numv(leg?.costFxRate) || 1;
-    const pln = numv(leg?.costPLN) || Math.round(amt * fx * 100) / 100;
+    const pln = Math.round(amt * fx * 100) / 100;
     let idx = costs.findIndex((c: any) => c && String(c.source || "") === src);
     if (idx === -1 && amt > 0) {
       idx = costs.findIndex((c: any) => c && !c.source && !c._customsAuto && c.type === type);
@@ -541,7 +541,7 @@ export interface LegKgCheck { leg: number; mode: string; goodsKg: number; unitsK
 export function legKgChecks(sh: any): LegKgCheck[] {
   const goodsKg = (sh?.goods || []).reduce((s: number, g: any) => s + (Number(g?.qtyKg) || 0), 0);
   return (sh?.legs || []).map((leg: any, i: number) => {
-    const units = leg?.vehicles || leg?.transportUnits || [];
+    const units = leg?.vehicles || [];   // v7.28.9
     const unitsKg = units.reduce((s: number, u: any) => s + derivedUnitKg(u, sh), 0);   // v6.99.9: derived from loads/feeders, never the legacy typed figure
     return { leg: i + 1, mode: String(leg?.mode || ""), goodsKg: Math.round(goodsKg), unitsKg: Math.round(unitsKg), deltaKg: Math.round(unitsKg - goodsKg), units: units.length };
   }).filter((c: LegKgCheck) => c.units > 0 && Math.abs(c.deltaKg) > 1);

@@ -94,6 +94,8 @@
     "../src/shipmentDerived.domain.ts",
     "../src/costInvoice.domain.ts",
     "../src/fxDifferences.domain.ts",
-    "../src/datesChain.domain.ts"
+    "../src/datesChain.domain.ts",
+    "../src/placeRepair.domain.ts",
+    "../src/journeyProposal.domain.ts"
   ]
 }

@@ -1,5 +1,5 @@
 // ShipmentCreate.tsx — v6.99.68 (A-AUD-2, owner): moved out of Shipments.tsx unchanged; the module's shared helpers are imported from it.
-import React, { useState } from "react";
+import React, { useState , useEffect } from "react";
 import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection , salesOfPO, posOfSale } from "./tradeFlow.domain";
 import { SmallButton, ActionButton, useConfirm } from "./ui";
 import { isCancelled } from "./cancellation.domain";
@@ -8,9 +8,12 @@ import { nextId } from "./ids";
 import { truckLoadPlaces } from "./shipmentModel.domain";
 import { appendSourceGoods, asSuppliersTruck } from "./shipments.domain";   // v6.99.94
 import { isExwSale, isDRulePurchase } from "./incoterms.domain";   // v7.19.1 / v7.19.2 (A-INC-1)
-import { placeForPrint } from "./locations";
+import { placeForPrint , counterpartyLocations , unifiedLocations , placeGroup , locationById , isPortType } from "./locations";
 import { catalogItems } from "./productCatalog";   // v7.18.4 (A-AU-9)
 import { Card, HEADER_MODES, Inp, Lbl, SectionTitle, Sel, buildManualShipment, buildShipmentFromPO, buildShipmentFromSO, countryOfLocation, fmtNum, locById, locText, mergedLocations, modeChangePatch, parseNum, todayISO } from "./Shipments";
+import { proposeJourney } from "./journeyProposal.domain";   // v7.29.0 (SC-15)
+import { JourneyProposalCard, legsFromJourney } from "./JourneyProposalCard";   // v7.29.0 (SC-15)
+import { poExpectedArrival, poPromisedDate } from "./po.domain";   // v7.28.5 (Batch L)
 import { overReceiptCheck, receiptWarningText } from "./receipts.domain";   // v7.11.0 (A-RV-23)
 import { issueNumber } from "./numbering";   // v7.27.8 (A-W5)
 import { applyDerivedTravel } from "./shipmentDerived.domain";   // v7.27.9 (FZ-29)
@@ -65,6 +68,21 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
   // v6.34.8: source-agnostic descriptor so PO and SO share the same guard + progress + partial-qty UI.
   const srcDoc = sourceType === "PO" ? selectedPO : sourceType === "SO" ? selectedSO : null;
   const srcItems: any[] = srcDoc?.items || [];
+  // v7.29.0 (SC-15): the journey proposed from the PO's and the SO's rules — the team changes any leg before creating
+  const [journeyLegs, setJourneyLegs] = useState<any[]>([]); const [journeyNote, setJourneyNote] = useState(""); const [useJourney, setUseJourney] = useState(true);
+  useEffect(() => {
+    if (sourceType === "Manual" || (!selectedPO && !selectedSO) || isDRule) { setJourneyLegs([]); setJourneyNote(""); return; }
+    const contactOf = (p: any) => (contacts || []).find((c: any) => String(c.id) === String(p?.id)) || null;
+    const siteOf = (p: any) => { const c = contactOf(p); const s = c ? counterpartyLocations([c])[0] : null; return s ? s.id : null; };
+    const own = () => { const o = unifiedLocations(contacts || []).find((l: any) => placeGroup(l) === "OWN"); return o ? o.id : null; };
+    const isPort = (id: any) => { const l = locationById(id, contacts || []); return !!l && isPortType(l); };
+    // a sale's purchase is read through its lots (the shared rule, FZ-23) — and only while those lots are not in stock yet (a direct sale)
+    const po = sourceType === "PO" ? selectedPO : (() => { const sp = posOfSale(selectedSO, pos || [], lots || []); const lotNos = (selectedSO?.items || []).map((it: any) => String(it.sourceRef || "")); const inStock = (lots || []).some((l: any) => lotNos.includes(String(l.number)) && Number(l.physicalKg) > 0); return sp.length === 1 && !inStock ? sp[0] : null; })();
+    const so = sourceType === "SO" ? selectedSO : (() => { const list = salesOfPO(selectedPO, orders || [], lots || [], { includeDrafts: true }); return list.length === 1 ? list[0] : null; })();
+    const lotPlace = () => { const no = String(((selectedSO?.items || [])[0] || {}).sourceRef || ""); const l = (lots || []).find((x: any) => String(x.number) === no); return l ? l.locationId ?? null : null; };
+    const p = proposeJourney(po, so, { siteOf, ourWarehouse: own, lotPlace, isPort });
+    setJourneyLegs(p.legs); setJourneyNote(p.note); setUseJourney(true);
+  }, [sourceType, ref]);   // eslint-disable-line react-hooks/exhaustive-deps
   const srcRefMatch = (sh2: any) => sourceType === "PO"
     ? (sh2.poRefs || []).includes(selectedPO?.number)
     : (sh2.soRefs || []).includes(selectedSO?.number) || (sh2.goods || []).some((g: any) => g.soRef === selectedSO?.number);
@@ -145,13 +163,13 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
       setForm(prev => ({
         ...prev,
         loadingDate: selectedPO.loadingDate || prev.loadingDate,
-        expectedDeliveryDate: (linkedSO && (linkedSO.expectedDeliveryDate || linkedSO.deliveryDate)) || selectedPO.expectedDeliveryDate || prev.expectedDeliveryDate,   // v6.99.59 (A-OW-2)
+        expectedDeliveryDate: (linkedSO && (linkedSO.expectedDeliveryDate || linkedSO.deliveryDate)) || poExpectedArrival(selectedPO) || prev.expectedDeliveryDate,   // v6.99.59 (A-OW-2)
       }));
     } else if (sourceType === "SO" && selectedSO) {
       const linkedPO = posOfSale(selectedSO, pos || [], lots || [])[0];   // v7.27.0 (FZ-23): through the lots the sale's lines name
       setForm(prev => ({
         ...prev,
-        loadingDate: selectedSO.expectedLoadingDate || (linkedPO && (linkedPO.expectedDeliveryDate || linkedPO.loadingDate)) || prev.loadingDate,   // v6.99.59 (A-OW-2): the SO's expected loading, else where its PO delivers
+        loadingDate: selectedSO.expectedLoadingDate || (linkedPO && poPromisedDate(linkedPO)) || prev.loadingDate,   // v6.99.59 (A-OW-2): the SO's expected loading, else where its PO delivers
         expectedDeliveryDate: selectedSO.expectedDeliveryDate || selectedSO.deliveryDate || prev.expectedDeliveryDate,
       }));
     }
@@ -198,6 +216,7 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     }
     else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, number: await issueNumber("SHP", new Date().getFullYear(), (shipments || []).map((x: any) => x.number)), selectedItemIds, lineQtys, governingSoRef: selectedSO.number }, shipments, lots, contacts); // v6.82.0 (Round 6): the chosen SO IS the governing sale
     else sh = buildManualShipment({ ...form, number: await issueNumber("SHP", new Date().getFullYear(), (shipments || []).map((x: any) => x.number)) }, shipments);   // v7.27.8 (A-W5)
+    if (sh && useJourney && journeyLegs.length && !isDRule && sourceType !== "Manual") sh = { ...sh, legs: legsFromJourney(journeyLegs, sh.legs || []) };   // v7.29.0 (SC-15): the journey the team confirmed
     sh = applyDerivedTravel(sh, { catalog: productCatalog, packagingTypes: [], contacts });   // v7.27.9 (FZ-29, RM-2 F-5): from the catalogue and the carrier
     // v7.19.2 (A-INC-1, 3/5): a DAP / DPU / DDP purchase comes on the supplier's truck — no carrier, freight or transport order of ours
     if (isDRule && sh) sh = asSuppliersTruck(sh, selectedPO);
@@ -347,8 +366,9 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
             <div><Lbl>Lot ref</Lbl><Sel value={form.lotRef} onChange={e => sf("lotRef", e.target.value)}><option value="">No lot</option>{(lots || []).map(l => <option key={l.number} value={l.number}>{l.number} - {l.product}</option>)}</Sel>{selectedLot && <div style={{ fontSize: 10, color: "#888", marginTop: 3 }}>Stock: {fmtNum(selectedLot.physicalKg)} kg</div>}</div>
           </div>
         </Card>}
+        {sourceType !== "Manual" && !isDRule && (journeyLegs.length > 0 || journeyNote) && <JourneyProposalCard legs={journeyLegs} setLegs={setJourneyLegs} note={journeyNote} use={useJourney} setUse={setUseJourney} contacts={contacts} />}
         <Card style={{ gridColumn: "1 / 3", background: "#F9FAFB" }}>
-          <SectionTitle>Preview</SectionTitle>
+        <SectionTitle>Preview</SectionTitle>
           <div style={{ fontSize: 12, color: "#444", lineHeight: 1.6 }}>
             {sourceType === "PO" && selectedPO && <div><strong>{selectedPO.number}</strong> from {selectedPO.supplier?.name}. Loading now: {previewGoods()}. Route: {placeForPrint(null, selectedPO.supplier?.name ? `${selectedPO.supplier.name}` : "", contacts).line || "supplier"} → {placeForPrint(selectedPO.destinationLocationId, selectedPO.destinationText, contacts).line || "—"}.</div>}   {/* v6.99.43 (M-5): what this shipment carries and where it really goes, with the address */}
             {sourceType === "SO" && selectedSO && <div><strong>{selectedSO.number}</strong> for {selectedSO.client?.name}. Loading now: {previewGoods()}. Route: {soLoadingText(selectedSO)} → {placeForPrint(selectedSO.destinationLocationId, selectedSO.destinationText || selectedSO.client?.address, contacts).line || "—"}.</div>}{/* v6.99.138 (A-SC-2): loading = where the goods are (the lot's place; the PO's for goods not yet received), never "our warehouse" by default */}

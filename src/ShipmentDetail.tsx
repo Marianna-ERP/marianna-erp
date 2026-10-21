@@ -108,7 +108,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
   else checks.push({ ok: ["Cost allocated", "Allocated to lots", "Closed"].includes(S(shipment.billingStatus)), label: "Costs allocated to lots", step: "Allocate the costs to the lots" });
   { const recs = legs.flatMap((l: any) => transportUnitsForLeg(l)).map((u: any) => u.tempRecorderNo).filter(Boolean); checks.push({ ok: recs.length > 0, label: `Temp recorder registered${recs.length ? ` (${recs.join(", ")})` : ""}`, warn: !recs.length ? "reported on invoice" : "" }); }
   if (shipment.mode === "Sea" || shipment.mode === "Multimodal") {
-    const legHasContainer = (l: any) => !!l.containerNumber || transportUnitsForLeg(l).some((u: any) => !!u.containerNumber);
+    const legHasContainer = (l: any) => transportUnitsForLeg(l).some((u: any) => !!u.containerNumber);   // v7.28.9: the units own it
     const legHasBL = (l: any) => !!l.blNumber || transportUnitsForLeg(l).some((u: any) => !!u.blNumber);
     checks.push({ ok: legs.some(legHasContainer), label: "Container number registered", step: "Enter the container number" });
     checks.push({ ok: legs.some(legHasBL), label: "BL number registered", step: "Get the B/L number" });
@@ -199,7 +199,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
         <div style={{ fontSize: 10, fontWeight: 800, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Expected for this shipment</div>
         {(expectedDocs || []).map((x: any) => <div key={"exp-" + x.type} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, padding: "4px 0", fontSize: 12, alignItems: "center", borderBottom: "1px solid #F8FAFC" }}>
           <div><b>{x.type}</b> <span style={{ color: "#94A3B8", fontSize: 11 }}>· {x.why}{x.stage === "arrival" ? " · by arrival" : ""}</span></div>
-          {x.held ? <span style={{ fontSize: 10, fontWeight: 700, color: "#16A34A" }}>held</span> : typeof onSetDocument === "function" ? <SmallButton onClick={() => onSetDocument(x.type)}>Have it</SmallButton> : <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309" }}>missing</span>}
+          {x.held ? <span style={{ fontSize: 10, fontWeight: 700, color: "#16A34A" }}>{(shipment.documents || []).some((d: any) => String(d?.type) === String(x.type) && String(d?.status) === "Not bought") ? "not bought" : "held"}</span> : typeof onSetDocument === "function" ? <span style={{ display: "inline-flex", gap: 4 }}><SmallButton onClick={() => onSetDocument(x.type)}>Have it</SmallButton>{x.type === "Insurance certificate" && <SmallButton onClick={() => onSetDocument(x.type, "Not bought")}>Not bought</SmallButton>}</span> : <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309" }}>missing</span>}
         </div>)}
         {(shipment.documents || []).some(notNeeded) && <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>Not needed for this shipment, not counted: {(shipment.documents || []).filter(notNeeded).map((d: any) => d.type).join(", ")}.</div>}
         </div>}

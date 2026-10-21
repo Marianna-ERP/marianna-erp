@@ -134,7 +134,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                   <div style={{ fontSize: 11, color: "#7C3AED", marginTop: 3, lineHeight: 1.5 }}>
                     Producer's goods in our custody. Sell at your prices; all expenses are deducted at settlement.
                     Settled per truck on the purchase order (all lots of the PO together; expenses include delivery freight; producer invoice in its own currency).
-                    {lot.settlement?.closedAt ? ` · closed ${formatDMY(lot.settlement.closedAt)}` : lot.settlement?.sentAt ? ` · statement sent ${formatDMY(lot.settlement.sentAt)}` : ""}
+                    
                   </div>
                 </div>
 {/* v6.99.17 (A-R13-2, ownership): the settlement is per PO (truck) and lives in PURCHASE ORDERS — the old per-lot settlement is retired */}
@@ -460,7 +460,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                           <span style={{ color: "#64748B" }}>{formatDMY(c.date)}</span>
                           <span>{c.defectType || "defect"} · {c.defectPct || 0}%{c.affectedKg ? ` · ${Number(c.affectedKg).toLocaleString("pl-PL")} kg` : ""}</span>
                           <span style={{ marginLeft: "auto", fontWeight: 700 }}>{c.requestedCreditEUR ? `€${Number(c.requestedCreditEUR).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}` : ""}</span>
-                          {c.status === "Accepted" && c.acceptedEUR ? <span style={{ fontSize: 10, color: "#15803D" }}>accepted €{Number(c.acceptedEUR).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span> : null}
+                          {c.status === "Accepted" && c.acceptedAmount ? <span style={{ fontSize: 10, color: "#15803D" }}>accepted €{Number(c.acceptedAmount).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span> : null}
                           <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: chip(c.status), borderRadius: 999, padding: "1px 8px" }}>{c.status || "Draft"}</span>
                         </div>
                       ))}

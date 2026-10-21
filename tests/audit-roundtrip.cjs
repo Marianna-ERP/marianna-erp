@@ -402,9 +402,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
       ],
       invoices: [{ number: "FV-1", counterparty: { id: 30 } }],
       claims: [{ number: "CLM-1", respondent: { contactId: 30 } }],
-      warehouseInvoices: [{ id: 5, invoiceNo: "LP/1", warehouseId: 30 }],
+      
     });
-    eq(r.total, 8, "all eight reference kinds found");
+    eq(r.total, 7, "all seven reference kinds found (v7.28.12: the old warehouse-invoice store is gone — the register's invoices carry those)");
     ok(r.blockers.some(b => b.startsWith("Shipment(s):") && b.includes("SHP-2") && b.includes("SHP-3")),
        "leg-level and cost-line ids covered (the old integrity blind spot)");
   });
@@ -479,7 +479,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("claim finalisation builds the right note per respondent + owner rulings", () => {
     const cl = B("claims.domain.js");
-    const claim = { number: "CLM-2026-0001", cause: "Transport damage", acceptedEUR: 500, plnPerEur: 4.3,
+    const claim = { number: "CLM-2026-0001", cause: "Transport damage", acceptedAmount: 500, fxToPLN: 4.3,
       respondent: { kind: "Carrier", name: "EuroFreight" },
       subjects: [{ kind: "SHIPMENT", ref: "SHP-1" }, { kind: "INVOICE", ref: "FA-9" }] };
     const d = { nextId: deps.nextId, todayISO: deps.todayISO, invoices: [{ id: 42, number: "FA-9" }] };
@@ -822,7 +822,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("integrity: over-allocated advance, orphan mirror, unknown catalog item, claim money≠paper are all reported", () => {
     const r = integ.checkIntegrity({ contacts: [], pos: [{ number: "PO-9", status: "Confirmed", items: [{ product: "Dragonfruit" }] }], lots: [], orders: [], shipments: [],
-      invoices: [{ id: 1, kind: "COST", number: "F/1", paymentStatus: "Cancelled", grossPLN: 10 }], financeNotes: [], claims: [{ number: "CLM-1", status: "Accepted", acceptedEUR: 500, financeNoteId: null, subjects: [] }], loadPlans: [],
+      invoices: [{ id: 1, kind: "COST", number: "F/1", paymentStatus: "Cancelled", grossPLN: 10 }], financeNotes: [], claims: [{ number: "CLM-1", status: "Accepted", acceptedAmount: 500, financeNoteId: null, subjects: [] }], loadPlans: [],
       advancePayments: [{ counterpartyName: "X", amount: 100, currency: "PLN", allocations: [{ invoiceId: 77, amount: 150 }] }],
       bankAccounts: [{ accountDigits: "1", label: "A" }, { accountDigits: "1", label: "B" }],
       operationalCosts: [{ source: "invoice:1", invoiceNo: "F/1", amountPLN: 10 }, { source: "invoice:404", invoiceNo: "F/404", amountPLN: 5 }],
@@ -884,7 +884,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     approx(Math.abs(p.postings[0].pln ?? p.postings[0].amountPLN), 1200);
     const note = cl.buildClaimFinanceNote(pln, "OUR_CREDIT_TO_CLIENT", { nextId: () => 1, todayISO: () => "2026-09-03", invoices: [] });
     eq(note.currency, "PLN"); approx(note.amountPLN, 1200);
-    const eur = { number: "CLM-8", status: "Accepted", acceptedEUR: 100, plnPerEur: 4.3, respondent: { kind: "Supplier" }, subjects: [{ kind: "LOT", ref: "L", affectedKg: 10 }] };
+    const eur = { number: "CLM-8", status: "Accepted", acceptedAmount: 100, fxToPLN: 4.3, respondent: { kind: "Supplier" }, subjects: [{ kind: "LOT", ref: "L", affectedKg: 10 }] };
     approx(cl.claimMoney(eur).pln, 430, "legacy EUR claims unchanged");
   });
   console.log("v6.81.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
@@ -1170,8 +1170,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(k.boxes, 1494);
   });
   t("PO-2: payment days from the PO, else the supplier, else legacy text; due = issue + days", () => {
-    eq(P.paymentDaysFor({ paymentDays: 45 }, { paymentTermsDays: 30 }), 45);
-    eq(P.paymentDaysFor({}, { paymentTermsDays: 30 }), 30);
+    eq(P.paymentDaysFor({ paymentDays: 45 }, { terms: { paymentDays: 30 } }), 45);   // v7.28.1: companies as the tidy-up writes them
+    eq(P.paymentDaysFor({}, { terms: { paymentDays: 30 } }), 30);
     eq(P.paymentDaysFor({ paymentTerms: "21 days from invoice" }, {}), 21);
     eq(P.dueDateFromIssue("2026-09-10", 30), "2026-10-10");
   });
@@ -1209,7 +1209,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const sh = [{ status: "Delivered", soRefs: ["SO-1"], legs: [{ vehicles: [{ deliveredAt: "2026-09-08" }] }, { vehicles: [{ dischargedAt: "2026-09-23" }] }] }];
     eq(Q.actualDeliveryDate(so, sh), "2026-09-23", "the truck's delivery at the port is NOT the sale's delivery"); eq(Q.deliveryDelayDays(so, sh), 3);
   });
-  t("SO-4: payment days from the client → invoice due date", () => { eq(Q.soPaymentDays({}, { paymentTermsDays: 14 }), 14); eq(Q.soInvoiceDueDate("2026-09-10", {}, { paymentTermsDays: 14 }), "2026-09-24"); });
+  t("SO-4: payment days from the client → invoice due date", () => { eq(Q.soPaymentDays({}, { terms: { paymentDays: 14 } }), 14); eq(Q.soInvoiceDueDate("2026-09-10", {}, { terms: { paymentDays: 14 } }), "2026-09-24"); });
   t("SO-6: normalisation drops the mirrors and is idempotent", () => {
     const r = Q.normaliseSO({ number: "SO-1", linkedInvoices: ["FV/1"], linkedShipments: [], actualDeliveryDate: "x", destinationMode: "text", _poETAByLine: {}, paymentTerms: "14 days", items: [{ qty: 10, unit: "Kg", shippedKg: 5 }] });
     ok(r.changed); ok(!("linkedInvoices" in r.so)); eq(r.so.paymentDays, 14); eq(r.so.items[0].pricingUnit, "kg"); ok(!("shippedKg" in r.so.items[0]));
@@ -1253,10 +1253,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const ids = loc.counterpartyLocations([reordered]).map(l => l.id).sort(); eq(JSON.stringify(ids), JSON.stringify([...before].sort()), "ids follow the address, not the position");
     ok(!loc.stampSiteIds(st.contacts).changed, "idempotent");
   });
-  t("IN-4: lot normalisation drops mirrors, syncs consignment/direct from the PO, derives arrival, hands the old settlement over — idempotently", () => {
+  t("IN-4: lot normalisation drops mirrors, syncs consignment/direct from the PO, derives arrival, drops the old per-lot settlement (v7.28.12) — idempotently", () => {
     const lot = { number: "L1", poRef: "PO-1", journey: [], destinationText: "x", custodyType: "y", consignment: false, arrivalDate: "", settlement: { status: "Closed", number: "SET-2026-0001" }, movements: [{ type: "IN", date: "2026-09-10", qtyKg: 10 }] };
     const r = Z.normaliseLot(lot, { po: { pricingMode: "consignment", directFlow: false }, poSettlements: [] });
-    ok(r.changed); ok(!("journey" in r.lot)); eq(r.lot.consignment, true); eq(r.lot.arrivalDate, "2026-09-10"); ok(r.settlementToMigrate && r.settlementToMigrate.poNumber === "PO-1"); ok(!("settlement" in r.lot));
+    ok(r.changed); ok(!("journey" in r.lot)); eq(r.lot.consignment, true); eq(r.lot.arrivalDate, "2026-09-10"); ok(!("settlement" in r.lot));   // v7.28.12: the PO settlement owns it — no hand-over (no lot carries one any more)
     ok(!Z.normaliseLot(r.lot, { po: { pricingMode: "consignment", directFlow: false }, poSettlements: [{ poNumber: "PO-1" }] }).changed);
   });
   console.log("v6.96.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
@@ -1335,7 +1335,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("IV-6/IV-7: positions must add up to the header; an unlinked cost invoice gets its due date from the counterparty's days", () => {
     ok(IV.positionsMismatch({ grossAmount: 1000, positions: [{ grossTotal: 600 }, { grossTotal: 300 }] })); eq(IV.positionsMismatch({ grossAmount: 900, positions: [{ grossTotal: 600 }, { grossTotal: 300 }] }), "");
-    eq(IV.defaultCostDueDate({ issueDate: "2026-09-10" }, { paymentTermsDays: 21 }), "2026-10-01");
+    eq(IV.defaultCostDueDate({ issueDate: "2026-09-10" }, { terms: { paymentDays: 21 } }), "2026-10-01");
   });
   console.log("v6.98.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -1395,7 +1395,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const FP = B("financePlus.domain.js");
   t("FN-4: client risk — exposure, overdue, days late, limit usage incl. confirmed orders, days-to-pay", () => {
     const inv = [{ kind: "SALES", counterparty: { name: "Agromax" }, currency: "PLN", fxRate: 1, issueDate: "2026-08-01", dueDate: "2026-08-31", grossAmount: 10000, paidAmount: 4000, paymentStatus: "Issued", payments: [{ date: "2026-08-21", amount: 4000 }] }];
-    const r = FP.clientRisk("Agromax", inv, [{ status: "Confirmed", client: { name: "Agromax" }, fxRate: 1, items: [{ qty: 1000, unitPrice: 5 }] }], { creditLimitPLN: 20000 }, "2026-09-11");
+    const r = FP.clientRisk("Agromax", inv, [{ status: "Confirmed", client: { name: "Agromax" }, fxRate: 1, items: [{ qty: 1000, unitPrice: 5 }] }], { terms: { creditLimitPLN: 20000 } }, "2026-09-11");
     approx(r.exposurePLN, 6000); approx(r.overduePLN, 6000); eq(r.maxOverdueDays, 11); approx(r.openOrdersPLN, 5000); approx(r.usagePct, 55); eq(r.avgDaysToPay, 20); eq(r.lastPaymentDate, "2026-08-21");
   });
   t("FN-5: a firm purchase's result — revenue − purchase − landed − direct − concessions + recoveries, per kg", () => {
@@ -1416,10 +1416,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v6992(){
   console.log("\n══ 44. v6.99.2: roles, terms block, people, archive, Fakturownia id, ISO/EU, agreements ══");
   const CPY = B("counterparty.domain.js");
-  t("CP-1/2/6/9: normalisation — roles from type+additionalTypes, terms from scattered fields (mirrors kept), ISO code, caches dropped; idempotent", () => {
+  t("CP-1/2/6/9: normalisation — roles from type+additionalTypes, terms from scattered fields (mirrors dropped since v7.28.1), ISO code, caches dropped; idempotent", () => {
     const r = CPY.normaliseCounterparty({ id: 1, name: "Agro-Hurt", type: "Client", additionalTypes: ["Supplier", "Warehouse"], country: "Poland", paymentTerms: "30 days", creditLimitPLN: 50000, defaultCurrency: "pln", finance: { x: 1 }, services: "reefer", linkedDocs: ["PO-1"], contacts: [{ name: "Ilona", email: "m@agro.pl" }] });
-    ok(r.changed); eq(r.contact.roles.join(","), "Client,Supplier,Warehouse"); eq(r.contact.terms.paymentDays, 30); eq(r.contact.terms.creditLimitPLN, 50000); eq(r.contact.terms.defaultCurrency, "PLN"); eq(r.contact.paymentTermsDays, 30, "mirror for PO-2/SO-4 readers");
-    eq(r.contact.countryIso, "PL"); ok(!("finance" in r.contact)); ok(!("linkedDocs" in r.contact)); ok(Array.isArray(r.contact.contacts) && r.contact.contacts.length === 1, "contacts kept — the screens read it"); eq(r.contact.people.length, 1); ok(r.contact.people === r.contact.contacts, "one list");
+    ok(r.changed); eq(r.contact.roles.join(","), "Client,Supplier,Warehouse"); eq(r.contact.terms.paymentDays, 30); eq(r.contact.terms.creditLimitPLN, 50000); eq(r.contact.terms.defaultCurrency, "PLN"); ok(!("paymentTermsDays" in r.contact), "the flat mirror is still written (v7.28.1)");
+    eq(r.contact.countryIso, "PL"); ok(!("finance" in r.contact)); ok(!("linkedDocs" in r.contact)); ok(!("contacts" in r.contact), "the old persons list is still written (v7.28.2)"); eq(r.contact.people.length, 1);   // v7.28.2: one list — people[] only
     ok(!CPY.normaliseCounterparty(r.contact).changed);
     eq(CPY.isEU("Poland"), true); eq(CPY.isEU("Egypt"), false); eq(CPY.isEU(""), null);
   });
@@ -2355,7 +2355,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(P.paymentText({ paymentBasis: "ADVANCE" }), P.paymentTermsLabel("ADVANCE", 0));
     eq(P.paymentText({ paymentTerms: "14 days" }), "14 days", "an old record keeps its text");
     eq(P.paymentText({ paymentTerms: "Other", paymentTermsOther: "LC at sight" }), "LC at sight");
-    eq(P.paymentText({}), "—"); { const party = { paymentDays: 21, paymentTermsDays: 21 }; eq(P.paymentText({ paymentBasis: "INVOICE" }, party), P.paymentTermsLabel("INVOICE", P.paymentDaysFor({ paymentBasis: "INVOICE" }, party)), "the party's days when the order has none — the form's own rule"); }
+    eq(P.paymentText({}), "—"); { const party = { paymentDays: 21, terms: { paymentDays: 21 } }; eq(P.paymentText({ paymentBasis: "INVOICE" }, party), P.paymentTermsLabel("INVOICE", P.paymentDaysFor({ paymentBasis: "INVOICE" }, party)), "the party's days when the order has none — the form's own rule"); }
     const fx = FX.fixture("marianna-erp_v6.99.72_schema-v2_2026-09-28T13-44-40.json"); if (fx) { const d = require(fx);
       ok(/^30 /.test(P.paymentText(d.pos.find(p => p.number === "PO-2026-0041"))), "PO-2026-0041 now shows its 30 days"); ok(/^30 /.test(P.paymentText(d.orders.find(o => o.number === "SO-2026-0025"))), "SO-2026-0025 too"); }
   });
@@ -3547,11 +3547,11 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     if (!d) return; const all = IC.termsToReview(ctxOf(d)); const of = k => all.filter(f => f.kind === k);
     eq(of("exw").map(f => [f.term, f.doc, f.record].join(" ")).join(), "EXW SO-2026-0015 SHP-2026-0026");
     eq(of("freight").map(f => [f.term, f.doc, f.record].join(" ")).join(), "EXW SO-2026-0015 SHP-2026-0026"); ok(/sea freight line of 8502 EUR/.test(of("freight")[0].text), of("freight")[0].text);
-    eq(of("customs").map(f => f.record).sort().join(" "), "SHP-2026-0004 SHP-2026-0013 SHP-2026-0014 SHP-2026-0015 SHP-2026-0016 SHP-2026-0017 SHP-2026-0018 SHP-2026-0021 SHP-2026-0022 SHP-2026-0023 SHP-2026-0024", "the v7.19.3 list");
+    eq(of("customs").map(f => f.record).sort().join(" "), "SHP-2026-0004 SHP-2026-0006 SHP-2026-0007 SHP-2026-0013 SHP-2026-0014 SHP-2026-0015 SHP-2026-0016 SHP-2026-0017 SHP-2026-0018 SHP-2026-0021 SHP-2026-0022 SHP-2026-0023 SHP-2026-0024 SHP-2026-0026","the v7.19.3 list");   // v7.28.7: the route decides the start — SHP-0006/0007 start at an unknown supplier address (FZ-36), SHP-0026 at Trieste
     eq(of("claim").length, 0, "the 4 claims on file are quality claims");
     ok(all.every(f => f.term && f.doc && f.record && f.text && f.recordKind), "a line without its term, document or record");
     const base = all.filter(f => f.kind !== "documents");   // v7.27.11 (FZ-16): the expected-document lines are a kind of their own
-    eq(base.length, 21, "21 lines on the 2 Oct file"); eq(new Set(base.map(f => f.record)).size, 19, "19 records");
+    eq(base.length, 28, "28 lines on the 2 Oct file (v7.28.7: the route decides where a shipment starts)"); eq(new Set(base.map(f => f.record)).size, 21, "21 records");
     eq(of("documents").length, (d.shipments || []).reduce((a, s) => a + IC.documentsMissingAtStage(s, ctxOf(d)).length, 0), "the expected-document lines are not one per missing document"); ok(of("documents").length > 0, "no expected document missing on the 2 Oct file");
     const docs = all.map(f => f.doc); eq(JSON.stringify(docs), JSON.stringify(docs.slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))), "grouped by the document");
     eq(IC.termsFindingsForDoc(all, "SO-2026-0015").map(f => f.kind).sort().join(), "carrier,exw,freight", "SO-0015's view");
@@ -3606,7 +3606,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const sea = arr => ({ number: "SHP-C", status: "Booked", purpose: "OUTBOUND", governingSoRef: "SO-P", soRefs: ["SO-P"], originLocationId: 2, legs: [{ mode: "Road", fromLocationId: 2, toLocationId: 5 }, { mode: "Sea", fromLocationId: 5, toLocationId: arr }] });
     eq(W(sea(3), [], so("CIF", 3)), ""); eq(W(sea(6), [], so("CFR", 3)), "sell:CFR:sea:3>6", "the sea leg arrives at another port"); eq(W(sea(6), [], so("CFR", 4)), "", "a named place that is not a port is check 1's");
     eq(W({ ...sea(null), bookings: [{ podId: 6 }] }, [], so("CIF", 3)), "sell:CIF:sea:3>6", "the booking's port of discharge when the leg has none");
-    if (!d) return; eq(IC.termsToReview(ctxOf(d)).filter(f => f.kind === "places").length, 0);
+    // v7.28.7 (Batch L): the route decides where a shipment starts — on the 2 Oct (previous-season test) file four routes do not start
+    // at their purchase's named place: SHP-0006 / -0007 (FCA at Koper; their first leg points at a supplier address by an old id — FZ-36)
+    // and SHP-0021 / -0026 (EXW at the producer; their routes begin at Trieste)
+    if (!d) return; eq(IC.termsToReview(ctxOf(d)).filter(f => f.kind === "places").map(f => f.record).sort().join(), "SHP-2026-0006,SHP-2026-0007,SHP-2026-0021,SHP-2026-0026");
   });
   t("A-INC-2 (5, v7.20.5): a carrier of ours on a leg the client or the supplier pays — the one a transport order would go to (the unit's, else the booking's forwarder); SHP-0026's sea leg names DCS NAKAPAL on the 2 Oct file", () => {
     const sh = (v, extra) => ({ number: "SHP-K", status: "Booked", purpose: "OUTBOUND", governingSoRef: "SO-K", soRefs: ["SO-K"], legs: [{ mode: "Road", vehicles: v }], ...(extra || {}) });
@@ -3908,7 +3911,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const recs = (store, path) => { let rs = (d[store] || []).filter(r => r && typeof r === "object"); (path ? path.split(".") : []).forEach(k => { rs = rs.flatMap(r => (r[k] || []).filter(x => x && typeof x === "object")); }); return rs; };
     const M = [["contacts", "", "types.ts", "Counterparty"], ["pos", "", "types.ts", "POrder"], ["pos", "items", "types.ts", "POLine"], ["orders", "", "types.ts", "SOrder"], ["orders", "items", "types.ts", "SOLine"], ["lots", "", "types.ts", "Lot"], ["lots", "movements", "types.ts", "LotMovement"], ["lots", "costs", "types.ts", "LotCostLine"], ["shipments", "", "types.ts", "Shipment"], ["shipments", "legs", "types.ts", "ShipmentLeg"], ["shipments", "legs.vehicles", "types.ts", "TransportUnit"], ["shipments", "goods", "types.ts", "ShipmentGoodsLine"], ["shipments", "costs", "types.ts", "ShipmentCostLine"], ["invoices", "", "invoicing.ts", "Invoice"], ["invoices", "positions", "invoicing.ts", "InvoicePosition"], ["claims", "", "claims.domain.ts", "Claim"], ["operationalCosts", "", "operationalCosts.ts", "OperationalCost"]];
     const gaps = [];
-    M.forEach(([store, path, file, name]) => { const have = membersOf(file, name); ok(have, name + " not found"); const keys = new Set(recs(store, path).flatMap(r => Object.keys(r))); const miss = [...keys].filter(k => !have.has(k)); if (miss.length) gaps.push(`${name}: ${miss.slice(0, 4).join(", ")}${miss.length > 4 ? ` +${miss.length - 4}` : ""}`); });
+    // v7.28.x (Batch L): a field retired by Batch L is no longer declared — the old file still stores it, and the save-time tidy-up moves
+    // it into its owner and drops it; it must be one of these, never a new undeclared field
+    const RETIRED = new Set(["lostValueEUR", "totalCostEUR", "defectValueEUR", "recoveredEUR", "requestedEUR", "acceptedEUR", "plnPerEur", "egpPerEur", "expectedDeliveryDate", "linkedLots", "linkedInvoices", "linkedShipments", "linkedSalesOrders", "contacts", "additionalTypes", "paymentTermsDays", "creditLimitPLN", "defaultCurrency", "actualLoadDate", "actualUnloadDate"]);
+    M.forEach(([store, path, file, name]) => { const have = membersOf(file, name); ok(have, name + " not found"); const keys = new Set(recs(store, path).flatMap(r => Object.keys(r))); const miss = [...keys].filter(k => !have.has(k) && !RETIRED.has(k)); if (miss.length) gaps.push(`${name}: ${miss.slice(0, 4).join(", ")}${miss.length > 4 ? ` +${miss.length - 4}` : ""}`); });
     eq(gaps.join(" | "), "", "stored but undeclared");
     ok(membersOf("types.ts", "StoreRecords") && ["contacts", "pos", "orders", "lots", "shipments", "invoices", "auditLog", "planningSheets"].every(k => membersOf("types.ts", "StoreRecords").has(k)), "the catalogue of stored lists");
   });
@@ -4135,7 +4141,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const N = B("invoiceNotes.domain.js"), INV = B("invoicing.js"); const fsx = require("fs"), px = require("path");
   const order = { number: "SO-2026-0040", sellIncoterm: "CIF", acidNo: "4100123456789", items: [{ product: "Apples", variety: "Gala", size: "65-70", qty: 19000, unit: "kg", sourceType: "STOCK", sourceRef: "LOT-1" }] };
   const lots = [{ number: "LOT-1", cnCode: "0808 10 80", origin: "Poland" }];
-  const sh = { number: "SHP-1", status: "Loaded", legs: [{ mode: "Road", fromLocationId: 7, units: [{ id: 1, truckPlate: "WGR 12345", trailerPlate: "WGR 6789X", tempRecorderNo: "TR-55" }] }, { mode: "Sea", units: [{ id: 2, containerNumber: "MSKU1234567" }] }],
+  const sh = { number: "SHP-1", status: "Loaded", legs: [{ mode: "Road", fromLocationId: 7, vehicles: [{ id: 1, truckPlate: "WGR 12345", trailerPlate: "WGR 6789X", tempRecorderNo: "TR-55" }] }, { mode: "Sea", vehicles: [{ id: 2, containerNumber: "MSKU1234567" }] }],   // v7.28.9: the trucks' own list
     goods: [{ soRef: "SO-2026-0040", qtyKg: 19422, grossKg: 21100, boxes: 1618, packaging: "Wooden box 12 kg" }, { soRef: "SO-OTHER", qtyKg: 999 }] };
   t("A-INV-4 (v7.26.4): the invoice's notes are filled from the sale, its shipments and lots — terms, ACID, each line's CN code and origin, net and gross weight, packages, trucks, containers, recorders — and the origin declaration for goods sold from Poland", () => {
     const txt = N.exportNotesForSale(order, { shipments: [sh], lots, deliveryPlace: "Alexandria", fromPoland: true });
@@ -4198,7 +4204,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(TF.salesOfPO({ number: "PO-7" }, orders, lots).length, 0); eq(TF.posOfSale(orders[0], [{ number: "PO-1" }, { number: "PO-9" }], lots).map(p => p.number).join(), "PO-1");
     eq(TF.poDirectFromSOs({ number: "PO-1" }, orders, lots), true); eq(TF.poDirectFromSOs({ number: "PO-1" }, orders.map(o => ({ ...o, status: o.number === "SO-3" ? "Draft" : "Cancelled" })), lots), false);
     const sc = fsx.readFileSync(px.join(__dirname, "../src/ShipmentCreate.tsx"), "utf8");
-    ok((sc.match(/salesOfPO\(selectedPO, orders \|\| \[\], lots \|\| \[\], \{ includeDrafts: true \}\)/g) || []).length === 2 && /posOfSale\(selectedSO, pos \|\| \[\], lots \|\| \[\]\)/.test(sc), "the shipment window does not read the PO's sales through its lots");
+    ok((sc.match(/salesOfPO\(selectedPO, orders \|\| \[\], lots \|\| \[\], \{ includeDrafts: true \}\)/g) || []).length === 3 && (sc.match(/posOfSale\(selectedSO, pos \|\| \[\], lots \|\| \[\]\)/g) || []).length >= 2, "the shipment window does not read the PO's sales through its lots");   // v7.29.0: the journey proposal reads the same two helpers
   });
 })();
 
@@ -4476,6 +4482,265 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const gap = DC.soDatesChain(so, { shipments: [], invoices: [{ ...invoices[0], paymentStatus: "Unpaid" }] });
     eq(gap.filter(s => s.gap).map(s => s.label).join(), "Loaded,Delivered", "the gap before the invoice");
     eq(DC.poDatesChain({ number: "PO-1", orderDate: "2026-09-28" }, { lots: [{ poRef: "PO-1", movements: [{ type: "IN", date: "2026-10-02" }] }] }).find(s => s.label === "Received").date, "2026-10-02");
+  });
+})();
+
+// ══ v7.28.0 — Batch L (RM-2 F-1): a shipment is written in its clean shape ══
+(function v72800(){
+  console.log("\n══ v7.28.0 — Batch L: the truck's dates in one pair ══");
+  const SS = B("storeShapes.js"), SM = B("shipmentModel.domain.js");
+  t("Batch L (v7.28.0): writing a shipment moves a truck's older date pair into loadedAt / unloadedAt (only where empty) and drops it; a clean shipment is returned unchanged (same object)", () => {
+    const sh = { number: "S", legs: [{ vehicles: [{ actualLoadDate: "2026-10-01", actualUnloadDate: "2026-10-03" }, { loadedAt: "2026-10-02", actualLoadDate: "2026-09-30" }] }] };
+    const out = SS.shapeShipment(sh); const [a, b] = out.legs[0].vehicles;
+    eq([a.loadedAt, a.unloadedAt, "actualLoadDate" in a, "actualUnloadDate" in a].join(), "2026-10-01,2026-10-03,false,false");
+    eq(b.loadedAt, "2026-10-02", "the newer date was overwritten"); ok(!("actualLoadDate" in b), "the older field stayed");
+    const clean = { number: "C", legs: [{ vehicles: [{ loadedAt: "2026-10-01" }] }] }; ok(SS.shapeShipment(clean) === clean, "a clean record is rewritten");
+    eq(SM.unitLoadedAt(out.legs[0].vehicles[0]), "2026-10-01");
+  });
+})();
+
+// ══ v7.28.1 — Batch L · FZ-03: a company's terms in one block ══
+(function v72801(){
+  console.log("\n══ v7.28.1 — Batch L: the company's terms ══");
+  const CP = B("counterparty.domain.js");
+  t("Batch L (v7.28.1): writing a company folds the flat payment days, credit limit and currency into terms{} (where the terms are empty) and drops them; the document copy takes the currency from the terms and no retired payment-terms text", () => {
+    const r = CP.normaliseCounterparty({ id: 1, name: "X", type: "Client", paymentTermsDays: 30, creditLimitPLN: 50000, defaultCurrency: "eur", people: [] });
+    eq([r.contact.terms.paymentDays, r.contact.terms.creditLimitPLN, r.contact.terms.defaultCurrency].join(), "30,50000,EUR");
+    ok(!("paymentTermsDays" in r.contact) && !("creditLimitPLN" in r.contact) && !("defaultCurrency" in r.contact), "a flat copy stayed");
+    const kept = CP.normaliseCounterparty({ id: 2, name: "Y", type: "Client", terms: { paymentDays: 14 }, paymentTermsDays: 30 }); eq(kept.contact.terms.paymentDays, 14, "the flat copy overwrote the terms");
+    const copy = CP.companyCopy({ id: 3, name: "Z", terms: { defaultCurrency: "EUR" }, paymentTerms: "old text", people: [] }); eq(copy.defaultCurrency, "EUR"); ok(!("paymentTerms" in copy) && !("paymentTermsOther" in copy), "the retired text travels on documents");
+  });
+})();
+
+// ══ v7.28.2 — Batch L · FZ-03: a company's persons in people[] ══
+(function v72802(){
+  console.log("\n══ v7.28.2 — Batch L: the company's persons ══");
+  const CP = B("counterparty.domain.js");
+  t("Batch L (v7.28.2): writing a company moves its old contacts[] into people[] (when people[] is empty) and drops it; peopleOf reads people[] (the old list only for a record written before)", () => {
+    const r = CP.normaliseCounterparty({ id: 1, name: "X", type: "Client", contacts: [{ id: 1, name: "Anna", email: "a@x" }] });
+    eq(r.contact.people.map(p => p.name).join(), "Anna"); ok(!("contacts" in r.contact), "the old list stayed");
+    const both = CP.normaliseCounterparty({ id: 2, name: "Y", type: "Client", people: [{ id: 2, name: "Ola" }], contacts: [{ id: 3, name: "Old" }] }); eq(both.contact.people.map(p => p.name).join(), "Ola", "the old list overwrote people[]");
+    eq(CP.peopleOf({ contacts: [{ name: "B" }] }).map(p => p.name).join(), "B"); eq(CP.peopleOf({ people: [{ name: "C" }], contacts: [{ name: "D" }] }).map(p => p.name).join(), "C"); eq(CP.peopleOf({}).length, 0);
+    eq((CP.personFor({ people: [{ name: "E", email: "e@x", role: "Buyer" }] }, "Buyer") || {}).name, "E");
+  });
+})();
+
+// ══ v7.28.3 — Batch L · FZ-03: a company's roles in roles[]; the planning sheet's lists ══
+(function v72803(){
+  console.log("\n══ v7.28.3 — Batch L: the company's roles ══");
+  const CP = B("counterparty.domain.js"); const fsx = require("fs"), px = require("path");
+  t("Batch L (v7.28.3): a company's roles are roles[] with the primary type among them; the old additionalTypes is folded in and dropped on save; rolesOf reads both for a record written before", () => {
+    const r = CP.normaliseCounterparty({ id: 1, name: "X", type: "Client", additionalTypes: ["Supplier"], people: [] });
+    eq(r.contact.roles.join(), "Client,Supplier"); ok(!("additionalTypes" in r.contact), "the old field stayed");
+    eq(CP.rolesOf({ type: "Carrier", additionalTypes: ["Warehouse"] }).join(), "Carrier,Warehouse"); eq(CP.rolesOf({ type: "Client", roles: ["Supplier"] }).join(), "Client,Supplier");
+    ok(!("additionalTypes" in CP.companyCopy({ id: 2, name: "Y", type: "Client", roles: ["Client"], people: [] })), "the document copy carries the old field");
+  });
+  t("v7.28.3: the planning sheet's client, supplier and carrier lists hold the companies' NAMES (a note in the middle of the line had hidden the end since v7.10.2)", () => {
+    const ps = fsx.readFileSync(px.join(__dirname, "../src/PlanningSheet.tsx"), "utf8");
+    ok(/rolesOf\(c\)\.includes\(r\)\)\.map\(\(c: any\) => c\.name\)\.filter\(Boolean\)\.sort/.test(ps), "the lists still hold companies");
+  });
+})();
+
+// ══ v7.28.5 — Batch L · A-PO-3: one promised date; no stored link copies; the hidden customs rule restored ══
+(function v72805(){
+  console.log("\n══ v7.28.5 — Batch L: the PO's one promised date ══");
+  const PO = B("po.domain.js"); const fsx = require("fs"), px = require("path");
+  t("Batch L (v7.28.5): a PO's one promised date is named by its rule — handed over (E / F), shipped (C), delivered (D); the expected arrival is a D-rule's promised date or the PO's trucks' planned delivery; the tidy-up folds the old date and drops it with the stored link copies", () => {
+    eq([PO.promisedDateKind({ buyIncoterm: "FCA" }), PO.promisedDateKind({ buyIncoterm: "CIF" }), PO.promisedDateKind({ buyIncoterm: "DDP" })].join(), "handover,shipment,delivery");
+    eq(PO.promisedDateLabel({ buyIncoterm: "DAP" }), "Delivery date"); eq(PO.promisedDateLabel({ buyIncoterm: "EXW" }, "pl"), "Data załadunku");
+    eq(PO.poExpectedArrival({ number: "PO-1", buyIncoterm: "DAP", loadingDate: "2026-11-02" }), "2026-11-02");
+    eq(PO.poExpectedArrival({ number: "PO-2", buyIncoterm: "FCA", loadingDate: "2026-11-01" }, [{ status: "Booked", poRefs: ["PO-2"], legs: [{ vehicles: [{ plannedDeliveryDate: "2026-11-04" }] }] }]), "2026-11-04");
+    eq(PO.poExpectedArrival({ number: "PO-3", buyIncoterm: "EXW", loadingDate: "2026-11-01" }, []), "", "a guessed arrival");
+    const r = PO.normalisePO({ number: "PO-4", buyIncoterm: "FCA", expectedDeliveryDate: "2026-10-05", linkedInvoices: ["X"], linkedLots: ["L"] });
+    eq(r.po.loadingDate, "2026-10-05"); ok(!("expectedDeliveryDate" in r.po) && !("linkedInvoices" in r.po) && !("linkedLots" in r.po), "an old field stayed");
+    const kept = PO.normalisePO({ number: "PO-5", loadingDate: "2026-10-01", expectedDeliveryDate: "2026-10-09" }); eq(kept.po.loadingDate, "2026-10-01", "the old date overwrote the promised one");
+  });
+  t("v7.28.5: the shipment editor's save applies the customs rule again (a note in the middle of the line had hidden it since v7.27.9)", () => {
+    ok(/\(cr\.known\) fin = \{ \.\.\.fin, customs:/.test(fsx.readFileSync(px.join(__dirname, "../src/ShipmentEditor.tsx"), "utf8").split("\n").filter(l => !/^\s*\/\//.test(l)).map(l => l.slice(0, Math.max(0, l.indexOf("//")) || l.length)).join("\n")), "the customs rule is still hidden behind a note");
+  });
+})();
+
+// ══ v7.28.6 — Batch L · FZ-13: a claim's amounts in its own currency ══
+(function v72806(){
+  console.log("\n══ v7.28.6 — Batch L: the claim's own currency ══");
+  const SS = B("storeShapes.js");
+  t("Batch L (v7.28.6): writing a claim moves its EUR-named copies into the current fields (where empty) and drops them — the rate too", () => {
+    const c = SS.shapeClaim({ number: "CLM-1", currency: "EUR", requestedAmount: 91, requestedEUR: 91, acceptedAmount: 45, acceptedEUR: 45, plnPerEur: "4.20", fxToPLN: null, lostValueEUR: "", defectValueEUR: 0 });
+    eq([c.requestedAmount, c.acceptedAmount, c.fxToPLN].join(), "91,45,4.20"); ok(!["requestedEUR", "acceptedEUR", "plnPerEur", "lostValueEUR", "defectValueEUR"].some(k => k in c), "an EUR copy stayed");
+    const clean = { number: "CLM-2", currency: "PLN", requestedAmount: 10 }; ok(SS.shapeClaim(clean) === clean, "a clean claim is rewritten");
+  });
+})();
+
+// ══ v7.28.7 — Batch L · FZ-08: the route owns the places, the trucks the actual dates ══
+(function v72807(){
+  console.log("\n══ v7.28.7 — Batch L: the shipment's own copies ══");
+  const SS = B("storeShapes.js"), TF = B("tradeFlow.domain.js");
+  t("Batch L (v7.28.7): a shipment starts where its route starts and ends where it ends — its own copies (the guessed origin 1, the test place 10) neither decide nor survive a save; its own actual dates move onto the trucks when none has one", () => {
+    const sh = { number: "S", originLocationId: 1, destinationLocationId: 10, actualLoadingDate: "2026-10-01", legs: [{ fromLocationId: 114, toLocationId: 126, vehicles: [{ id: 1 }] }] };
+    eq([TF.shipmentStartPlaceId(sh), TF.shipmentEndPlaceId(sh)].join(), "114,126");
+    const o = SS.shapeShipment(sh); ok(!("originLocationId" in o) && !("destinationLocationId" in o) && !("actualLoadingDate" in o), "a copy survived the save");   // v7.28.8: the origin goes too
+    eq(o.legs[0].vehicles[0].loadedAt, "2026-10-01", "the shipment's own date was lost");
+    const noRoute = SS.shapeShipment({ number: "T", originLocationId: 5, legs: [{ vehicles: [] }] }); eq(noRoute.legs[0].fromLocationId, 5, "the only place was lost");
+  });
+})();
+
+// ══ v7.28.8 — FZ-36: the route places repaired once ══
+(function v72808(){
+  console.log("\n══ v7.28.8 — FZ-36: route places repaired ══");
+  const PR = B("placeRepair.domain.js");
+  t("FZ-36 (v7.28.8): an unknown route place is listed once per shipment with where it sits; filled where an EXW / FCA purchase's supplier (or a D-rule sale's client) has one address; otherwise left to the user; the repair writes the chosen place everywhere it appears in that shipment", () => {
+    const known = id => ["7", "9", "SUP-1", "CLI-1"].includes(String(id));
+    const contacts = [{ id: 11, name: "Farm" }, { id: 12, name: "Client" }, { id: 13, name: "Two-site farm" }];
+    const sitesOf = c => ({ 11: [{ id: "SUP-1", name: "Farm" }], 12: [{ id: "CLI-1", name: "Client" }], 13: [{ id: "A" }, { id: "B" }] })[c.id] || [];
+    const pos = [{ number: "PO-1", buyIncoterm: "EXW", supplier: { id: 11 } }, { number: "PO-2", buyIncoterm: "EXW", supplier: { id: 13 } }, { number: "PO-3", buyIncoterm: "CIF", supplier: { id: 11 } }];
+    const orders = [{ number: "SO-1", sellIncoterm: "DAP", client: { id: 12 } }];
+    const shipments = [
+      { number: "S1", status: "Booked", poRefs: ["PO-1"], legs: [{ fromLocationId: 999, toLocationId: 7, vehicles: [{ pickupLocationId: 999 }] }] },
+      { number: "S2", status: "Booked", poRefs: ["PO-2"], legs: [{ fromLocationId: 998, toLocationId: 7 }] },
+      { number: "S3", status: "Booked", poRefs: ["PO-3"], legs: [{ fromLocationId: 997, toLocationId: 7 }] },
+      { number: "S4", status: "Loaded", governingSoRef: "SO-1", legs: [{ fromLocationId: 7, toLocationId: 996 }] },
+      { number: "S5", status: "Cancelled", poRefs: ["PO-1"], legs: [{ fromLocationId: 995, toLocationId: 7 }] }];
+    const items = PR.placesToRepair(shipments, { known, pos, orders, contacts, sitesOf });
+    eq(items.map(i => `${i.shipment}:${i.fill ? i.fill.id : "pick"}`).join(), "S1:SUP-1,S2:pick,S3:pick,S4:CLI-1", "the list or its fills");
+    eq(items[0].where.join(" / "), "leg 1 start / leg 1 truck 1 loading");
+    const r = PR.repairPlace(shipments[0], 999, "SUP-1"); eq([r.legs[0].fromLocationId, r.legs[0].vehicles[0].pickupLocationId, r.legs[0].toLocationId].join(), "SUP-1,SUP-1,7");
+    eq(PR.placesToRepair([r], { known, pos, orders, contacts, sitesOf }).length, 0, "the repaired route still listed");
+  });
+})();
+
+// ══ v7.28.9 — Batch L · FZ-08: the trucks own their facts ══
+(function v72809(){
+  console.log("\n══ v7.28.9 — Batch L: the leg's copies ══");
+  const SS = B("storeShapes.js");
+  t("Batch L (v7.28.9): writing a shipment drops a leg's truck and price copies, moving a value only the leg held onto its first truck", () => {
+    const o = SS.shapeShipment({ number: "S", legs: [{ mode: "Road", truckPlate: "WX123", driverName: "Jan", costAmount: 1200, costPLN: 5100, costCurrency: "EUR", vehicles: [{ id: 1 }] }] });
+    const l = o.legs[0]; ok(!["truckPlate", "driverName", "costAmount", "costPLN"].some(k => k in l), "a copy stayed on the leg"); eq(l.costCurrency, "EUR", "the leg's currency went");
+    eq([l.vehicles[0].truckPlate, l.vehicles[0].driverName, l.vehicles[0].costAmount].join(), "WX123,Jan,1200");
+    const kept = SS.shapeShipment({ number: "T", legs: [{ truckPlate: "OLD", vehicles: [{ truckPlate: "NEW", costAmount: 900 }], costAmount: 50 }] }); eq([kept.legs[0].vehicles[0].truckPlate, kept.legs[0].vehicles[0].costAmount].join(), "NEW,900", "the leg's copy overwrote the truck");
+  });
+})();
+
+// ══ v7.28.10 — Batch L · FZ-03: a company's address from its parts ══
+(function v72810(){
+  console.log("\n══ v7.28.10 — Batch L: the company's address ══");
+  const CP = B("counterparty.domain.js");
+  t("Batch L (v7.28.10): a company's address line comes from its parts once complete (without the country, which documents print on its own line; a place's line keeps it); until then the fuller one-line text; the one-line copy goes on save once the parts are complete", () => {
+    const done = { id: 1, name: "A", addr: { street: "ul. Piękna 13", postcode: "05-555", city: "Tarczyn", country: "Poland" }, address: "old text" };
+    eq(CP.companyAddressLine(done), "ul. Piękna 13, 05-555 Tarczyn"); ok(/Poland/.test(CP.companyAddressLine(done, { withCountry: true })), "a place's line lost the country");
+    eq(CP.companyAddressLine({ addr: { city: "BELSK" }, address: "Bartodzieje 16, 05-622 Belsk Duży" }), "Bartodzieje 16, 05-622 Belsk Duży", "partial parts replaced a fuller line");
+    ok(!("address" in CP.normaliseCounterparty({ ...done, type: "Client", people: [] }).contact), "the one-line copy stayed once the parts were complete");
+    ok("address" in CP.normaliseCounterparty({ id: 2, name: "B", type: "Client", address: "Only a line", addr: { city: "X" }, people: [] }).contact, "the only address went");
+  });
+})();
+
+// ══ v7.28.11 — Batch L · FZ-03: a company's country is its code ══
+(function v72811(){
+  console.log("\n══ v7.28.11 — Batch L: the company's country ══");
+  const CP = B("counterparty.domain.js");
+  t("Batch L (v7.28.11): a company's country is its code — the name comes from the list; the tidy-up drops the name and the address's copy once the code is known; a name without a known code stays until it is picked", () => {
+    CP.setUserCountries([{ iso: "PL", name: "Poland", eu: true }, { iso: "JO", name: "Jordan", eu: false }]);
+    eq(CP.companyCountryName({ countryIso: "JO" }), "Jordan"); eq(CP.companyCountryIso({ country: "Poland" }), "PL");
+    const r = CP.normaliseCounterparty({ id: 1, name: "X", type: "Client", country: "Poland", addr: { city: "Tarczyn", country: "Poland" }, people: [] }).contact;
+    eq(r.countryIso, "PL"); ok(!("country" in r) && !("country" in (r.addr || {})), "a name copy stayed");
+    const u = CP.normaliseCounterparty({ id: 2, name: "Y", type: "Client", country: "Atlantis", people: [] }).contact; eq(u.country, "Atlantis", "an unknown country's only name went");
+    eq(CP.companyCopy({ id: 3, name: "Z", countryIso: "PL", people: [] }).country, "Poland", "the document copy lost the printed name");
+    CP.setUserCountries([]);
+  });
+})();
+
+// ══ v7.29.0 — SC-15: the journey proposed from the two rules — the thirteen scenarios of the 20 Oct review ══
+(function v72900(){
+  console.log("\n══ v7.29.0 — SC-15: the journey proposal ══");
+  const JP = B("journeyProposal.domain.js");
+  const PORTS = new Set(["KOP", "ALX", "DAM", "MER"]); const ctx = { isPort: id => PORTS.has(String(id)), ourWarehouse: () => "WH", siteOf: p => p && p.site };
+  const P = (t, at) => ({ buyIncoterm: t, destinationLocationId: at, supplier: { site: "SUP" } }), O = (t, at) => ({ sellIncoterm: t, destinationLocationId: at, client: { site: "CLI" } });
+  const legs = r => r.legs.map(l => `${l.mode}:${l.fromLocationId ?? "?"}>${l.toLocationId ?? "?"}`).join(" ");
+  t("SC-15 (v7.29.0): the thirteen scenarios — our legs follow from where the PO's rule starts our part and the SO's rule ends it; a port the rules do not name is left to pick", () => {
+    eq(legs(JP.proposeJourney(P("EXW", "SUP"), O("CIF", "ALX"), ctx)), "Road:SUP>? Sea:?>ALX", "1 EXW + CIF");
+    eq(legs(JP.proposeJourney(P("CIF", "KOP"), null, ctx)), "Road:KOP>WH", "2 CIF into stock");
+    eq(JP.proposeJourney(P("CIF", "KOP"), O("EXW", "KOP"), ctx).legs.length, 0, "3 sold EXW at the port");
+    eq(legs(JP.proposeJourney(P("CIF", "KOP"), O("DDP", "CLI"), ctx)), "Road:KOP>CLI", "4 CIF + DDP");
+    eq(legs(JP.proposeJourney(P("FCA", "SUP"), O("DAP", "CLI"), ctx)), "Road:SUP>CLI", "5 FCA + DAP");
+    eq(JP.proposeJourney(P("EXW", "SUP"), O("EXW", "SUP"), ctx).legs.length, 0, "6 EXW + EXW");
+    eq(JP.proposeJourney(null, O("FCA", "WH"), { ...ctx, lotPlace: () => "WH" }).legs.length, 0, "7 from stock, collected at our warehouse");
+    ok(/supplier delivers/.test(JP.proposeJourney(P("DAP", "CLI"), O("DAP", "CLI"), ctx).note), "8 DAP straight to the client");
+    eq(legs(JP.proposeJourney(P("FOB", "DAM"), O("DAP", "CLI"), ctx)), "Sea:DAM>? Road:?>CLI", "9 FOB + DAP");
+    eq(JP.proposeJourney(P("CFR", "MER"), O("CFR", "MER"), ctx).legs.length, 0, "10 a sale while afloat");
+    eq(legs(JP.proposeJourney(P("EXW", "UA"), O("DAP", "CLI"), ctx)), "Road:UA>CLI", "11 EXW Ukraine + DAP");
+    eq(JP.proposeJourney(P("DDP", "WH"), O("FCA", "WH"), ctx).legs.length, 0, "12 DDP into our warehouse, collected there");
+    eq(legs(JP.proposeJourney(P("FCA", "SUP"), O("DDP", "JO"), ctx)), "Road:SUP>JO", "13 FCA + DDP Jordan");
+    ok(JP.proposeJourney(P("EXW", "SUP"), O("CIF", "ALX"), ctx).legs[0].pickTo, "the port of loading is not marked to pick");
+  });
+})();
+
+// ══ v7.29.1 — FZ-39 / FZ-41: insurance by shipment; the rule that fits what the shipment records ══
+(function v72901(){
+  console.log("\n══ v7.29.1 — FZ-41: the rule that fits ══");
+  const IC = B("incoterms.domain.js");
+  const sale = (t) => ({ number: "SO-1", status: "Confirmed", sellIncoterm: t }), buy = (t) => ({ number: "PO-1", status: "Confirmed", buyIncoterm: t });
+  const out = (extra) => ({ number: "S", status: "Loaded", purpose: "OUTBOUND", governingSoRef: "SO-1", soRefs: ["SO-1"], legs: [{ mode: "Sea" }], ...extra });
+  const inb = (extra) => ({ number: "T", status: "Loaded", purpose: "INBOUND", poRefs: ["PO-1"], legs: [{ mode: "Road" }], ...extra });
+  const rec = (sh, ctx) => IC.ruleRecommendations(sh, ctx).map(r => `${r.side}:${r.from}>${r.to}`).join();
+  t("FZ-41 (v7.29.1): the Incoterms rules as written — the system recommends the twin rule that fits what the shipment records (insurance; who cleared the import or the export); nothing changes by itself", () => {
+    eq(rec(out({ documents: [{ type: "Insurance certificate", status: "Not bought" }] }), { orders: [sale("CIF")] }), "sell:CIF>CFR", "CIF not insured");
+    eq(rec(out({ documents: [{ type: "Insurance certificate", status: "Have it" }] }), { orders: [sale("CFR")] }), "sell:CFR>CIF", "CFR insured by us");
+    eq(rec(inb({ customs: { applies: true, party: "SUPPLIER", docType: "SAD" } }), { pos: [buy("DAP")] }), "buy:DAP>DDP", "DAP cleared by the supplier");
+    eq(rec(inb({ customs: { applies: true, party: "OUR_BROKER", docType: "SAD" } }), { pos: [buy("DDP")] }), "buy:DDP>DAP", "DDP cleared by us");
+    eq(rec(out({ customs: { applies: true, party: "CLIENT_BROKER", docType: "SAD" } }), { orders: [sale("DDP")] }), "sell:DDP>DAP", "DDP cleared by the client");
+    eq(rec(out({ customs: { applies: true, party: "OUR_BROKER", docType: "EX1" } }), { orders: [sale("EXW")] }), "sell:EXW>FCA", "EXW, export cleared by us");
+    eq(rec(out({ documents: [{ type: "Insurance certificate", status: "Have it" }] }), { orders: [sale("CIF")] }), "", "a CIF sale insured fits");
+    eq(IC.insuranceMissing(out({ documents: [{ type: "Insurance certificate", status: "Not bought" }] }), [sale("CIF")]).length, 0, "the 'insurance missing' line still shows beside the recommendation");
+    const f = IC.shipmentTermsFindings(out({ documents: [{ type: "Insurance certificate", status: "Not bought" }] }), { orders: [sale("CIF")] }).find(x => x.kind === "rule");
+    ok(f && f.recommend && f.recommend.to === "CFR" && /the rule that fits is CFR/.test(f.text), "the Terms-to-review line is missing");
+  });
+})();
+
+// ══ v7.29.2 — the Incoterms audit (owner 20 Oct: "check the code that you did not add any exemptions to the incoterms") ══
+(function v72902(){
+  console.log("\n══ v7.29.2 — the Incoterms audit ══");
+  const IC = B("incoterms.domain.js"), PR = B("placeRepair.domain.js");
+  t("v7.29.2 audit: Incoterms 2020 as written — a FAS / FOB named port is the port of shipment (the risk stays the seller's until alongside / on board); a C rule's named port is after the vessel; a CIF / CIP purchase expects the supplier's insurance certificate (A5); a C or D sale collected by the client gets FCA recommended; under E / F rules our part starts at the PO's named place", () => {
+    eq(IC.riskPassPos({ legs: [{ mode: "Road", fromLocationId: "POL", toLocationId: "X" }] }, "FOB", "POL"), 3, "a FOB port treated as after the vessel");
+    eq(IC.riskPassPos({ legs: [{ mode: "Road", fromLocationId: "POD", toLocationId: "X" }] }, "CIF", "POD"), 0, "a CIF port of destination not after the vessel");
+    const inb = { number: "T", status: "Arrived", purpose: "INBOUND", poRefs: ["PO-1"], legs: [{ mode: "Road" }] };
+    ok(IC.expectedDocuments(inb, { pos: [{ number: "PO-1", status: "Confirmed", buyIncoterm: "CIF" }], orders: [] }).some(d => d.type === "Insurance certificate"), "a CIF purchase does not expect the supplier's insurance certificate");
+    const pick = { number: "S", status: "Loaded", purpose: "OUTBOUND", mode: "Client pickup", governingSoRef: "SO-1", soRefs: ["SO-1"], legs: [{ mode: "Road" }] };
+    eq(IC.ruleRecommendations(pick, { orders: [{ number: "SO-1", status: "Confirmed", sellIncoterm: "CIF" }] }).map(r => r.to).join(), "FCA", "a CIF sale collected by the client");
+    const items = PR.placesToRepair([{ number: "S1", status: "Booked", poRefs: ["PO-9"], legs: [{ fromLocationId: 999, toLocationId: "WH" }] }], { known: id => ["WH", "TERM"].includes(String(id)), pos: [{ number: "PO-9", buyIncoterm: "FCA", destinationLocationId: "TERM", supplier: { id: 1 } }], contacts: [{ id: 1 }], sitesOf: () => [{ id: "SUP" }] });
+    eq(items[0].fill && items[0].fill.id, "TERM", "FCA at a terminal repaired to the supplier's address");
+  });
+})();
+
+// ══ v7.29.3 — FZ-38: a sale delivered by the supplier's own truck ══
+(function v72903(){
+  console.log("\n══ v7.29.3 — FZ-38: the supplier's truck delivers the sale ══");
+  const SOD = B("so.domain.js");
+  t("FZ-38 (v7.29.3): a DAP / DPU / DDP purchase delivered straight to our client — the supplier's truck delivers the sale (same named place), so the sale's delivery date is that truck's unloading; a truck's unloading is read through the one helper (not only 'deliveredAt')", () => {
+    const so = { number: "SO-1", sellIncoterm: "DAP", destinationLocationId: "CLI", items: [{ sourceRef: "LOT-1" }] };
+    const lots = [{ number: "LOT-1", poRef: "PO-1" }], pos = [{ number: "PO-1", buyIncoterm: "DAP", destinationLocationId: "CLI" }];
+    const truck = { number: "SHP-SUP", status: "Delivered", arrangedBy: "SUPPLIER", purpose: "INBOUND", poRefs: ["PO-1"], legs: [{ mode: "Road", vehicles: [{ unloadedAt: "2026-10-18" }] }] };
+    eq(SOD.shipmentsDeliveringSale(so, [truck], { pos, lots }).map(s => s.number).join(), "SHP-SUP");
+    eq(SOD.actualDeliveryDate(so, [truck], { pos, lots }), "2026-10-18");
+    eq(SOD.shipmentsDeliveringSale(so, [truck], { pos: [{ ...pos[0], destinationLocationId: "OUR-WH" }], lots }).length, 0, "a supplier's truck to our warehouse delivers the sale");
+    eq(SOD.actualDeliveryDate({ ...so, number: "SO-2" }, [{ status: "Delivered", soRefs: ["SO-2"], legs: [{ vehicles: [{ actualUnloadDate: "2026-10-02" }] }] }]), "2026-10-02", "an older unloading field missed");
+  });
+})();
+
+// ══ v7.29.4 — FZ-37: the sale's whole journey across its shipments ══
+(function v72904(){
+  console.log("\n══ v7.29.4 — FZ-37: the sale's whole journey ══");
+  const IC = B("incoterms.domain.js");
+  t("FZ-37 (v7.29.4): a CIF sale whose shipments carry no sea leg to the named port is named once the truck is booked; the container on the vessel (a second shipment) closes it; a D-rule sale split over shipments must reach the named place in one of them", () => {
+    const so = { number: "SO-1", status: "Confirmed", sellIncoterm: "CIF", destinationLocationId: "ALX" };
+    const truck = { number: "SHP-T", status: "Booked", purpose: "OUTBOUND", soRefs: ["SO-1"], legs: [{ mode: "Road", fromLocationId: "SUP", toLocationId: "GDY" }] };
+    const box = { number: "SHP-C", status: "Booked", purpose: "OUTBOUND", soRefs: ["SO-1"], legs: [{ mode: "Sea", fromLocationId: "GDY", toLocationId: "ALX" }] };
+    const g = IC.saleJourneyGap(so, { orders: [so], shipments: [truck] }); eq(g && g.need, "sea", "a CIF sale with no sea leg passes");
+    eq(IC.saleJourneyGap(so, { orders: [so], shipments: [truck, box] }), null, "the container's sea leg does not close it");
+    eq(IC.saleJourneyGap(so, { orders: [so], shipments: [] }), null, "a sale not shipped yet is named");
+    const dap = { number: "SO-2", status: "Confirmed", sellIncoterm: "DAP", destinationLocationId: "CLI" };
+    const a = { number: "A", status: "Booked", purpose: "OUTBOUND", soRefs: ["SO-2"], legs: [{ mode: "Road", fromLocationId: "WH", toLocationId: "X" }] }, b = { ...a, number: "B", legs: [{ mode: "Road", fromLocationId: "X", toLocationId: "Y" }] };
+    eq((IC.saleJourneyGap(dap, { orders: [dap], shipments: [a, b] }) || {}).need, "place"); eq(IC.saleJourneyGap(dap, { orders: [dap], shipments: [a] }), null, "a single shipment checked twice");
+    ok(IC.termsToReview({ orders: [so], shipments: [truck] }).some(f => f.kind === "journey" && /no sea leg/.test(f.text)), "the line is not in Terms to review");
   });
 })();
 

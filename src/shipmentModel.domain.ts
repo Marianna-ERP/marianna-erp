@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
+import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 import { sellerPaysCarriage, takenAtSeller } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 // shipmentModel.domain.ts — v6.85.0: THE REDESIGNED SHIPMENT MODEL (additive layer)
@@ -548,7 +549,7 @@ export function shipmentDates(sh: any): ShipmentDates {
 export function suggestedReceiptDate(lot: any, shipments: any[], po: any, todayISO: string): { date: string; from: string } {
   const sh = (shipments || []).find((s: any) => String(s?.status) !== "Cancelled" && (s.goods || []).some((g: any) => String(g.lotRef) === String(lot?.number)));
   if (sh) { const d = shipmentDates(sh); if (d.delivered) return { date: d.delivered, from: `${sh.number} unloaded` }; if (d.plannedDelivery) return { date: d.plannedDelivery, from: `${sh.number} planned delivery` }; }
-  if (S(po?.expectedDeliveryDate)) return { date: S(po.expectedDeliveryDate), from: `${po.number} expected delivery` };
+  { const arr = po ? poExpectedArrival(po, shipments) : ""; if (arr) return { date: arr, from: `${po.number} expected delivery` }; }   // v7.28.5 (Batch L): the PO's one promised date
   if (S(lot?.arrivalDate)) return { date: S(lot.arrivalDate), from: "the lot's expected arrival" };
   return { date: todayISO, from: "today" };
 }
