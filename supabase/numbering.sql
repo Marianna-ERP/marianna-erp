@@ -15,6 +15,8 @@ create table if not exists public.doc_counters (
 );
 alter table public.doc_counters enable row level security;
 -- No policies on purpose: nobody reads or writes the table directly; only the two functions below do.
+-- v7.29.5: so Supabase's change of 30 Oct 2026 (no automatic Data API grant on a new table) does not touch it — the app reaches
+-- the counters only through the two functions, which carry their own explicit grants at the end of this script.
 
 create or replace function public.next_doc_numbers(p_kind text, p_year int, p_floor int, p_count int default 1)
 returns int
