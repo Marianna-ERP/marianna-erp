@@ -76,7 +76,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
               {/* v6.99.81 (A-IN-8, owner): line 2 — product, item, size, packaging, origin; line 3 — class, location and flow */}
               <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.packaging || "—"} · {lot.origin || "—"}</div>
               <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}><QualityBadge quality={lot.quality} /><LocationPill locationId={lot.locationId} lot={lot} /><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} pos={pos} /></div>
-              {(() => { const w = lotWarningsShown(lot, localTodayISO()); return w.length ? (   /* v7.10.3 (A-RV-15): the owner's lot warnings, amber */
+              {(() => { const w = lotWarningsShown(lot, localTodayISO(), { orders: liveSOs || [] }); return w.length ? (   /* v7.10.3 (A-RV-15): the owner's lot warnings, amber */
                 <div data-lot-warning="1" style={{ marginTop: 8, padding: "7px 10px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 11, color: "#92400E", lineHeight: 1.45 }}>
                   {w.map((x, i) => <div key={i}><b>⚠ {({ "still expected": "Still expected", variance: "Received against ordered", "unexplained movements": "Unexplained movements", "ageing stock": "Ageing stock" } as any)[x.field] || x.field}:</b> {x.why}</div>)}{/* v7.11.2 (A-RV-24): all four */}
                 </div>) : null; })()}
@@ -134,7 +134,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                   <div style={{ fontSize: 11, color: "#7C3AED", marginTop: 3, lineHeight: 1.5 }}>
                     Producer's goods in our custody. Sell at your prices; all expenses are deducted at settlement.
                     Settled per truck on the purchase order (all lots of the PO together; expenses include delivery freight; producer invoice in its own currency).
-                    {lot.settlement?.closedAt ? ` · closed ${lot.settlement.closedAt}` : lot.settlement?.sentAt ? ` · statement sent ${lot.settlement.sentAt}` : ""}
+                    
                   </div>
                 </div>
 {/* v6.99.17 (A-R13-2, ownership): the settlement is per PO (truck) and lives in PURCHASE ORDERS — the old per-lot settlement is retired */}
@@ -371,7 +371,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                     <div key={i} style={{ padding: "10px 0", borderBottom: "1px solid #F3F4F6" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
                         <div style={{ fontSize: 12, fontWeight: 600, color: "#111" }}>🔍 {ctx ? ctx.label.split(" (")[0] : ins.context}</div>
-                        <span style={{ fontSize: 10, color: "#AAA" }}>{ins.date}</span>
+                        <span style={{ fontSize: 10, color: "#AAA" }}>{formatDMY(ins.date)}</span>
                       </div>
                       <div style={{ fontSize: 11, color: bad ? "#B91C1C" : "#16A34A", fontWeight: 600, marginTop: 3 }}>
                         {out ? out.label : ins.outcome}{ins.lossKg ? ` · −${fmtNum(ins.lossKg)} kg` : ""}
@@ -405,7 +405,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                         <div style={{ fontSize: 17, fontWeight: 800 }}>TRACEABILITY / RECALL REPORT</div>
                         <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{traceNo}</div>
                       </div>
-                      <div style={{ marginBottom: 12, fontSize: 11, color: "#444" }}>Lot / Partia: <b>{t.lot.number}</b> · generated / wygenerowano {t.generatedAt}{userName ? ` · ${userName}` : ""}</div>
+                      <div style={{ marginBottom: 12, fontSize: 11, color: "#444" }}>Lot / Partia: <b>{t.lot.number}</b> · generated / wygenerowano {formatDMY(t.generatedAt)}{userName ? ` · ${userName}` : ""}</div>
 
                       <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>1. PURCHASE / ZAKUP</div>
                       <table><tbody>
@@ -457,10 +457,10 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                       {claims.map((c: any) => (
                         <div key={String(c.id)} onClick={() => onOpenClaim && onOpenClaim(lot)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: 7, background: "#fff", border: "1px solid #FDE68A", marginBottom: 4, cursor: onOpenClaim ? "pointer" : "default", fontSize: 12 }}>
                           <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 800, color: "#B45309" }}>{c.number || "draft"}</span>
-                          <span style={{ color: "#64748B" }}>{c.date}</span>
+                          <span style={{ color: "#64748B" }}>{formatDMY(c.date)}</span>
                           <span>{c.defectType || "defect"} · {c.defectPct || 0}%{c.affectedKg ? ` · ${Number(c.affectedKg).toLocaleString("pl-PL")} kg` : ""}</span>
                           <span style={{ marginLeft: "auto", fontWeight: 700 }}>{c.requestedCreditEUR ? `€${Number(c.requestedCreditEUR).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}` : ""}</span>
-                          {c.status === "Accepted" && c.acceptedEUR ? <span style={{ fontSize: 10, color: "#15803D" }}>accepted €{Number(c.acceptedEUR).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span> : null}
+                          {c.status === "Accepted" && c.acceptedAmount ? <span style={{ fontSize: 10, color: "#15803D" }}>accepted €{Number(c.acceptedAmount).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span> : null}
                           <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: chip(c.status), borderRadius: 999, padding: "1px 8px" }}>{c.status || "Draft"}</span>
                         </div>
                       ))}

@@ -10,10 +10,13 @@ import { cnCodeForItem } from "./productCatalog";
 import { effectiveCounts } from "./pricingUnit.domain";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { isEstimatedLine } from "./so.domain";
-import { paymentText } from "./po.domain";   // v6.99.76 (A-PV-2)
+import { paymentText, poExpectedArrival } from "./po.domain";   // v6.99.76 (A-PV-2)
 import { FlowBadge, LOCATION_TYPES, LifecycleTimeline, LinkRow, QUALITY_GRADES, QualityBadge, StatusBadge, TruckSettlementCard, VarianceBadge, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, plnTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
+import { DatesChain } from "./DatesChain";   // v7.27.18 (A-D-4)
+import { poDatesChain } from "./datesChain.domain";   // v7.27.18 (A-D-4)
 import { nextId } from "./ids";   // v7.17.5 (A-RV-06): extra packing-list lines take the one counter
-import { isIncoterm2020, deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
+import { deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
+import { formatDMY } from "./dates";   // v7.27.2 (FZ-25)
 
 // ── v6.99.36 (A-R25-6, owner): the supplier's truck is registered in ONE window, confirmed before anything is created ──
 // ── v6.99.50 (TO-2, owner): THE PRODUCER'S PACKING LIST in one window — final kilos per line, a size the order did not
@@ -135,7 +138,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm, pos 
   );
 }
 
-export function OrderDetail({ termsFindings = [], users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
+export function OrderDetail({ onChangeRule = null, termsFindings = [], users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
   const sd = usePoData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
@@ -172,7 +175,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
         <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
-          {termsFindings.length ? <div style={{ marginBottom: 16 }}><TermsFindingsBox findings={termsFindings} here={order.number} /></div> : null}{/* v7.20.0 (A-INC-2): the terms to review under this purchase's incoterm */}
+          {termsFindings.length ? <div style={{ marginBottom: 16 }}><TermsFindingsBox findings={termsFindings} here={order.number} onChangeRule={onChangeRule} /></div> : null}{/* v7.20.0 (A-INC-2): the terms to review under this purchase's incoterm */}
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, gap: 20 }}>
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
@@ -182,6 +185,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                 <VarianceBadge variance={order.variance} />
               </div>
               <div style={{ fontSize: 24, fontWeight: 700, color: "#111", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", marginBottom: 4 }}>{order.number}</div>
+              <DatesChain steps={poDatesChain(order, { shipments: computedShipments || [], lots: computedLots || [], invoices: computedInvoices || [] })} />{/* v7.27.18 (A-D-4) */}
               <div style={{ fontSize: 13, color: "#444" }}>{order.supplier?.name} · {order.supplier?.country} {destLabel !== "—" && <>· destination {dest ? LOCATION_TYPES[dest.type]?.icon : "📍"} {destLabel}</>}</div>
             </div>
             <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
@@ -250,9 +254,9 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                 <SectionTitle>LINKED DOCUMENTS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" from={order.number} />
                 <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" from={order.number} />
-                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && isIncoterm2020(o.sellIncoterm)); void sos;
+                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => false); void sos;
                   return direct.length ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, padding: "4px 8px", marginBottom: 8 }} title="v6.94.0 (PO-7): the pass-through flag is DERIVED — here is why">↗ Direct to client — because {direct.map((o: any) => `${o.number} sells ${o.sellIncoterm}`).join(", ")}; the goods never enter our warehouse</div> : null; })()}
-                <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" from={order.number} />
+                <LinkRow label="Inventory lots" items={computedLots ?? []} color="#92400E" bg="#FEF3C7" from={order.number} />
                 {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
                     note — so receiving lives HERE too, not only on the lot in Inventory. */}
                 {typeof onPackingResult === "function" && order.status === "Confirmed" && (order.items || []).some((it: any) => isEstimatedLine(it)) && (
@@ -273,7 +277,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                 {/* v6.63.0 (BUG #2 fix): invoices are DERIVED from the register via its links[]
                     — the stored legacy array was never updated by the Invoices module, so a
                     cost invoice linked to this PO was invisible here. */}
-                <LinkRow label="Invoices" items={computedInvoices ?? order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
+                <LinkRow label="Invoices" items={computedInvoices ?? []} color="#16A34A" bg="#DCFCE7" />
                 <div style={{ marginTop: 10, fontSize: 10, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
                   Links are computed live: sales orders that source from this PO, shipments that carry it, and lots created from it.
                 </div>
@@ -301,7 +305,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                 <div style={{ display: "grid", gap: 10, fontSize: 12 }}>
                   <div><div style={{ fontSize: 10, color: "#888" }}>ORDER DATE</div><div style={{ fontWeight: 500 }}>{fmtDate(order.orderDate)}</div></div>
                   <div title="When the supplier loads our truck/container — goods leave origin"><div style={{ fontSize: 10, color: "#888" }}>LOADING DATE <span style={{ color: "#BBB", fontWeight: 400 }}>· goods leave origin</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.loadingDate)}</div></div>
-                  <div title="When goods are expected to arrive at the destination"><div style={{ fontSize: 10, color: "#888" }}>EXPECTED DELIVERY DATE <span style={{ color: "#BBB", fontWeight: 400 }}>· goods arrive</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.expectedDeliveryDate)}</div></div>
+                  <div title="When goods are expected to arrive at the destination"><div style={{ fontSize: 10, color: "#888" }}>EXPECTED DELIVERY DATE <span style={{ color: "#BBB", fontWeight: 400 }}>· goods arrive</span></div><div style={{ fontWeight: 500 }}>{fmtDate(poExpectedArrival(order, computedShipments || []))}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>PURCHASE INCOTERM</div><div style={{ fontWeight: 600 }}>{order.buyIncoterm || "—"}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destLabel}</div></div>
                   <div>
@@ -309,7 +313,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
 <div style={{ fontWeight: 600, color: "#888" }}>—</div>
                   </div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{paymentText(order, liveParty(order.supplier, sd.contacts || []) || order.supplier)}</div></div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {order.fxLockedAt})</span>}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {formatDMY(order.fxLockedAt)})</span>}</div></div>
                 </div>
               </Card>
 
@@ -350,7 +354,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                       <div><b>{s.number}</b></div>
                       <div><span style={{ color: "#94A3B8", fontSize: 10 }}>truck </span><b>{u.truckPlate || "—"}</b>{u.trailerPlate ? <span style={{ color: "#64748B" }}> / {u.trailerPlate}</span> : null}</div>
                       <div>{s.supplierRef || u.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef || u.supplierRef}</span> : <span style={{ color: "#94A3B8" }}>no supplier ref</span>}</div>
-                      <div><span style={{ color: "#94A3B8", fontSize: 10 }}>ETA </span>{u.eta || u.plannedDeliveryDate || s.expectedDeliveryDate || "—"}</div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10 }}>ETA </span>{formatDMY(u.eta) || formatDMY(u.plannedDeliveryDate) || formatDMY(s.expectedDeliveryDate) || "—"}</div>
                       <div><span style={{ color: "#94A3B8", fontSize: 10 }}>recorder </span>{u.tempRecorderNo || "—"}</div>
                       <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
                       <div>{typeof onOpenShipment === "function" && <SmallButton onClick={() => onOpenShipment(s.number)}>Open</SmallButton>}</div>

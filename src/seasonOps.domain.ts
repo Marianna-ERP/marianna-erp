@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
+import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // seasonOps.domain.ts — v6.89.0: CONSIGNMENT SEASON RECORDS (pure)
 // Owner rulings 6 Sept 2026 (CONSIGNMENT_SEASON_DESIGN.md, VEGA_PRO_REPORTING_MAPPING.md).
@@ -23,7 +24,7 @@ export function supplierDeliveryFromPO(po: any, deps: { nextId: () => any; nextN
   }));
   const kg = goods.reduce((s: number, g: any) => s + num(g.qtyKg), 0);
   const unit = { id: deps.nextId(), kind: "truck", truckPlate: S(announce.plate), announcedPlate: S(announce.plate), driverName: S(announce.driver),
-    plannedLoadingDate: S(po.loadingDate), plannedDeliveryDate: S(announce.eta) || S(po.expectedDeliveryDate), eta: S(announce.eta), supplierRef: S(announce.supplierRef), qtyKg: kg, carrierId: null, costAmount: 0, load: goods.map((g: any) => ({ goodsLineId: g.id, qtyKg: num(g.qtyKg) })),
+    plannedLoadingDate: S(po.loadingDate), plannedDeliveryDate: S(announce.eta) || poExpectedArrival(po), eta: S(announce.eta), supplierRef: S(announce.supplierRef), qtyKg: kg, carrierId: null, costAmount: 0, load: goods.map((g: any) => ({ goodsLineId: g.id, qtyKg: num(g.qtyKg) })),   // v7.28.5 (Batch L): the PO's one promised date
     // v6.99.83 (A-UN-5, owner 30 Sept): the truck loads at the supplier and delivers to the PO's destination — it was born with neither
     pickupLocationId: null, pickupText: S(po.supplier?.name || "supplier"), deliveryLocationId: po.destinationLocationId ?? null, deliveryText: S(po.destinationText) };
   return {
@@ -214,8 +215,8 @@ export function sortingJobLedger(lot: any, inp: SortingInput, deps: { nextId: ()
 }
 
 // ── v6.96.0 (IN-4): lot normalisation — mirrors retired, cache re-derived (idempotent) ──
-export function normaliseLot(lot: any, ctx: { po?: any; poSettlements?: any[] } = {}): { lot: any; changed: boolean; settlementToMigrate?: any } {
-  let l: any = { ...lot }; let changed = false; let settlementToMigrate: any = undefined;
+export function normaliseLot(lot: any, ctx: { po?: any; poSettlements?: any[] } = {}): { lot: any; changed: boolean } {
+  let l: any = { ...lot }; let changed = false;
   ["journey", "destinationText", "custodyType"].forEach(k => { if (k in l) { delete l[k]; changed = true; } });
   if (ctx.po) {
     const cons = (ctx.po.pricingMode || "firm") === "consignment";
@@ -229,11 +230,10 @@ export function normaliseLot(lot: any, ctx: { po?: any; poSettlements?: any[] } 
   }
   const firstIn = (l.movements || []).filter((m: any) => m && !m.voided && m.type === "IN").map((m: any) => String(m.date || "")).filter(Boolean).sort()[0];
   if (firstIn && l.arrivalDate !== firstIn) { l.arrivalDate = firstIn; changed = true; }
-  if (l.settlement && ctx.poSettlements && !ctx.poSettlements.some(s => String(s.poNumber) === String(l.poRef))) { settlementToMigrate = { ...l.settlement, poNumber: l.poRef, fromLot: l.number }; }
-  if (l.settlement && ctx.poSettlements) { delete l.settlement; changed = true; }
+  if ("settlement" in l) { delete l.settlement; changed = true; }   // v7.28.12 (Batch L · FZ-01): the old per-lot settlement — the PO settlement owns it
   const g = gradesFromLedger(l);
   if ((l.movements || []).some((m: any) => m.type === "RECLASS" || String(m.source || "").startsWith("sorting:"))) { if (JSON.stringify(l.grades || {}) !== JSON.stringify(g)) { l.grades = g; changed = true; } }
-  return { lot: l, changed, settlementToMigrate };
+  return { lot: l, changed };
 }
 
 // ── v6.96.0 (IN-5): the quay is inventory — unloading at the POL / clearance at the POD posts a TRANSFER to the port location ──

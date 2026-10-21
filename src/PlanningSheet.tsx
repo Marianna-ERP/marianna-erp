@@ -11,10 +11,9 @@ import { SHEET_COLUMNS, SheetTab, SheetRow, SheetLogEntry, blankRow, sid, parseC
 import { HER_HEADERS } from "./board.domain";
 import { unifiedLocations , isPortType } from "./locations";
 import { S } from "./format";
-import { activeParties } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
+import { activeParties, rolesOf } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 
 const nowISO = () => new Date().toISOString();
-const rolesOf = (c: any) => (Array.isArray(c?.roles) && c.roles.length ? c.roles : [c?.type, ...(c?.additionalTypes || [])]).map((x: any) => String(x || ""));
 
 export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, contacts = [], catalog = [], orders = [], invoices = [], userName = "" }: any) {
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
@@ -27,7 +26,8 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
 
   // ── the Directory lists the dropdown cells choose from ──
   const lists = useMemo(() => {
-    const by = (r: string) => activeParties(contacts).filter((c: any) => rolesOf(c).includes(r))   // v7.10.2 (A-RV-15 · CP-4).map((c: any) => c.name).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));
+    // v7.10.2 (A-RV-15 · CP-4) · v7.28.2: a note in the middle of this line had hidden its end since v7.10.2 — the lists held companies, not names
+    const by = (r: string) => activeParties(contacts).filter((c: any) => rolesOf(c).includes(r)).map((c: any) => c.name).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));
     const locs = unifiedLocations(contacts || []);
     const ports = locs.filter((l: any) => isPortType(l)).map((l: any) => l.name);   // v7.21.14 (A-RV-37): by the type — a place of type Other is no port
     return { clients: by("Client"), suppliers: by("Supplier"), carriers: by("Carrier"), forwarders: Array.from(new Set([...by("Forwarder"), ...by("Shipping line")])),

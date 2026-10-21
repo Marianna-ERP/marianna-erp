@@ -16,11 +16,11 @@ import { nextId } from "./ids";
 import { FX_RATES, nbpRateBefore } from "./fx";   // v7.18.6: + nbpRateBefore
 import { getCounterpartiesByType } from "./Contacts";
 import { locationById } from "./locations";
-import { termsToReview, termsFindingsForDoc, incotermLine, deliveredAtDestination } from "./incoterms.domain";   // v7.20.0 (A-INC-2): the PO view shows its terms to review
+import { termsToReview, termsFindingsForDoc, incotermLine, deliveredAtDestination , isDRulePurchase } from "./incoterms.domain";   // v7.20.0 (A-INC-2): the PO view shows its terms to review
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO } from "./seasonOps.domain";
 import { isEstimatedLine, planPackingResult } from "./so.domain";
-import { computePOSettlement, provisionalCandidates, provisionalFromInvoice, expectedProducerExtraInvoice, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun, settlementRate } from "./poSettlement.domain";
+import { computePOSettlement, provisionalCandidates, provisionalFromInvoice, expectedProducerExtraInvoice, salesReportRows, expectedProducerCreditNote, commissionRun, settlementRate } from "./poSettlement.domain";
 import { currentCommissionRate, commissionPctForSales } from "./consignment";
 import { printHtmlNode } from "./documentService";
 import SalesReportDoc from "./SalesReportDoc";   // v6.99.84 (A-ST-6)
@@ -36,6 +36,9 @@ import { companyProfile } from "./useLocalStoredState";
 import { OrderForm } from "./PurchaseOrderForm";
 import { PackingResultWindow, SupplierTruckWindow, OrderDetail } from "./PurchaseOrderDetail";
 import { PODoc, PrintModal } from "./PurchaseOrderDocument";
+import { promisedDateKind, poPromisedDate, poExpectedArrival, promisedDateLabel } from "./po.domain";   // v7.28.5 (Batch L)
+import { peopleOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 (Batch L)
+import { issueNumber, issueNumbers } from "./numbering";   // v7.27.8 (A-W5)
 // v7.22.4 (A-RV-16, Batch F): no hidden module copies — the packaging types and the counterparties the purchase screens and the
 // printed PO read are one value from the props (PoData), handed down through a context.
 export interface PoData { packagingTypes: any[]; contacts: any[] }
@@ -54,15 +57,7 @@ export const COMPANY: any = companyProfile();   // v6.99.67 (A-AUD-1): the compa
 // ─── CONTACTS STUB (to be replaced when integrated with Contacts.tsx) ─────
 // Mirrors the shape of getCounterpartiesByType(counterparties, "Supplier").
 // When integration happens, this stub is replaced with the helper from Contacts.tsx.
-function getSuppliersStub() {
-  return [
-    { id: 1, type: "Supplier", name: "Białski Owoc", country: "Poland", nip: "8351595299", address: "ul. Kolejowa 35; 96-230 Biała Rawska", contact: "Aneta Głowala", email: "aneta@bialskiowoc.pl" },
-    { id: 2, type: "Supplier", name: "FreshFarm ES", country: "Spain", nip: "ESB12345678", address: "Calle Major 12, Valencia", contact: "Carlos Ruiz", email: "c.ruiz@freshfarmes.com" },
-    { id: 3, type: "Supplier", name: "AgriTrade MA", country: "Morocco", nip: "MA-200123", address: "Route de Casablanca, Agadir", contact: "Youssef Idrissi", email: "y.idrissi@agritrade.ma" },
-    { id: 4, type: "Supplier", name: "Fructex Egypt Co.", country: "Egypt", nip: "463587936", address: "Industrial Zone, Borg El Arab, Alexandria", contact: "Ahmed Hassan", email: "a.hassan@fructex-eg.com" },
-    { id: 5, type: "Supplier", name: "Jordan Fresh Exports", country: "Jordan", nip: "JO-887665", address: "King Abdullah Industrial City, Amman", contact: "Layla Khouri", email: "exports@jordanfresh.jo" },
-  ];
-}
+
 
 // ─── REFERENCE ──────────────────────────────────────────────────────────────
 export const CURRENCIES = ["PLN", "EUR", "USD"];
@@ -112,10 +107,10 @@ export const LOCATION_TYPES: Record<string, any> = {
 // FX_RATES now sourced from ./fx (single source of truth)
 
 // ─── SEED DATA ──────────────────────────────────────────────────────────────
-export const SUPPLIERS = getSuppliersStub();
+export const SUPPLIERS: any[] = [];   // v7.27.12 (A-RV-39): no company is written into the code — the forms read the directory
 
 function primaryContactValue(counterparty) {
-  const contacts = counterparty.contacts || [];
+  const contacts = peopleOf(counterparty);
   const primary = contacts.find(p => p.isPrimary) || contacts[0];
   return primary?.email || primary?.phone || counterparty.email || counterparty.contact || counterparty.phone || "";
 }
@@ -124,10 +119,10 @@ function tradingPartnerFromCounterparty(counterparty) {
   return {
     id: counterparty.id,
     name: counterparty.name,
-    country: counterparty.country || "",
+    country: companyCountryName(counterparty),   // v7.28.11 (Batch L)
     nip: counterparty.nip || "",
     vatEuId: counterparty.vatEuId || "",
-    address: counterparty.address || "",
+    address: companyAddressLine(counterparty),   // v7.28.10 (Batch L)
     contact: primaryContactValue(counterparty),
   };
 }
@@ -269,7 +264,7 @@ export function PrintLogo() {
 // email added/changed in Contacts after the PO was created is seen without a refresh.
 // Falls back to the copy embedded on the PO.
 function bestContactEmail(cp: any) {
-  const cs = (cp && cp.contacts) || [];
+  const cs = peopleOf(cp);
   const withEmail = cs.find((p: any) => p.isPrimary && p.email) || cs.find((p: any) => p.email);
   return (withEmail && withEmail.email) || (cp && cp.email) || "";
 }
@@ -356,8 +351,8 @@ function EmailModal({ order, contacts = [], onClose }: any) {
         <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
           {/* Honest explanation of the workflow */}
           <div style={{ padding: "12px 14px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠ Interim workflow — no backend yet</div>
-            Until the email backend is built, sending happens in two steps:
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>How sending works</div>
+            Sending takes two steps:
             <ol style={{ margin: "6px 0 0 18px", padding: 0 }}>
               <li>Click <strong>Save PDF</strong> below — the print dialog opens. Choose <em>Save as PDF</em> as the destination, save the file (e.g. to your Desktop).</li>
               <li>Click <strong>Open email draft</strong> — your default mail app (Outlook, Apple Mail, Gmail) opens with the message pre-filled. Drag the saved PDF into the email as an attachment, then hit Send.</li>
@@ -449,10 +444,16 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
   const rate = sr.rate;
   const pctDefault = rateRec ? (commissionPctForSales(rateRec, 0) ?? rateRec.pct) : 0;
   const pct = rec?.commissionPct ?? pctDefault;
-  const calc = computePOSettlement({ po: order, lots, orders, invoices, shipments, claims, ratePLNperEUR: rate, provisionalEUR: rec?.provisionalEUR, commissionPct: pct, provisionalCurrency: rec?.provisionalCurrency, provisionalRate: rec?.provisionalRate, provisionalInvoiceNo: rec?.provisionalInvoiceNo, financeNotes });
+  // v7.27.5 (A-COMM-NET, owner ruling 19 Oct): the band is chosen on the truck's NET result (the figure the commission is calculated on);
+  // the net does not depend on the percentage, so it is worked out once without it
+  const settleAt = (p: number) => computePOSettlement({ po: order, lots, orders, invoices, shipments, claims, ratePLNperEUR: rate, provisionalEUR: rec?.provisionalEUR, commissionPct: p, provisionalCurrency: rec?.provisionalCurrency, provisionalRate: rec?.provisionalRate, provisionalInvoiceNo: rec?.provisionalInvoiceNo, financeNotes });
+  const netOnly = settleAt(0);
+  const bandOnNet = rateRec && (rateRec.bands || []).length ? commissionPctForSales(rateRec, netOnly.netPLN) : null;
+  const pctUsed = rec?.commissionPct ?? (bandOnNet ?? pct);
+  const calc = pctUsed === 0 ? netOnly : settleAt(pctUsed);
   const candidates = provisionalCandidates(order, invoices); const chosenInv = rec?.provisionalInvoiceId != null ? candidates.find((i: any) => String(i.id) === String(rec.provisionalInvoiceId)) || null : null;   // v6.99.85 (A-CS-1)
   const cur = calc.currency; const provCur = calc.provisionalCurrency; const prodName = order.supplier?.name || "the producer";   // v6.99.84 (A-ST-1)
-  const bandPct = rateRec && (rateRec.bands || []).length ? commissionPctForSales(rateRec, calc.grossPLN) : null;
+  const bandPct = bandOnNet;   // v7.27.5 (A-COMM-NET): on the net result, no longer on the gross
   const upd = (patch: any) => setSettlements && setSettlements((prev: any[]) => { const all = prev || []; const cur = all.find((s: any) => String(s.poNumber) === String(order.number)); if (cur) return all.map((s: any) => s === cur ? { ...s, ...patch } : s); return [...all, { id: nextId(), poNumber: order.number, status: "Open", ratePLNperEUR: rate, commissionPct: pct, ...patch }]; });
   const fmt = (n: number, c = "PLN") => `${(n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${c}`;
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11, width: "100%", boxSizing: "border-box" };
@@ -461,9 +462,9 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
 
   const [askClose, setAskClose] = React.useState(false);
   const docBtn = (colour: string, bg: string): any => ({ padding: "7px 14px", borderRadius: 8, border: `1px solid ${colour}`, background: bg, color: colour, fontSize: 12, fontWeight: 800, cursor: "pointer" });
-  function doClose() {
-    const number = rec?.number || nextSettlementNumberPO(settlements, new Date().getFullYear());   // v6.99.117 (AUD-27): a re-closed settlement keeps its number (it may be on a printed statement)
-    upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, fxTableDate: sr.tableDate, commissionPct: pct });   // v7.18.6: the NBP table kept with the rate
+  async function doClose() {   // v7.27.8 (A-W5): async — the number comes from the counter
+    const number = rec?.number || await issueNumber("SET", new Date().getFullYear(), (settlements || []).map((s: any) => s.number));   // v7.27.8 (A-W5)   // v6.99.117 (AUD-27): a re-closed settlement keeps its number (it may be on a printed statement)
+    upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, fxTableDate: sr.tableDate, commissionPct: pctUsed });   // v7.27.5: the percentage applied (the band on the net result unless typed)   // v7.18.6: the NBP table kept with the rate
     const cn = expectedProducerCreditNote(order, calc, { nextId, todayISO: localTodayISO });
     if (cn && typeof setFinanceNotes === "function") { setFinanceNotes((prev: any[]) => [...(prev || []), cn]); upd({ expectedCreditNoteId: cn.id }); }
     const dn = expectedProducerExtraInvoice(order, calc, { nextId, todayISO: localTodayISO });   // v6.99.85 (A-CS-3): the other direction is expected too
@@ -473,21 +474,21 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
   const myIns = (inspections || []).filter((x: any) => calc.lines.some(l => String(l.lotNumber) === String(x.lotNumber)));
   return (
     <Card style={{ marginBottom: 16, borderLeft: "4px solid #7C3AED" }}>{dialogNode}
-      <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: closed ? "#16A34A" : "#B45309" }}>{closed ? `CLOSED ${rec.closedAt}` : (calc.fullySold ? "FULLY SOLD — ready to close" : "INTERIM")}</span>}>Producer's settlement — {order.number}{rec?.number ? ` · ${rec.number}` : ""}{onOpenResult && <button onClick={() => onOpenResult(order)} style={{ marginLeft: 10, padding: "2px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 0 }}>Result of this truck → Finance</button>}</SectionTitle>{/* v7.8.3 (A-PL-2): the producer's statement; our result lives in Finance */}
+      <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: closed ? "#16A34A" : "#B45309" }}>{closed ? `CLOSED ${formatDMY(rec.closedAt)}` : (calc.fullySold ? "FULLY SOLD — ready to close" : "INTERIM")}</span>}>Producer's settlement — {order.number}{rec?.number ? ` · ${rec.number}` : ""}{onOpenResult && <button onClick={() => onOpenResult(order)} style={{ marginLeft: 10, padding: "2px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 0 }}>Result of this truck → Finance</button>}</SectionTitle>{/* v7.8.3 (A-PL-2): the producer's statement; our result lives in Finance */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
         <div><Lbl>{cur === "PLN" ? "Rate — the PO is in PLN" : `Rate PLN→${cur} · NBP`}</Lbl><div data-settlement-rate="1" style={{ ...inp, background: "#F8FAFC", fontVariantNumeric: "tabular-nums" }}>{cur === "PLN" ? "1" : rate > 0 ? rate.toFixed(4) : "—"}</div>
-          {cur !== "PLN" && <div style={{ fontSize: 10, color: "#64748B", marginTop: 2 }}>{sr.kept ? `kept at closing${sr.tableDate ? ` · NBP ${sr.tableDate}` : ""}` : sr.tableDate ? `NBP table A of ${sr.tableDate}, the day before today — fixed when closed` : "NBP not read yet"}</div>}</div>{/* v7.18.6 (A-AU-12): not typed */}
-        <div><Lbl>Commission % {bandPct != null ? `(band → ${bandPct}%)` : ""}</Lbl><input type="number" step="0.1" disabled={closed} value={pct ?? ""} onChange={e => upd({ commissionPct: parseFloat(e.target.value) || 0 })} style={inp} /></div>
+          {cur !== "PLN" && <div style={{ fontSize: 10, color: "#64748B", marginTop: 2 }}>{sr.kept ? `kept at closing${sr.tableDate ? ` · NBP ${formatDMY(sr.tableDate)}` : ""}` : sr.tableDate ? `NBP table A of ${formatDMY(sr.tableDate)}, the day before today — fixed when closed` : "NBP not read yet"}</div>}</div>{/* v7.18.6 (A-AU-12): not typed */}
+        <div><Lbl>Commission % {bandPct != null ? `(band on the net result → ${bandPct}%)` : ""}</Lbl><input type="number" step="0.1" disabled={closed} value={pctUsed ?? ""} onChange={e => upd({ commissionPct: parseFloat(e.target.value) || 0 })} style={inp} /></div>
         <div><Lbl>Producer's provisional invoice</Lbl>
           <select disabled={closed} value={rec?.provisionalInvoiceId ?? ""} title="v6.99.85 (A-CS-1): the producer's invoice from the register — its net, currency, rate and payments follow; type it only when it is not registered yet" onChange={e => { const inv = candidates.find((i: any) => String(i.id) === e.target.value); upd(inv ? provisionalFromInvoice(inv) : { provisionalInvoiceId: null }); }} style={inp}>
-            <option value="">{candidates.length ? "— not from the register (type it) —" : "— no invoice from this producer in the register —"}</option>
+            <option value="">{candidates.length ? "— pick the producer's invoice —" : "— waiting: no invoice from this producer imported yet —"}</option>
             {candidates.map((i: any) => <option key={i.id} value={i.id}>{i.number} · {(i.netAmount || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {i.currency} net · {i.paymentStatus}</option>)}
           </select>
-          {!chosenInv && <input disabled={closed} value={rec?.provisionalInvoiceNo || ""} placeholder="invoice no. (typed)" onChange={e => upd({ provisionalInvoiceNo: e.target.value })} style={{ ...inp, marginTop: 4 }} />}</div>
+          {!chosenInv && rec?.provisionalInvoiceNo ? <div style={{ fontSize: 10, color: "#92400E", marginTop: 4 }}>typed before v7.27.16: {rec.provisionalInvoiceNo} — pick it from the register once imported</div> : null}</div>{/* v7.27.16 (A-AU-7, owner approved 17 Oct): only the imported invoices; the settlement waits for the import */}
         <div><Lbl>Provisional value</Lbl><div style={{ display: "grid", gridTemplateColumns: provCur !== cur && provCur !== "PLN" ? "1fr 64px 76px" : "1fr 64px", gap: 4 }}>
-          <input type="number" disabled={closed || !!chosenInv} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseFloat(e.target.value) || 0 })} style={inp} />
-          <select disabled={closed || !!chosenInv} value={provCur} onChange={e => upd({ provisionalCurrency: e.target.value })} title="v6.99.84 (A-ST-1): the currency the producer invoiced in" style={inp}>{["EUR", "USD", "PLN"].map(c => <option key={c}>{c}</option>)}</select>
-          {provCur !== cur && provCur !== "PLN" && <input type="number" step="0.0001" disabled={closed || !!chosenInv} value={rec?.provisionalRate ?? ""} placeholder="PLN rate" title={`PLN per 1 ${provCur}`} onChange={e => upd({ provisionalRate: parseFloat(e.target.value) || 0 })} style={inp} />}
+          <input type="number" disabled={true} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseFloat(e.target.value) || 0 })} style={inp} />
+          <select disabled={true} value={provCur} onChange={e => upd({ provisionalCurrency: e.target.value })} title="v6.99.84 (A-ST-1): the currency the producer invoiced in" style={inp}>{["EUR", "USD", "PLN"].map(c => <option key={c}>{c}</option>)}</select>
+          {provCur !== cur && provCur !== "PLN" && <input type="number" step="0.0001" disabled={true} value={rec?.provisionalRate ?? ""} placeholder="PLN rate" title={`PLN per 1 ${provCur}`} onChange={e => upd({ provisionalRate: parseFloat(e.target.value) || 0 })} style={inp} />}
         </div></div>
       </div>
       <div id={`sales-report-${order.id}`} style={{ fontSize: 11 }}>
@@ -561,6 +562,8 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
                 <SmallButton onClick={() => setAskClose(false)}>No</SmallButton>
                 <button onClick={() => { setAskClose(false); doClose(); }} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Yes, close</button>
               </span>
+            : (!chosenInv && (Number(rec?.provisionalEUR) > 0 || String(rec?.provisionalInvoiceNo || "").trim() !== ""))   /* v7.27.16 (A-AU-7): the provisional invoice comes from the register — the settlement waits for its import */
+            ? <span data-close-needs-invoice="1" style={{ fontSize: 11, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px" }}>Waiting for the producer's invoice to be imported — pick it above to close</span>
             : (cur !== "PLN" && !(Number(rate) > 0))   /* v7.16.2 (AUD-31): a foreign-currency settlement closes only with its rate — once closed, the rate can no longer be entered */
               ? <span data-close-needs-rate="1" style={{ fontSize: 11, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px" }}>Enter the PLN→{cur} rate to close — without it the net sales in {cur}, the commission and the producer's note can't be worked out.</span>
               : <button onClick={() => setAskClose(true)} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>🔒 Close settlement{calc.fullySold ? "" : " (interim)"}</button>
@@ -711,7 +714,7 @@ export function buildExpectedLotsFromPO(order, existingLots = []) {   // v6.99.5
           expectedKg: qty,
           packaging: it.packaging || "", packagingId: it.packagingId ?? null, // v6.96.0 (IN-8) packagingId: it.packagingId ?? null, // v6.96.0 (IN-8)
           status: order.directFlow ? "Direct Expected" : "Expected",
-          arrivalDate: order.expectedDeliveryDate || null,
+          arrivalDate: (promisedDateKind(order) === "delivery" ? poPromisedDate(order) : "") || null,   // v7.28.5 (Batch L)
           consignment: isConsignment,
           // resync only the purchase cost line; keep any other cost lines (e.g. freight) intact
           costs: [
@@ -746,7 +749,7 @@ export function buildExpectedLotsFromPO(order, existingLots = []) {   // v6.99.5
       damagedKg: 0,
       packaging: it.packaging || "", packagingId: it.packagingId ?? null, // v6.96.0 (IN-8)
       status: order.directFlow ? "Direct Expected" : "Expected",
-      arrivalDate: order.expectedDeliveryDate || null,
+      arrivalDate: (promisedDateKind(order) === "delivery" ? poPromisedDate(order) : "") || null,   // v7.28.5 (Batch L)
       productionDate: null,
       consignment: isConsignment,
       settlement: isConsignment ? { status: "None" } : undefined,
@@ -903,7 +906,7 @@ PO ${po.number} was cancelled. Lot excluded from expected procurement availabili
     if (!extSetSOs || !po?.number) return;
     const today = localTodayISO();
     extSetSOs((prevSOs: any[]) => (prevSOs || []).map((so: any) => {
-      const usesPO = (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === po.number);
+      const usesPO = false;
       if (!usesPO) return so;
       const terminal = new Set(["Shipped", "Delivered", "Invoiced", "Closed", "Cancelled"]);
       const nextStatus = terminal.has(so.status) ? so.status : "Draft";
@@ -947,9 +950,11 @@ ${blockNote}`.trim(),
     }
     // BP-57 Phase B: the internal flow is composed from the terms + the SALES
     // reality — a governing SO that sends goods onward makes this PO direct.
-    if (o.buyIncoterm) o = { ...o, directFlow: poDirectFromSOs(o, extSOs) }; // v6.37.0: flow key retired — direct-ness derives live from the governing sale
+    if (o.buyIncoterm) o = { ...o, directFlow: poDirectFromSOs(o, extSOs, extLots || []) };   /* v7.24.2 (A-RV-41): the PO's lots */ // v6.37.0: flow key retired — direct-ness derives live from the governing sale
 
     // Guard: prevent duplicate PO numbers (in case the user manually edited it)
+    // v7.27.8 (A-W5): a NEW order takes its number from the shared counter when it is saved — the form showed a provisional one
+    if (o.id == null) { const yr = parseInt(String(o.orderDate || localTodayISO()).slice(0, 4), 10) || new Date().getFullYear(); o = { ...o, number: await issueNumber("PO", yr, (orders || []).map((x: any) => x.number)) }; }
     const previous = orders.find(p => p.id === o.id);
     const becomesCancelled = o.status === "Cancelled" && (!previous || previous.status !== "Cancelled");
     // v6.18.5 (P0-5): reverting a confirmed PO back to Draft withdraws its
@@ -974,6 +979,13 @@ ${blockNote}`.trim(),
     let inventoryPlan = { lotRefs: [], newLots: [] } as any;
     if (isInventoryTransferStatus(o.status) && extSetLots) {
       inventoryPlan = buildExpectedLotsFromPO(o, lots);
+      // v7.27.8 (A-W5): the new lots take their numbers from the shared counter (nothing refers to them yet)
+      if (inventoryPlan && (inventoryPlan.newLots || []).length) {
+      const yr = parseInt(String(inventoryPlan.newLots[0].number || "").split("-")[1], 10) || new Date().getFullYear();
+      const { numbers } = await issueNumbers("LOT", yr, (lots || []).map((l: any) => l.number), inventoryPlan.newLots.length);
+      const ren = new Map(inventoryPlan.newLots.map((l: any, i: number) => [String(l.number), numbers[i]]));
+      inventoryPlan = { ...inventoryPlan, newLots: inventoryPlan.newLots.map((l: any) => ({ ...l, number: ren.get(String(l.number)) || l.number })), lotRefs: (inventoryPlan.lotRefs || []).map((r: any) => ren.get(String(r)) || r) };
+      }
     }
 
     // v6.11 (#2): when a PO line is removed, its still-expected lot must leave
@@ -1039,6 +1051,28 @@ ${blockNote}`.trim(),
       reflectCancelledPOInInventory(updated);
       reflectCancelledPOInSOs(updated);
     }
+    // v7.27.10 (FZ-18 · SD-6, P-8 / P-9 / P-11): a DAP / DPU / DDP purchase comes on the supplier's truck — CONFIRMING it creates that
+    // truck (destination = the PO's named place, ETA = the PO's promised date), so the PO's truck box IS the shipment and there is no
+    // second entry point; reverting to Draft or cancelling withdraws it while nothing has been posted on it.
+    if (typeof extSetShipments === "function") {
+      const live = !["Draft", "Cancelled"].includes(String(updated.status)) && (!previous || String(previous.status) === "Draft");
+      const mine = (s: any) => s && s.arrangedBy === "SUPPLIER" && (s.poRefs || []).includes(updated.number) && s.status !== "Cancelled";
+      if (live && isDRulePurchase(updated) && !(extShipments || []).some(mine)) {
+        const allLots = [...(lots || []), ...((inventoryPlan && inventoryPlan.newLots) || [])];
+        const withLots = { ...updated, items: (updated.items || []).map((it: any, i2: number) => ({ ...it, lotRef: (allLots.find((l: any) => String(l.poRef) === String(updated.number) && String(l.poLineId ?? "") === String(it.id ?? i2 + 1)) || {} as any).number || null })) };
+        const no = await issueNumber("SHP", new Date().getFullYear(), (extShipments || []).map((x: any) => x.number));
+        const truck = supplierDeliveryFromPO(withLots, { nextId, nextNumber: () => no, todayISO: localTodayISO }, { eta: poPromisedDate(updated).slice(0, 10), supplierRef: updated.supplierRef || "" });
+        if (truck) { extSetShipments((prev: any[]) => [...(prev || []), truck]); recordAudit({ module: "Purchase orders", docType: "PO", docNumber: updated.number, action: "created", summary: `Supplier's truck ${truck.number} created on confirming ${updated.number} (${String(updated.buyIncoterm || "").toUpperCase()}) — plates and the driver follow when the supplier announces them` }); }
+      }
+      if (revertingToDraft || becomesCancelled) {
+        const moved = (no: any) => (lots || []).some((l: any) => (l.movements || []).some((m: any) => m && !m.voided && String(m.shipmentRef || "") === String(no)));
+        const withdraw = (extShipments || []).filter((s: any) => mine(s) && !moved(s.number) && !["Arrived", "Delivered", "Closed"].includes(String(s.status)));
+        if (withdraw.length) {
+          extSetShipments((prev: any[]) => (prev || []).map((s: any) => withdraw.some((w: any) => w.id === s.id) ? { ...s, status: "Cancelled", cancelledAt: localTodayISO(), cancelReason: `${updated.number} ${becomesCancelled ? "cancelled" : "back to Draft"}` } : s));
+          recordAudit({ module: "Purchase orders", docType: "PO", docNumber: updated.number, action: "status", summary: `Supplier's truck ${withdraw.map((s: any) => s.number).join(", ")} withdrawn — the PO went ${becomesCancelled ? "to Cancelled" : "back to Draft"} before anything was posted on it` });
+        }
+      }
+    }
 
     setView("list");
     notifySaved(String(o?.number || ""));   // v6.99.69 (A-CF-3)
@@ -1050,7 +1084,7 @@ ${blockNote}`.trim(),
     setForm({
       number: nextNum, status: "Draft",
       orderDate: localTodayISO(),
-      loadingDate: "", expectedDeliveryDate: "", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
+      loadingDate: "", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
       paymentTerms: "30 days from invoice date", paymentTermsOther: "",
       buyIncoterm: "", flow: "",
       supplier: null, destinationLocationId: null, destinationText: "", requiresSea: false,
@@ -1080,7 +1114,7 @@ ${blockNote}`.trim(),
   // names the dependent documents by number so they can be deleted first.
   function poDependants(po: any): string[] {
     const poNum = po.number; const out: string[] = [];
-    (extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "PO" && it.sourceRef === poNum) || (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(poNum))))).forEach((so: any) => out.push(so.number));
+    (extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(poNum))))).forEach((so: any) => out.push(so.number));
     (extShipments || []).filter((sh: any) => sh.status !== "Cancelled" && ((sh.poRefs || []).includes(poNum) || (sh.goods || []).some((g: any) => String(g.poRef) === String(poNum)))).forEach((sh: any) => out.push(sh.number));
     (extLots || []).filter((l: any) => String(l.poRef) === String(poNum) && !/Cancelled/.test(String(l.status)) && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || (l.movements || []).some((m: any) => m && !m.voided))).forEach((l: any) => out.push(l.number));
     (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "PO" && String(l.number) === String(poNum))).forEach((i: any) => out.push(i.number));
@@ -1091,7 +1125,7 @@ ${blockNote}`.trim(),
     if (deps.length) { await uiAlert({ tone: "warn", title: `${selected.number} can't be deleted`, message: `These documents depend on it — delete them first:\n\n${deps.join("\n")}` }); return; }
     // v6.18.14 (#3): a PO can only be removed once nothing depends on it.
     const poNum = selected.number;
-    const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+    const hasLinkedSO = false;
     const hasShipment = (extShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
     // v6.35.0: a lot whose linked shipments are ALL cancelled must not keep the PO locked —
   // otherwise cancelling everything to fix the PO leaves it permanently trapped. We treat a
@@ -1185,6 +1219,20 @@ ${blockNote}`.trim(),
           return <PackingResultWindow order={selected} catalog={productCatalog} setCatalog={setProductCatalog} packagingTypes={sd.packagingTypes || []} counts={(l: any) => effectiveCounts(l, sd.packagingTypes || [])} onClose={() => setPackingWindow(false)} preview={(rows: any[], answers: any) => planPackingResult(selected, rows, ctx, deps, answers)} onConfirm={async (rows: any[], answers: any) => {
             const pl = planPackingResult(selected, rows, ctx, deps, answers);
             if (pl.questions.length) { await uiAlert({ tone: "warn", title: "One more answer needed", message: pl.questions.map((q: any) => q.label).join("\n") }); return; }
+            // v7.27.8 (A-W5): lots the packing list creates take their numbers from the shared counter — renamed everywhere the plan
+            // already names them (the PO, the sales, the trucks), since nothing outside the plan refers to them yet
+            {
+              const fresh = (pl.lots || []).filter((l: any) => l && !(extLots || []).some((x: any) => String(x.number) === String(l.number)));
+              if (fresh.length) {
+                const yr = parseInt(String(fresh[0].number || "").split("-")[1], 10) || new Date().getFullYear();
+                const { numbers } = await issueNumbers("LOT", yr, (extLots || []).map((l: any) => l.number), fresh.length);
+                const ren = new Map(fresh.map((l: any, i: number) => [String(l.number), numbers[i]])); const R = (v: any) => (v != null && ren.has(String(v)) ? ren.get(String(v)) : v);
+                pl.lots = pl.lots.map((l: any) => ({ ...l, number: R(l.number) }));
+                if (pl.po) pl.po = { ...pl.po, lotRefs: (pl.po.lotRefs || []).map(R) };
+                pl.orders = (pl.orders || []).map((o: any) => ({ ...o, items: (o.items || []).map((it: any) => ({ ...it, sourceRef: R(it.sourceRef) })) }));
+                pl.shipments = (pl.shipments || []).map((s: any) => ({ ...s, lotRefs: (s.lotRefs || []).map(R), goods: (s.goods || []).map((g: any) => ({ ...g, lotRef: R(g.lotRef) })) }));
+              }
+            }
             extSetPOs((prev: any[]) => (prev || []).map((p: any) => p.id === selected.id ? pl.po : p));
             if (extSetLots) extSetLots(pl.lots);
             if (extSetSOs) extSetSOs(pl.orders);
@@ -1193,13 +1241,22 @@ ${blockNote}`.trim(),
             setPackingWindow(false);
             await uiAlert({ tone: pl.unpriced.length ? "warn" : "info", title: "Quantities final", message: [...pl.soChanges, pl.unpriced.length ? `Price to agree before invoicing: ${pl.unpriced.join(", ")}` : ""].filter(Boolean).join("\n") || "The lots and the shipments not yet loaded follow the final lines." });
           }} />; })()}
-        {truckWindow && selected && <SupplierTruckWindow order={selected} lots={extLots} pos={extPOs || []} shipments={extShipments || []} onClose={() => setTruckWindow(false)} onConfirm={(f: any) => {
+        {truckWindow && selected && <SupplierTruckWindow order={selected} lots={extLots} pos={extPOs || []} shipments={extShipments || []} onClose={() => setTruckWindow(false)} onConfirm={async (f: any) =>  {
+          const truckNo = await issueNumber("SHP", new Date().getFullYear(), (extShipments || []).map((x: any) => x.number));   // v7.27.8 (A-W5)
           const etaISO = String(f.eta || "").slice(0, 10);
           let created: any = null;
+          // v7.27.10 (SD-6): the truck the confirmation created, still without plates, is the one the window fills — one source
+          const waiting = (extShipments || []).find((s: any) => s && s.arrangedBy === "SUPPLIER" && (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled" && !String((((s.legs || [])[0] || {}).vehicles || [])[0]?.truckPlate || "").trim());
+          if (waiting) {
+            extSetShipments((prev: any[]) => (prev || []).map((s: any) => s.id !== waiting.id ? s : { ...s, supplierRef: f.supplierRef || s.supplierRef, expectedDeliveryDate: etaISO || s.expectedDeliveryDate, notes: f.note ? [s.notes, f.note].filter(Boolean).join(" ") : s.notes,
+              legs: (s.legs || []).map((l: any, li: number) => li !== 0 ? l : { ...l, vehicles: (l.vehicles || []).map((u: any, ui: number) => ui !== 0 ? u : { ...u, truckPlate: f.plate || u.truckPlate, announcedPlate: f.plate || u.announcedPlate, trailerPlate: f.trailer || u.trailerPlate, driverName: f.driver || u.driverName, eta: etaISO || u.eta, plannedDeliveryDate: etaISO || u.plannedDeliveryDate, tempRecorderNo: f.recorder || u.tempRecorderNo, supplierRef: f.supplierRef || u.supplierRef }) }) }));
+            recordAudit({ module: "Purchase orders", docType: "PO", docNumber: selected.number, action: "updated", summary: `Supplier's truck ${waiting.number} announced${f.plate ? " — " + f.plate : ""}${f.supplierRef ? " · " + f.supplierRef : ""}` });
+            setTruckWindow(false); return;
+          }
           extSetShipments((prev: any[]) => { const all = prev || []; const yr = new Date().getFullYear();
             // v7.14.1 (A-RV-03, owner 9 Oct): the shipments' ONE generator (highest of the year + 1), never a count — rule 7
             created = supplierDeliveryFromPO({ ...selected, items: (selected.items || []).map((it: any, i2: number) => ({ ...it, lotRef: ((extLots || []).find((l: any) => String(l.poRef) === String(selected.number) && String(l.poLineId ?? i2 + 1) === String(it.id ?? i2 + 1)) || {}).number })) },
-              { nextId, nextNumber: () => nextShipmentNumberPure(all, yr), todayISO: localTodayISO },
+              { nextId, nextNumber: () => truckNo || nextShipmentNumberPure(all, yr), todayISO: localTodayISO },
               { plate: f.plate, driver: f.driver, eta: etaISO, supplierRef: f.supplierRef });
             // v6.99.36: the extra facts the one-step window collects but the builder does not take
             if (created) { const u = ((created.legs || [])[0]?.vehicles || [])[0]; if (u) { u.trailerPlate = f.trailer || u.trailerPlate; u.tempRecorderNo = f.recorder || u.tempRecorderNo; } if (f.note) created.notes = f.note; }
@@ -1209,6 +1266,7 @@ ${blockNote}`.trim(),
         }} />}
         <OrderDetail
           order={selected}
+          onChangeRule={async (r: any) => { if (!(await uiConfirm({ title: `Change ${r.doc} to ${r.to}?`, message: `The rule on ${r.doc} becomes ${r.to} (Incoterms 2020) — what the shipment records fits it. Prices and documents already issued are not changed.`, confirmLabel: `Change to ${r.to}` }))) return; setOrders((prev: any[]) => (prev || []).map((x: any) => String(x?.number) === String(r.doc) ? { ...x, buyIncoterm: r.to } : x)); }}   // v7.29.1 (FZ-41): one click, after confirming
           termsFindings={termsFindingsForDoc(termsAll, selected.number)}   // v7.20.0 (A-INC-2)
           expectedLots={deliveredAtDestination(selected.buyIncoterm)
             ? (extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))
@@ -1224,7 +1282,7 @@ ${blockNote}`.trim(),
           }}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
           supplierTrucks={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled" && String(s.arrangedBy || "").toUpperCase() === "SUPPLIER")}   // v6.99.42 (hotfix): the box needs the shipment OBJECTS, not their numbers
-          computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "PO" && it.sourceRef === selected.number) || (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(selected.number))))).map((so: any) => so.number)}   /* v6.99.102 (A-PV-4): also the sales from the PO's lots */
+          computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(selected.number))))).map((so: any) => so.number)}   /* v6.99.102 (A-PV-4): also the sales from the PO's lots */
           computedLots={(extLots || []).filter((l: any) => String(l.poRef) === String(selected.number)).map((l: any) => l.number)}
           computedInvoices={computedPOLinks(selected, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }).linkedInvoices}
           onBack={() => { setView("list"); setSelected(null); }}
@@ -1263,7 +1321,7 @@ ${blockNote}`.trim(),
           {typeof extSetInvoices === "function" && typeof extSetSettlements === "function" && (extSettlements || []).some((s: any) => s.status === "Closed" && !s.commissionInvoiceId) && (
             <SmallButton kind="amber" title="v6.90.0 (owner ruling V4): one commission invoice per closed truck not yet invoiced — run on Mondays, or whenever" onClick={async () => {
               const calcFor = (po: any, s: any) => computePOSettlement({ po, lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, ratePLNperEUR: s.ratePLNperEUR, provisionalEUR: s.provisionalEUR, commissionPct: s.commissionPct });
-              const r = commissionRun(extSettlements, extPOs, calcFor, { nextId, todayISO: localTodayISO });
+              const r = commissionRun(extSettlements, extPOs, calcFor, { nextId, todayISO: localTodayISO, producerOf: (po: any) => (extContacts || []).find((c: any) => po?.supplier?.id != null && String(c.id) === String(po.supplier.id)) || null });   // v7.27.5 (AUD-26): the producer's country decides the VAT
               if (!r.invoices.length) { await uiAlert({ tone: "info", title: "Nothing to invoice", message: "Every closed truck already has its commission invoice." }); return; }
               const ok = await uiConfirm({ tone: "warn", title: `Commission run — ${r.invoices.length} invoice(s)`, message: r.invoices.map((i: any) => `${(i.links || [])[0]?.number}: ${i.grossAmount.toLocaleString("pl-PL")} EUR to ${i.counterparty?.name}`).join("\n") + "\n\nDrafts are created in Invoices (Mark issued → Send). Compensation against the producer's invoice is proposed in each draft's notes.", confirmLabel: "Create drafts" });
               if (!ok) return;
@@ -1328,7 +1386,7 @@ ${blockNote}`.trim(),
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 110px 100px 130px 170px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
             {/* v6.58.0 column order (user ruling): number, supplier+products, order date, delivery date, status, TOTAL (was "value"), linked documents */
-              ["PO NUMBER", "SUPPLIER · PRODUCTS", "ORDER DATE", "DELIVERY DATE", "STATUS", "TOTAL", "LINKED DOCUMENTS"].map((h, i) => (
+              ["PO NUMBER", "SUPPLIER · PRODUCTS", "ORDER DATE", "PROMISED DATE", "STATUS", "TOTAL", "LINKED DOCUMENTS"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
           </div>
@@ -1367,7 +1425,8 @@ ${blockNote}`.trim(),
                   </div>
                 </div>
                 <div style={{ fontSize: 11, color: isLoadingOverdue ? "#B45309" : "#444", fontWeight: isLoadingOverdue ? 600 : 400 }} title={isLoadingOverdue ? "the loading date has passed on an active PO" : undefined}>{formatDMY(o.orderDate) || formatDMY(o.loadingDate) || "—"}</div>{/* v6.99.107 (A-CLR-1, owner): amber — a timing hint, not an error */}
-                <div style={{ fontSize: 11, color: "#444" }}>{formatDMY(o.expectedDeliveryDate) || "—"}</div>
+                <div style={{ fontSize: 11, color: "#444" }}>{(() => { const pd = poPromisedDate(o), arr = poExpectedArrival(o, extShipments || []);   // v7.30.6 (owner test 21 Oct): the one promised date, named by its rule
+                return <><div>{formatDMY(pd) || "—"}</div>{pd ? <div style={{ fontSize: 10, color: "#94A3B8" }}>{promisedDateLabel(o)}</div> : null}{arr && promisedDateKind(o) !== "delivery" ? <div style={{ fontSize: 10, color: "#64748B" }}>arrives {formatDMY(arr)}</div> : null}</>; })()}</div>
                 <div><StatusBadge status={o.status} /></div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(total, o.currency)}</div>
@@ -1378,7 +1437,7 @@ ${blockNote}`.trim(),
                   {/* v6.34.1 (item 3): show the linked DOCUMENT NUMBERS, not counts. */}
                   {/* v6.45.0: SOs are DERIVED (any order sourcing from this PO) — they
                       were missing entirely from this column. */}
-                  {(() => { const sos = Array.from(new Set((extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)).map((so: any) => so.number))); return sos.length ? <div title="Sales orders">{sos.map((n: any) => <div key={String(n)} style={{ whiteSpace: "nowrap", lineHeight: 1.5 }}><DocRef num={n} cancelledSet={cancelledRefs} /></div>)}</div> : null;   /* v7.23.3 (A-UI-1): links, no icon */ })()}
+                  {(() => { const sos = Array.from(new Set((extSOs || []).filter((so: any) => false).map((so: any) => so.number))); return sos.length ? <div title="Sales orders">{sos.map((n: any) => <div key={String(n)} style={{ whiteSpace: "nowrap", lineHeight: 1.5 }}><DocRef num={n} cancelledSet={cancelledRefs} /></div>)}</div> : null;   /* v7.23.3 (A-UI-1): links, no icon */ })()}
                   {(() => { const cl = computedPOLinks(o, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }); return (<>
                   <LinkedDocNumbers nums={cl.linkedSalesOrders} cancelledSet={cancelledRefs} title="Sales orders" />{/* v7.1.4 (A-PV-5) */}
                   <LinkedDocNumbers nums={cl.linkedShipments} cancelledSet={cancelledRefs} title="Shipments" />
@@ -1389,7 +1448,7 @@ ${blockNote}`.trim(),
                       now render the same way, as in the SO. */}
                   <LinkedDocNumbers nums={cl.linkedLots} cancelledSet={cancelledRefs} title="Lots" />
                   <LinkedDocNumbers nums={cl.linkedInvoices} cancelledSet={cancelledRefs} title="Invoices" />
-                  {!cl.linkedShipments?.length && !cl.linkedLots?.length && !cl.linkedInvoices?.length && !(extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)) && <span style={{ color: "#CCC" }}>—</span>}
+                  {!cl.linkedShipments?.length && !cl.linkedLots?.length && !cl.linkedInvoices?.length && <span style={{ color: "#CCC" }}>—</span>}
                   </>); })()}
                 </div>
               </div>

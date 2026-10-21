@@ -2,7 +2,7 @@
 // v7.23.5 (A-SHV-1, owner approved 13 Oct after four rounds of the mock): the shipment opens as a full page, like a PO or an SO —
 // a header with the facts you check first and every action; the steps left to close it; the route and the goods open; the long
 // sections folded to one summary line until opened. Same data, same editor, same printed documents.
-import { documentRegister, shipmentDates, containerMap } from "./shipmentModel.domain";
+import { documentRegister, shipmentDates, containerMap, unitLoadedAt, unitUnloadedAt } from "./shipmentModel.domain";
 import React, { useState } from "react";
 import { customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import { SmallButton, DocRef, cancelledDocSet } from "./ui";
@@ -19,6 +19,8 @@ import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { soClientName } from "./salesOrders.domain";
 import DateInput from "./DateInput";
 import { localTodayISO } from "./dates";
+import { DatesChain } from "./DatesChain";   // v7.27.18 (A-D-4)
+import { shipmentDatesChain } from "./datesChain.domain";   // v7.27.18 (A-D-4)
 
 const S = (v: any) => String(v ?? "").trim();
 const head: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "#94A3B8", letterSpacing: ".06em", textTransform: "uppercase" };
@@ -69,14 +71,17 @@ function OriginalsWindow({ shipment, orders, allShipments, onSave, onClose }: an
   </div>;
 }
 
-export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], packagingTypes = [], termsFindings = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory, onLoadingProtocol, onRaiseClaim, onStuffing = null, onDevanning = null, onMarkTOSent = null, openAll = false, allShipments = [], onSetOriginals = null }: any) {
+export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], packagingTypes = [], termsFindings = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory, onLoadingProtocol, onRaiseClaim, onStuffing = null, onDevanning = null, onMarkTOSent = null, openAll = false, allShipments = [], onSetOriginals = null, expectedDocs = [], onSetDocument = null, shipmentInvoices = [] }: any) {
   const [open, setOpen] = useState<Record<string, boolean>>(openAll ? { route: true, goods: true, checklist: true, documents: true, orders: true, costs: true, notes: true } : { route: true, goods: true });   // openAll: the suites read every section in one render
   const [more, setMore] = useState(false);
   const [dhlOpen, setDhlOpen] = useState(false);   // v7.23.6
   const toggle = (k: string) => setOpen(o => ({ ...o, [k]: !o[k] }));
   const provider = providerById(shipment.carrierId || shipment.forwarderId, contacts);
   const cancelledRefs = cancelledDocSet(pos, orders);
-  const missingDocs = (shipment.documents || []).filter((d: any) => ["Required", "Missing"].includes(d.status));
+  // v7.27.11 (FZ-16): missing = an EXPECTED document not held; a row of a type this shipment does not need is not counted
+  const expectedTypes = new Set((expectedDocs || []).map((x: any) => x.type));
+  const missingDocs = (expectedDocs || []).filter((x: any) => !x.held);
+  const notNeeded = (d: any) => !expectedTypes.has(String(d.type)) && ["Required", "Missing"].includes(String(d.status));
   const dead = canonicalStatus(shipment.status) === "Cancelled";
   const isExport = shipmentTradeDirection(shipment, { pos, orders, countryOf: countryOfLocation }) === "EXPORT";   // v7.12.1 (A-TD-2)
   const cr = carriedRefs(shipment); const dts = shipmentDates(shipment);
@@ -103,7 +108,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
   else checks.push({ ok: ["Cost allocated", "Allocated to lots", "Closed"].includes(S(shipment.billingStatus)), label: "Costs allocated to lots", step: "Allocate the costs to the lots" });
   { const recs = legs.flatMap((l: any) => transportUnitsForLeg(l)).map((u: any) => u.tempRecorderNo).filter(Boolean); checks.push({ ok: recs.length > 0, label: `Temp recorder registered${recs.length ? ` (${recs.join(", ")})` : ""}`, warn: !recs.length ? "reported on invoice" : "" }); }
   if (shipment.mode === "Sea" || shipment.mode === "Multimodal") {
-    const legHasContainer = (l: any) => !!l.containerNumber || transportUnitsForLeg(l).some((u: any) => !!u.containerNumber);
+    const legHasContainer = (l: any) => transportUnitsForLeg(l).some((u: any) => !!u.containerNumber);   // v7.28.9: the units own it
     const legHasBL = (l: any) => !!l.blNumber || transportUnitsForLeg(l).some((u: any) => !!u.blNumber);
     checks.push({ ok: legs.some(legHasContainer), label: "Container number registered", step: "Enter the container number" });
     checks.push({ ok: legs.some(legHasBL), label: "BL number registered", step: "Get the B/L number" });
@@ -126,6 +131,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
     <Card>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><div style={{ fontSize: 20, fontWeight: 700, color: "#111" }}>{shipment.number}</div><ModeBadge mode={shipment.mode} /><StatusBadge status={shipment.status} /><BillingBadge status={shipment.billingStatus} /></div>
+        <DatesChain steps={shipmentDatesChain(shipment, { orders: orders || [], invoices: shipmentInvoices || [] })} />{/* v7.27.18 (A-D-4) */}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" }}>
           {dead
             ? <span style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Deleted — read-only</span>
@@ -172,7 +178,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
                 <tbody>{units.map((u: any, ui: number) => { const ref = S(u.containerNumber || u.id); const fed = cmap.filter(r => r.containerRef === ref).map(r => r.fromUnit);
                   return <tr key={u.id || ui}><td style={tdL}>{S(u.blNumber || leg.blNumber) || "—"}</td><td style={tdL}>{S(u.containerNumber) || "—"}</td><td style={tdL}>{providerName(b0?.forwarderId ?? leg.forwarderId, contacts) || "—"}</td><td style={tdL}>{formatDMY(S(leg.etd || leg.plannedPickupDate || u.plannedLoadingDate).slice(0, 10)) || "—"}</td><td style={tdL}>{formatDMY(S(leg.eta || leg.plannedDeliveryDate || u.plannedDeliveryDate).slice(0, 10)) || "—"}</td><td style={tdL}>{locationTextFromFields(leg.toLocationId, leg.toCustom) || "—"}</td><td style={tdL}>{fed.length ? fed.join(" · ") : "—"}</td></tr>; })}</tbody></table>
             : <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["Truck number", "Trailer number", "Carrier", "Loading place", "Unloading place", "Loading date", "Unloading date", "Status"].map(h => <th key={h} style={thL}>{h}</th>)}</tr></thead>
-                <tbody>{units.map((u: any, ui: number) => { const loaded = S(u.actualLoadDate || u.loadedAt), unloaded = S(u.actualUnloadDate || u.deliveredAt || u.unloadedAt || u.dischargedAt);
+                <tbody>{units.map((u: any, ui: number) => {  const loaded = unitLoadedAt(u), unloaded = S(S(u.deliveredAt) || unitUnloadedAt(u) || u.dischargedAt);
                   return <tr key={u.id || ui}><td style={tdL}>{S(u.truckPlate || u.vehiclePlate) || "—"}</td><td style={tdL}>{S(u.trailerPlate) || "—"}</td><td style={tdL}>{providerName(u.carrierId ?? leg.carrierId, contacts) || "—"}</td><td style={tdL}>{S(u.pickupText) || locationTextFromFields(leg.fromLocationId, leg.fromCustom) || "—"}</td><td style={tdL}>{S(u.deliveryText) || locationTextFromFields(leg.toLocationId, leg.toCustom) || "—"}</td><td style={tdL}>{day(loaded, u.plannedLoadingDate || leg.plannedPickupDate)}</td><td style={tdL}>{day(unloaded, u.plannedDeliveryDate || leg.plannedDeliveryDate)}</td><td style={tdL}>{unloaded ? "Unloaded" : loaded ? "Loaded" : legDisplayStatus(leg.status, shipment.status)}</td></tr>; })}</tbody></table>}
         </div>; })}
       {onStuffing && <div style={{ marginTop: 10 }}><ForwarderReports shipment={shipment} orders={orders} onStuffing={onStuffing} onDevanning={onDevanning} /></div>}
@@ -189,11 +195,19 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
     </Fold>
 
     <Fold title="Documents" summary={`${missingDocs.length} of ${(shipment.documents || []).length} missing · originals ${originalsSent ? "sent" : "not sent yet"}`} open={!!open.documents} onToggle={() => toggle("documents")}>
+      {(expectedDocs || []).length > 0 && <div style={{ marginBottom: 8 }}>{/* v7.27.11 (FZ-16): what this shipment needs, from its terms and route */}
+        <div style={{ fontSize: 10, fontWeight: 800, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Expected for this shipment</div>
+        {(expectedDocs || []).map((x: any) => <div key={"exp-" + x.type} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, padding: "4px 0", fontSize: 12, alignItems: "center", borderBottom: "1px solid #F8FAFC" }}>
+          <div><b>{x.type}</b> <span style={{ color: "#94A3B8", fontSize: 11 }}>· {x.why}{x.stage === "arrival" ? " · by arrival" : ""}</span></div>
+          {x.held ? <span style={{ fontSize: 10, fontWeight: 700, color: "#16A34A" }}>{(shipment.documents || []).some((d: any) => String(d?.type) === String(x.type) && String(d?.status) === "Not bought") ? "not bought" : "held"}</span> : typeof onSetDocument === "function" ? <span style={{ display: "inline-flex", gap: 4 }}><SmallButton onClick={() => onSetDocument(x.type)}>Have it</SmallButton>{x.type === "Insurance certificate" && <SmallButton onClick={() => onSetDocument(x.type, "Not bought")}>Not bought</SmallButton>}</span> : <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309" }}>missing</span>}
+        </div>)}
+        {(shipment.documents || []).some(notNeeded) && <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>Not needed for this shipment, not counted: {(shipment.documents || []).filter(notNeeded).map((d: any) => d.type).join(", ")}.</div>}
+        </div>}
       {documentRegister(shipment, protocolsForShipment(shipment)).filter((r: any) => r.kind === "Transport order" || r.kind === "Loading protocol").map((r: any, i: number) => (
         <div key={"reg-" + i} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 6, borderBottom: "1px solid #F3F4F6", padding: "6px 0", fontSize: 12, alignItems: "center" }}>
           <div><b>{r.kind}</b> <span style={{ color: "#94A3B8" }}>{r.ref}</span></div>
           <span style={{ fontSize: 10, fontWeight: 700, color: r.status === "Returned" || r.status === "Have it" || r.status === "N/A" ? "#16A34A" : r.status === "Sent" ? "#0284C7" : "#B45309" }}>{r.status}</span>
-          <span style={{ fontSize: 10, color: "#94A3B8" }}>{r.date || ""}</span>
+          <span style={{ fontSize: 10, color: "#94A3B8" }}>{formatDMY(r.date) || ""}</span>
         </div>))}
       {(() => { const sum = summariseDocs(shipment.documents || []); if (!sum.total) return null;
         return <div style={{ fontSize: 11, color: "#64748B", margin: "6px 0 5px" }}>{sum.settled} of {sum.total} settled · <strong style={{ color: sum.withFile ? "#059669" : "#94A3B8" }}>{sum.withFile} scan{sum.withFile === 1 ? "" : "s"} linked</strong>{sum.outstanding ? ` · ${sum.outstanding} outstanding` : ""}</div>; })()}

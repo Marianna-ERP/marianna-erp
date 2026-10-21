@@ -54,11 +54,14 @@ async function rest(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${REMOTE_URL}/rest/v1/${path}`, { ...init, headers: { apikey: REMOTE_KEY, Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init.headers || {}) } });
 }
 
+/** v7.27.8 (A-W5): call a database function (Supabase RPC) as the person signed in. */
+export async function rpc(name: string, body: any): Promise<Response> { return rest(`rpc/${name}`, { method: "POST", body: JSON.stringify(body || {}) }); }
+
 // ── the sync engine ────────────────────────────────────────────────────────────────────────────────────────────────────
 /** v7.14.0 (A-RV-01): what a merge has to tell the person — a record both changed (theirs kept, mine aside, "Use mine"), or a new
  *  document of mine renumbered because a colleague took its number meanwhile. */
 export type SyncNotice = { key: string; kind: "clash" | "renumbered"; id: string; label: string; by?: string; at: string; to?: string };
-export type SyncState = { status: "off" | "login" | "pulling" | "synced" | "saving" | "offline" | "empty"; conflicts: string[]; lastPull?: string; by?: Record<string, string>; notices?: SyncNotice[] };
+export type SyncState = { status: "off" | "login" | "pulling" | "synced" | "saving" | "offline" | "empty" | "refused"; refusedKey?: string; conflicts: string[]; lastPull?: string; by?: Record<string, string>; notices?: SyncNotice[] };
 type Known = { version: number; json: string };
 const known = new Map<string, Known>();   // what this tab last pulled or successfully pushed, per store
 const pending = new Map<string, { json: string; timer: any }>();
@@ -101,6 +104,13 @@ export function storesFromExport(text: string): { stores: Record<string, any>; s
   const summary = [["pos", "POs"], ["orders", "sales orders"], ["lots", "lots"], ["shipments", "shipments"], ["invoices", "invoices"], ["contacts", "companies"]].map(([k, l]) => `${n(k)} ${l}`).join(", ");
   return { stores, summary, meta: j._meta || {} };
 }
+/** v7.30.0 (Batch M · M-1): a change the shared copy's rules refused (only the owner changes the users, the roles, the closed months
+ *  and the company profile; the audit trail only grows) — said plainly, and this browser takes the shared version back, so it never
+ *  keeps a change nobody else can see. */
+async function refused(key: string): Promise<void> {
+  emit({ status: "refused", refusedKey: key });
+  try { const fresh = (await fetchRows()).find((r: any) => r.key === key); if (fresh) { known.set(key, { version: fresh.version, json: JSON.stringify(fresh.data) }); applyStoreFromRemote(key, fresh.data); } } catch { /* the next pull brings it back */ }
+}
 async function pushNow(key: string, json: string, by: string, attempt = 0): Promise<void> {
   const k = known.get(key);
   if (k && k.json === json) return;   // an echo of what was pulled — nothing to push
@@ -108,10 +118,12 @@ async function pushNow(key: string, json: string, by: string, attempt = 0): Prom
   const data = JSON.parse(json); const now = new Date().toISOString();
   if (!k) {   // the store does not exist in the shared copy yet
     const res = await rest("stores", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify([{ key, data, version: 1, updated_by: by, updated_at: now }]) });
+    if (res.status === 401 || res.status === 403) { await refused(key); return; }   // v7.30.0 (Batch M · M-1): the database's rules said no
     if (!res.ok) { emit({ status: "offline" }); return; }
     known.set(key, { version: 1, json }); emit({ status: "synced" }); return;
   }
   const res = await rest(`stores?key=eq.${encodeURIComponent(key)}&version=eq.${k.version}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ data, version: k.version + 1, updated_by: by, updated_at: now }) });
+  if (res.status === 401 || res.status === 403) { await refused(key); return; }   // v7.30.0 (Batch M · M-1): the database's rules said no
   if (!res.ok) { emit({ status: "offline" }); return; }
   const rows: Row[] = await res.json();
   if (rows.length) { known.set(key, { version: rows[0].version, json }); emit({ status: "synced", conflicts: state.conflicts.filter(c => c !== key) }); return; }
@@ -187,6 +199,9 @@ export function clearConflict(key: string) { emit({ conflicts: state.conflicts.f
 // with NEW versions, so every signed-in tab takes them on its next poll; colleagues' unsaved edits to those stores lose the race
 // and are told so (the usual conflict notice).
 export const isTestCopy = () => /^test$/i.test(ENV_LABEL);
+/** v7.24.0 (A-BK-7, owner 15 Oct): the copy's mark in every backup file's NAME — "-TEST" on the test copy, nothing on the real one —
+ *  so two exports of the same version can be told apart without opening them. */
+export const fileLabel = (): string => { const l = ENV_LABEL.toUpperCase().replace(/[^A-Z0-9]/g, ""); return l ? `-${l}` : ""; };
 export async function replaceSharedStores(stores: Record<string, any>, by: string): Promise<number> {
   const current = await fetchRows("key,version"); const ver = new Map(current.map(r => [r.key, r.version]));
   const now = new Date().toISOString(); let n = 0;
@@ -202,7 +217,7 @@ export async function replaceSharedStores(stores: Record<string, any>, by: strin
 }
 /** The whole shared copy as a Marianna export file (for the download taken before any replacement). */
 export async function sharedCopyAsExport(appVersion: string, storageVersion: number): Promise<string> {
-  const rows = await fetchRows(); const out: any = { _meta: { app: "marianna-erp", version: storageVersion, appVersion, exportedAt: new Date().toISOString(), source: "shared copy" + (ENV_LABEL ? ` (${ENV_LABEL})` : "") } };
+  const rows = await fetchRows(); const out: any = { _meta: { app: "marianna-erp", version: storageVersion, appVersion, exportedAt: new Date().toISOString(), source: "shared copy" + (ENV_LABEL ? ` (${ENV_LABEL})` : ""), copy: ENV_LABEL.toUpperCase() || "REAL" } };   // v7.24.0 (A-BK-7)
   rows.forEach(r => { out[r.key] = r.data; }); return JSON.stringify(out);
 }
 

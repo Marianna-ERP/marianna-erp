@@ -98,28 +98,6 @@ export function offsetNoteAgainstInvoice(note: any, invoice: any, deps: { nextId
   return { invoice: inv2, note: note2, appliedAmount: amt };
 }
 
-// ── CL-7: fold the legacy producer-form fields into cost lines (idempotent) ────
-export function foldLegacyClaimFields(claim: any): { claim: any; changed: boolean } {
-  let c: any = { ...claim }; let changed = false;
-  const lines = [...(c.costLines || [])];
-  const push = (label: string, amount: number, currency: string, source: string) => { if (amount > 0 && !lines.some((l: any) => l.source === source)) { lines.push({ label, amount: r2(amount), currency, source }); changed = true; } };
-  if (num(c.causedCosts) > 0) push("Costs caused (legacy form)", num(c.causedCosts), c.currency || "EUR", "legacy:causedCosts");
-  if (num(c.clientCosts) > 0) push("Client's costs (legacy form)", num(c.clientCosts), c.currency || "EUR", "legacy:clientCosts");
-  if (num(c.lostValueEUR) > 0) push("Lost value (legacy form)", num(c.lostValueEUR), "EUR", "legacy:lostValue");
-  const noteBits: string[] = [];
-  if (S(c.basis)) noteBits.push(`basis: ${S(c.basis)}`);
-  if (num(c.lostKg) > 0) noteBits.push(`lost kg: ${num(c.lostKg)}`);
-  if (c.soldInMarket) noteBits.push(`recovered in market: ${num(c.recoveredEGP)} EGP @ ${num(c.egpPerEur)}`);
-  if (noteBits.length && !S(c.notes).includes("[legacy]")) { c.notes = `${S(c.notes)}${S(c.notes) ? "\n" : ""}[legacy] ${noteBits.join(" · ")}`; changed = true; }
-  ["basis", "lostKg", "causedCosts", "clientCosts", "soldInMarket", "recoveredEGP", "egpPerEur", "migratedFrom"].forEach(k => { if (k in c) { delete c[k]; changed = true; } });
-  if (changed) c.costLines = lines;
-  // CL-1: one money truth — mirror the legacy EUR into the general fields once
-  if (!S(c.currency)) { c.currency = "EUR"; changed = true; }
-  if ((c.acceptedAmount === undefined || c.acceptedAmount === null || c.acceptedAmount === "") && num(c.acceptedEUR) > 0 && String(c.currency).toUpperCase() === "EUR") { c.acceptedAmount = num(c.acceptedEUR); changed = true; }
-  if ((c.requestedAmount === undefined || c.requestedAmount === null || c.requestedAmount === "") && num(c.requestedEUR) > 0 && String(c.currency).toUpperCase() === "EUR") { c.requestedAmount = num(c.requestedEUR); changed = true; }
-  return { claim: c, changed };
-}
-
 // ── CL-8: notice period from the agreement overrides the legal default ─────────
 export function noticeRuleFor(claim: any, counterparty: any): { days: number; from: string; basis: string } {
   const kind = S(claim?.respondent?.kind);

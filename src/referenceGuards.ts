@@ -17,6 +17,7 @@
 //     the single list of which columns those FKs live on.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { shipmentStartPlaceId, shipmentEndPlaceId } from "./tradeFlow.domain";   // v7.28.7 (Batch L)
 export interface ReferenceReport {
   total: number;
   /** grouped, ready-to-print lines, e.g. "Purchase Order(s): PO-2026-0001, PO-2026-0002" */
@@ -40,7 +41,7 @@ function group(map: Record<string, Set<string>>): ReferenceReport {
 
 export interface ContactRefStores {
   pos?: any[]; orders?: any[]; shipments?: any[]; invoices?: any[];
-  claims?: any[]; warehouseInvoices?: any[]; operationalCosts?: any[];
+  claims?: any[]; operationalCosts?: any[];
 }
 
 /** Every reference to a counterparty id, across all stores that can hold one.
@@ -61,7 +62,6 @@ export function referencesToContact(contactId: any, stores: ContactRefStores): R
   });
   (stores.invoices || []).forEach(inv => { if (same(inv?.counterparty?.id, contactId)) hits["Invoice(s)"].add(S(inv.number || inv.id)); });
   (stores.claims || []).forEach(cl => { if (same(cl?.respondent?.contactId, contactId)) hits["Claim(s)"].add(S(cl.number || cl.id)); });
-  (stores.warehouseInvoices || []).forEach(w => { if (same(w?.warehouseId, contactId)) hits["Warehouse invoice(s)"].add(S(w.invoiceNo || w.id)); });
   return group(hits);
 }
 
@@ -83,7 +83,7 @@ export function referencesToLocation(locationId: any, stores: LocationRefStores)
   });
   (stores.shipments || []).forEach(sh => {
     const n = S(sh.number || sh.id);
-    if (same(sh?.originLocationId, locationId) || same(sh?.destinationLocationId, locationId)) hits["Shipment(s)"].add(n);
+    if (same(shipmentStartPlaceId(sh), locationId) || same(shipmentEndPlaceId(sh), locationId)) hits["Shipment(s)"].add(n);   // v7.28.7: the route
     (sh?.legs || []).forEach((l: any) => {
       if (same(l?.fromLocationId, locationId) || same(l?.toLocationId, locationId)) hits["Shipment(s)"].add(n);
       (l?.stops || []).forEach((st: any) => { if (same(st?.locationId, locationId)) hits["Shipment(s)"].add(n); });

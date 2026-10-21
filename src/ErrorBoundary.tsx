@@ -1,6 +1,7 @@
 import React from "react";
 import { exportAllData } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
+import { fileLabel } from "./remoteStore";   // v7.24.0 (A-BK-7)
 
 // Catches render-time errors anywhere below it and shows a reassuring recovery
 // screen instead of a blank page. Crucially it tells the user their data is
@@ -27,7 +28,7 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
       const a = document.createElement("a");
       a.href = url;
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      a.download = `marianna-erp_recovery_${stamp}.json`;
+      a.download = `marianna-erp${fileLabel()}_recovery_${stamp}.json`;   // v7.24.0 (A-BK-7)
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -58,6 +59,34 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
             <summary style={{ cursor: "pointer" }}>Technical details (v{APP_VERSION})</summary>
             <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", marginTop: 8, background: "#F9FAFB", border: "1px solid #F3F4F6", borderRadius: 8, padding: 10, maxHeight: 200, overflow: "auto" }}>{String(this.state.error?.stack || this.state.error?.message || this.state.error)}</pre>
           </details>
+        </div>
+      </div>
+    );
+  }
+}
+
+/** v7.26.2 (A-UI-3, owner 17 Oct): ONE SCREEN'S ERROR NO LONGER BLOCKS THE OTHERS. A crash while working in one module (the owner
+ *  met one in Counterparties) used to replace the whole app with the recovery screen; now only that screen shows what went wrong —
+ *  the menu and every other tab keep working. Its message can be copied to send. Opening the screen again starts it afresh. */
+export class ScreenBoundary extends React.Component<{ screen: string; children: React.ReactNode }, { error: Error | null; copied: boolean }> {
+  state = { error: null as Error | null, copied: false };
+  static getDerivedStateFromError(error: Error) { return { error, copied: false }; }
+  componentDidCatch(error: Error, info: any) { console.error(`[ScreenBoundary:${this.props.screen}] Render error:`, error, info); }
+  componentDidUpdate(prev: any) { if (prev.screen !== this.props.screen && this.state.error) this.setState({ error: null, copied: false }); }
+  details() { const e = this.state.error; return `Marianna ERP v${APP_VERSION} · screen: ${this.props.screen} · ${new Date().toISOString()}\n${e ? (e.stack || e.message || String(e)) : ""}`; }
+  render() {
+    if (!this.state.error) return this.props.children;
+    const btn: React.CSSProperties = { padding: "8px 14px", borderRadius: 8, border: "1px solid #D1D5DB", background: "#fff", color: "#111", fontSize: 13, fontWeight: 700, cursor: "pointer" };
+    return (
+      <div style={{ flex: 1, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 28, background: "#FAFAFA", overflow: "auto" }}>
+        <div style={{ maxWidth: 640, width: "100%", background: "#fff", border: "1px solid #FECACA", borderRadius: 14, padding: 22 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#991B1B", marginBottom: 6 }}>This screen hit an error</div>
+          <div style={{ fontSize: 13, color: "#444", lineHeight: 1.6, marginBottom: 12 }}>Nothing was lost — what you saved is stored; only the change you were typing on this screen may be gone. The other tabs keep working. Please copy the message below and send it, with what you were doing.</div>
+          <pre style={{ fontSize: 11, background: "#F8FAFC", border: "1px solid #E5E7EB", borderRadius: 8, padding: 10, whiteSpace: "pre-wrap", maxHeight: 180, overflow: "auto", margin: "0 0 12px" }}>{this.details()}</pre>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button style={btn} onClick={() => { try { navigator.clipboard.writeText(this.details()).then(() => this.setState({ copied: true }), () => this.setState({ copied: false })); } catch { /* the text stays selectable above */ } }}>{this.state.copied ? "Copied ✓" : "Copy the message"}</button>
+            <button style={btn} onClick={() => this.setState({ error: null, copied: false })}>Open this screen again</button>
+          </div>
         </div>
       </div>
     );

@@ -53,6 +53,23 @@ const fkt = () => calls.filter(c => /fakturownia\.pl/.test(c.url));
     const x = await run({ method: "POST", query: { op: "create" }, headers: { authorization: "Bearer good" }, body: { invoice: { kind: "vat" } } });
     eq(x.status, 403); ok(/TEST copy/.test(x.body.error), x.raw); eq(fkt().length, 0, "Fakturownia was called from TEST");
   });
+  await t("M-2 (v7.30.1, audit F-04): a live invoice is issued only by the owner or a user with the Invoices module — read from the shared users list with the caller's own sign-in; with no owner linked everyone may", async () => {
+  setEnv({ ...SUPA, FAKTUROWNIA_API_TOKEN: "SECRET", FAKTUROWNIA_SUBDOMAIN: "acme" });
+  const EMAIL = { "Bearer own": "owner@firm.pl", "Bearer inv": "ops@firm.pl", "Bearer no": "Admin@Firm.pl", "Bearer stranger": "x@else.pl" };
+  const users = [{ id: 1, email: "owner@firm.pl", isOwner: true, modules: {} }, { id: 2, email: "ops@firm.pl", isOwner: false, modules: { invoices: true } }, { id: 3, email: "admin@firm.pl", isOwner: false, modules: { invoices: false } }];
+  let list = users;
+  mockFetch((u, i) => { const auth = (i.headers || {}).Authorization;
+  if (u.endsWith("/auth/v1/user")) return EMAIL[auth] ? answer(200, { id: "u", email: EMAIL[auth] }) : answer(401, {});
+  if (u.includes("/rest/v1/stores?key=eq.users")) return answer(200, [{ data: list }]);
+  return answer(201, { id: 9, number: "FV 9/2026" }); });
+  const go = async who => { calls.length = 0; const r = await run({ method: "POST", query: { op: "create" }, headers: { authorization: who }, body: { invoice: { kind: "vat" } } }); return { status: r.status, sent: fkt().length }; };
+  eq(JSON.stringify(await go("Bearer own")), JSON.stringify({ status: 200, sent: 1 }), "the owner");
+  eq(JSON.stringify(await go("Bearer inv")), JSON.stringify({ status: 200, sent: 1 }), "a user with the Invoices module");
+  eq(JSON.stringify(await go("Bearer no")), JSON.stringify({ status: 403, sent: 0 }), "a user without the Invoices module (e-mail case ignored)");
+  eq(JSON.stringify(await go("Bearer stranger")), JSON.stringify({ status: 403, sent: 0 }), "a sign-in not in the users list");
+  list = [{ id: 1, email: "", isOwner: true }];
+  eq(JSON.stringify(await go("Bearer stranger")), JSON.stringify({ status: 200, sent: 1 }), "no owner linked yet: the model is off");
+  });
   await t("AUD-49 (v7.21.1): any other request is refused", async () => {
     setEnv({ ...SUPA, FAKTUROWNIA_API_TOKEN: "SECRET", FAKTUROWNIA_SUBDOMAIN: "acme" }); calls.length = 0; mockFetch((u, i) => session(u, i) || answer(200, {}));
     eq((await run({ query: { op: "clients" }, headers: { authorization: "Bearer good" } })).status, 400); eq((await run({ method: "DELETE", query: { op: "invoices" }, headers: { authorization: "Bearer good" } })).status, 400); eq(fkt().length, 0);
@@ -71,5 +88,15 @@ const fkt = () => calls.filter(c => /fakturownia\.pl/.test(c.url));
     const src = ["fakturownia.ts", "invoicing.ts", "Invoices.tsx", "Settings.tsx", "SalesOrders.tsx"].map(f => fs.readFileSync(path.resolve("./src/" + f), "utf8")).join("\n");
     ok(!/apiToken:|\.apiToken|fktToken|paste API token/.test(src), "the browser code still handles a token");   // only the clean-up of an old one names it ok(!/fakturowniaBase\(/.test(src), "the browser still calls Fakturownia directly");
   });
+  await t("A-INV-2 (v7.26.6): an invoice's PDF is read with the server's token and handed back as a PDF — only for a numeric Fakturownia id; the token never comes back; the browser asks through the server part", async () => {
+    setEnv({ ...SUPA, FAKTUROWNIA_API_TOKEN: "SECRET", FAKTUROWNIA_SUBDOMAIN: "acme", REACT_APP_ENV_LABEL: "TEST" }); calls.length = 0;
+    mockFetch((u, i) => session(u, i) || { ok: true, status: 200, arrayBuffer: async () => Buffer.from("%PDF-1.4 test"), text: async () => "%PDF-1.4 test" });
+    const r = await run({ query: { op: "pdf", id: "1234" }, headers: { authorization: "Bearer good" } });
+    eq(r.status, 200); eq(r.headers["content-type"], "application/pdf"); ok(/%PDF/.test(r.raw), "not the PDF"); ok(!/SECRET/.test(r.raw), "the token came back");
+    const u = new URL(fkt()[0].url); eq(u.origin + u.pathname, "https://acme.fakturownia.pl/invoices/1234.pdf"); eq(u.searchParams.get("api_token"), "SECRET");
+    const bad = await run({ query: { op: "pdf", id: "1234/../clients" }, headers: { authorization: "Bearer good" } }); eq(bad.status, 400);
+    const anon = await run({ query: { op: "pdf", id: "1234" }, headers: {} }); eq(anon.status, 401);
+  });
+
   console.log(`SERVER PART: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);
 })();

@@ -54,7 +54,7 @@ export function isArchived(kind: DocKind, doc: any, archivedSeasons: string[], s
   return !!s && archivedSeasons.includes(s);
 }
 
-export const STORE_KIND: Record<string, DocKind> = { pos: "po", orders: "so", shipments: "shipment", lots: "lot", invoices: "invoice", claims: "claim", poSettlements: "settlement", inspections: "inspection", stockCounts: "count", financeNotes: "note", creditNotes: "note", warehouseInvoices: "warehouseInvoice", operationalCosts: "cost", planningSheets: "sheet" };
+export const STORE_KIND: Record<string, DocKind> = { pos: "po", orders: "so", shipments: "shipment", lots: "lot", invoices: "invoice", claims: "claim", poSettlements: "settlement", inspections: "inspection", stockCounts: "count", financeNotes: "note", operationalCosts: "cost", planningSheets: "sheet" };
 
 /** Which seasons exist in the data, with document counts. */
 export function seasonsPresent(data: Record<string, any[]>, st: SeasonSettings): Array<{ season: string; count: number }> {

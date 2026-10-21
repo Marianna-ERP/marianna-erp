@@ -20,15 +20,20 @@ import {
   recomputeInvoiceMoney, isLocked, invoiceDirection,
   buildFakturowniaPayload, noteSignedPLN, pushBlockers } from "./invoicing";
 import * as XLSX from "xlsx";
-import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice } from "./fakturownia";
-import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister } from "./fakturowniaImport.domain";
+import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice , fetchInvoicePdf } from "./fakturownia";
+import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister , vatFixFor , salesRowFromMapped, isRegisteredSale, soCandidatesForSale, buildIssuedSalesInvoice } from "./fakturowniaImport.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
 import { companyProfile } from "./useLocalStoredState";
-import { pickerParties, archivedMark } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
+import { pickerParties, archivedMark, rolesOf } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6): where a cost is charged follows its category
+import { exportNotesForSale, isFromPoland } from "./invoiceNotes.domain";   // v7.26.4 (A-INV-4)
+import { destinationDisplay } from "./SalesOrders";
+import { locationById } from "./locations";
+import { pdfFolderSupported, pdfFolder, choosePdfFolder, pdfFileName, savePdfToFolder } from "./invoicePdfFolder";   // v7.26.6 (A-INV-2)
 
 const COMPANY: any = companyProfile();   // v6.99.67 (A-AUD-1): the company block comes from Settings (defaults = the former literal)
 
@@ -46,16 +51,19 @@ function Inp({ value, onChange, type, placeholder, disabled, style, min, max, no
   return <input value={shown} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: disabled ? "#999" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />; }
 function Sel({ value, onChange, children, disabled, style }: any) { return <select value={value ?? ""} onChange={onChange} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }}>{children}</select>; }
 
-const CATEGORY_META: Record<InvoiceCategory, { label: string; color: string; bg: string }> = {
-  SINV: { label: "Sales", color: "#16A34A", bg: "#DCFCE7" },
-  COMMISSION: { label: "Commission", color: "#7C3AED", bg: "#EDE9FE" },  // v6.30.1: settlement commission invoices
-  PURCHASE: { label: "Purchase", color: "#DC2626", bg: "#FEE2E2" },
-  FORWARDER: { label: "Forwarder", color: "#DC2626", bg: "#FEE2E2" },
-  BROKER: { label: "Broker/Customs", color: "#DC2626", bg: "#FEE2E2" },
+const CATEGORY_META: Record<InvoiceCategory, { label: string; color: string; bg: string }> = {   // v7.26.1 (A-INV-6): one list
+  SALES: { label: "Sales", color: "#16A34A", bg: "#DCFCE7" },
+  COMMISSION: { label: "Commission", color: "#7C3AED", bg: "#EDE9FE" },
+  PURCHASE: { label: "Goods purchase", color: "#DC2626", bg: "#FEE2E2" },
+  FREIGHT: { label: "Freight", color: "#DC2626", bg: "#FEE2E2" },
+  CUSTOMS: { label: "Customs", color: "#DC2626", bg: "#FEE2E2" },
   WAREHOUSE: { label: "Warehouse", color: "#DC2626", bg: "#FEE2E2" },
-  TRANSPORT: { label: "Transport", color: "#DC2626", bg: "#FEE2E2" },
+  OVERHEAD: { label: "Overhead", color: "#475569", bg: "#F1F5F9" },
   OTHER: { label: "Other cost", color: "#475569", bg: "#F1F5F9" },
 };
+/** v7.26.1 (A-INV-6): an older stored value read as its category (the database step folds them). */
+const catKey = (c: any): InvoiceCategory => (({ SINV: "SALES", FORWARDER: "FREIGHT", TRANSPORT: "FREIGHT", BROKER: "CUSTOMS", LOGISTICS: "FREIGHT" } as any)[String(c || "")] || String(c || "OTHER")) as InvoiceCategory;
+const CHARGED_TO: Record<string, string> = { SALES: "the sale", PURCHASE: "the PO's lots", SHIPMENT: "a shipment (its lots)", OVERHEAD: "overheads", OTHER: "nothing — not allocated" };
 const STATUS_META: Record<PaymentStatus, { bg: string; color: string }> = {
   Draft: { bg: "#F3F4F6", color: "#6B7280" }, Issued: { bg: "#DBEAFE", color: "#2563EB" },
   Sent: { bg: "#E0F2FE", color: "#0284C7" }, "Partially paid": { bg: "#FEF3C7", color: "#D97706" },
@@ -66,7 +74,7 @@ function money(n: number, cur?: string) { if (n == null || isNaN(n)) return "—
 function daysUntil(d: string) { if (!d) return null; const t = new Date(localTodayISO()); const x = new Date(d); return Math.floor((x.getTime() - t.getTime()) / 86400000); }
 
 // v6.30.1: fall back to OTHER so an unknown/legacy category can never crash the render.
-function CatBadge({ cat }: { cat: InvoiceCategory }) { const m = CATEGORY_META[cat] || CATEGORY_META.OTHER; return <span style={{ background: m.bg, color: m.color, padding: "2px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{cat}</span>; }
+function CatBadge({ cat }: { cat: InvoiceCategory }) { const m = CATEGORY_META[catKey(cat)] || CATEGORY_META.OTHER; return <span style={{ background: m.bg, color: m.color, padding: "2px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{m.label}</span>; }   /* v7.26.1 (A-INV-6): the category's name, not its code */
 function StatusBadge({ s }: { s: PaymentStatus }) { const m = STATUS_META[s] || STATUS_META.Draft; return <span style={{ background: m.bg, color: m.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{statusWord(s)}</span>; }
 function DirPill({ inv }: { inv: Invoice }) { const r = invoiceDirection(inv) === "receivable"; return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: r ? "#16A34A" : "#475569", fontWeight: 600 }}><span style={{ fontSize: 13 }}>{r ? "↑" : "↓"}</span>{r ? "Receivable" : "Payable"}</span>; }
 
@@ -138,7 +146,8 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
       const sug = suggestForRow(r, contacts, shipments, pos);
       const learned = learnFromRegister(r, invoices, contacts);   // v6.99.135 (A-FI-1): what this seller's last invoice was
       const dup = isDuplicateCostInvoice(r.number, invoices);
-      return { ...r, ...sug, ...(learned?.tag ? { tag: learned.tag } : {}), dup, include: !dup && (r.net || r.gross) > 0,
+      const vatFix = dup ? vatFixFor(r, invoices) : null;   // v7.26.0 (A-INV-1): the old overhead path left it without VAT — this corrects it
+      return { ...r, ...sug, ...(learned?.tag ? { tag: learned.tag } : {}), dup, vatFix, include: vatFix ? true : (!dup && !!r.net && !!r.gross),   /* v7.26.0: a row missing its net or gross is not ticked for you */
         category: learned?.category || guessCostCategory(`${r.seller} ${r.description || ""}`),
         warehouseId: learned?.warehouseId ?? (warehouses[0]?.id ?? ""), learned: learned ? { from: learned.from, recurring: learned.recurring } : null };
     });
@@ -197,15 +206,17 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
   function upd(key: string, patch: any) { setRows(prev => prev.map(r => r.key === key ? { ...r, ...patch } : r)); }
 
   function post() {
-    const inc = rows.filter(r => r.include && r.tag !== "SKIP");
+    const all = rows.filter(r => r.include && r.tag !== "SKIP");
+    const fixes = all.filter(r => r.vatFix).map(r => ({ ...r.vatFix, number: r.number }));   // v7.26.0 (A-INV-1)
+    const inc = all.filter(r => !r.vatFix);
     const regs: any[] = []; const flips: any[] = []; const opCosts: any[] = [];   /* v7.22.0 (A-RV-40): warehouse invoices go to the register (v7.21.4) — no list of their own */
     inc.forEach(r => {
-      const contact = contactForSeller(r, contacts);
+      const contact = contactForSeller(r, contacts, { byName: false });   // v7.25.1 (FZ-17): linked by tax number only — the rest go to the review list
       if (r.tag === "WAREHOUSE") {
         const wh = warehouses.find((w: any) => String(w.id) === String(r.warehouseId)) || contact;
         // v7.21.4 (A-ST-10): a warehouse invoice goes into the register like any cost invoice — no separate store
         const ci = buildCostInvoice(r, "WAREHOUSE" as any, {}, wh || contact);
-        regs.push({ ...ci, category: "WAREHOUSE", costScope: "MONTHLY_SHARED", counterparty: { ...(ci.counterparty || {}), ...(wh ? { id: wh.id, name: wh.name || (ci.counterparty || {}).name } : {}) }, periodFrom: ci.periodFrom || (String(ci.issueDate || "").slice(0, 7) ? `${String(ci.issueDate).slice(0, 7)}-01` : undefined) });
+        regs.push({ ...ci, category: "WAREHOUSE", costScope: scopeOf("WAREHOUSE"), counterparty: { ...(ci.counterparty || {}), ...(wh ? { id: wh.id, name: wh.name || (ci.counterparty || {}).name } : {}) }, periodFrom: ci.periodFrom || (String(ci.issueDate || "").slice(0, 7) ? `${String(ci.issueDate).slice(0, 7)}-01` : undefined) });
         return;
       }
       if (r.tag === "OVERHEAD") {
@@ -227,7 +238,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
         if (lineId != null) flips.push({ shipmentNumber: r.shipmentNumber, costLineId: lineId, invoiceNumber: r.number });
       }
     });
-    onPost({ regs, flips, opCosts });
+    onPost({ regs, flips, opCosts, fixes });
   }
 
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12 };
@@ -267,15 +278,15 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                 <div key={r.key} style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "7px 0", borderBottom: "1px solid #F8FAFC", alignItems: "center", opacity: r.include ? 1 : 0.55 }}>
                   <input type="checkbox" checked={r.include} onChange={async (e: any) => {
                     // v6.66.0 (D-30): re-including a flagged duplicate is a deliberate act.
-                    if (e.target.checked && r.dup) {
+                    if (e.target.checked && r.dup && !r.vatFix) {
                       const info = duplicateCostInvoiceInfo(r.number, invoices);
                       const msg = info ? `"${r.number}" is ALREADY registered (${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? ", entered manually" : ""}). Importing it again double-counts the money.\n\nInclude it anyway?` : `"${r.number}" is already in the register. Include it anyway?`;
                       if (!(await uiConfirm({ title: "Please confirm", message: msg }))) return;
                     }
                     upd(r.key, { include: e.target.checked });
                   }} />
-                  <div style={{ fontSize: 11, color: "#64748B" }}>{r.date}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.dup && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
+                  <div style={{ fontSize: 11, color: "#64748B" }}>{formatDMY(r.date)}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.vatFix && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#0E7490" }}>corrects the VAT of the invoice already registered ({r.vatFix.confirmZero ? "0 % confirmed" : `${Number(r.vatFix.vatRate).toFixed(2)} %`})</span>}{(!r.net || !r.gross) && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B45309" }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount — check it there before posting</span>}{r.dup && !r.vatFix && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
                   <div style={{ fontSize: 11, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.number || "—"}</div>
                   <div style={{ fontSize: 12 }}>{(r.net || r.gross).toLocaleString("pl-PL")} {r.currency}</div>
                   <select style={inp} value={r.tag} onChange={(e: any) => upd(r.key, { tag: e.target.value })}>
@@ -338,6 +349,64 @@ function monthBounds(iso: string): { from: string; to: string } {
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate(); const mm = String(m).padStart(2, "0");
   return { from: `${y}-${mm}-01`, to: `${y}-${mm}-${String(last).padStart(2, "0")}` };
 }
+/** v7.26.3 (A-INV-3, owner 17 Oct): THE SALES INVOICES ISSUED IN FAKTUROWNIA, each linked to its SO — so the SO reads as invoiced and
+ *  is never invoiced twice. The SO is suggested (the one named on the invoice, else the client's open SO closest in amount). */
+function ImportIssuedModal({ invoices = [], contacts = [], orders = [], onClose, onPost }: any) {
+  const [period, setPeriod] = useState("this_month"); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [note, setNote] = useState("");
+  const [rows, setRows] = useState<any[]>([]); const cfg = readFakturowniaConfig();
+  async function fetchIssued() {
+    if (!cfg) { setError("Fakturownia is not configured (Settings)."); return; }
+    setBusy(true); setError(""); const r = await fetchInvoices(cfg, { income: 1, period }); setBusy(false);
+    if (!r.ok) { setError(r.error || "Fetch failed."); return; }
+    const staged = (r.data || []).map(mapInvoice).map((m: any, i: number) => salesRowFromMapped(m, i)).map((row: any) => {
+      const dup = isRegisteredSale(row.number, invoices); const c = soCandidatesForSale(row, orders, invoices, contacts);
+      return { ...row, dup, candidates: c.list, companyId: c.companyId, so: c.list[0]?.number || "", include: !dup && !!row.net && !!row.gross };
+    });
+    setRows(staged); setNote(`Fakturownia returned ${staged.length} sales invoice${staged.length === 1 ? "" : "s"}${staged.some((x: any) => x.dup) ? ` — ${staged.filter((x: any) => x.dup).length} already in the register` : ""}.`);
+  }
+  const upd = (k: string, p: any) => setRows(prev => prev.map(r => r.key === k ? { ...r, ...p } : r));
+  const included = rows.filter(r => r.include).length;
+  function post() {
+    const regs = rows.filter(r => r.include).map(r => buildIssuedSalesInvoice(r, r.so, (contacts || []).find((c: any) => String(c.id) === String(r.companyId)) || null));
+    onPost({ regs, flips: [], opCosts: [], fixes: [] });
+  }
+  const inp: React.CSSProperties = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 10px", fontSize: 12 };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130, padding: 20 }} onClick={onClose}>
+      <div style={{ width: 1000, maxWidth: "96vw", maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} onClick={(e: any) => e.stopPropagation()}>
+        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div><div style={{ fontSize: 14, fontWeight: 800 }}>Sales invoices issued in Fakturownia</div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>Each one is registered here and linked to its sales order, so the order reads as invoiced. Its exchange rate is the one on the invoice.</div></div>
+          <button onClick={onClose} style={{ ...inp, background: "#fff", fontWeight: 700, cursor: "pointer" }}>Close</button>
+        </div>
+        <div style={{ padding: "12px 22px", display: "flex", gap: 10, alignItems: "center", borderBottom: "1px solid #F3F4F6", flexWrap: "wrap" }}>
+          <select style={inp} value={period} onChange={(e: any) => setPeriod(e.target.value)}>{[["this_month", "This month"], ["last_month", "Last month"], ["this_year", "This year"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          <button disabled={busy} onClick={fetchIssued} style={{ border: "none", background: "#111", color: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{busy ? "Fetching…" : "⇩ Fetch issued invoices"}</button>
+          {error && <span style={{ fontSize: 12, color: "#DC2626", fontWeight: 600 }}>{error}</span>}
+          {!error && note && <span style={{ fontSize: 12, color: "#15803D", fontWeight: 600 }}>{note}</span>}
+        </div>
+        {rows.length > 0 && <div style={{ padding: "10px 22px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr>{["", "Issued", "Invoice", "Client", "Net", "Gross", "Sales order"].map(h => <th key={h} style={{ textAlign: "left", fontSize: 11, color: "#94A3B8", padding: "6px 6px", borderBottom: "1px solid #F3F4F6" }}>{h}</th>)}</tr></thead>
+            <tbody>{rows.map((r: any) => <tr key={r.key} style={{ opacity: r.include ? 1 : 0.55 }}>
+              <td style={{ padding: "6px" }}><input type="checkbox" checked={r.include} disabled={r.dup} onChange={(e: any) => upd(r.key, { include: e.target.checked })} /></td>
+              <td style={{ padding: "6px" }}>{formatDMY(r.date)}</td>
+              <td style={{ padding: "6px", fontWeight: 700 }}>{r.number}{r.dup && <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600 }}>already in the register</div>}{(!r.net || !r.gross) && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700 }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount</div>}</td>
+              <td style={{ padding: "6px" }}>{r.buyer}{!r.companyId && <div style={{ fontSize: 10, color: "#B45309" }}>not in Counterparties by tax number — link it later in Review</div>}</td>
+              <td style={{ padding: "6px", whiteSpace: "nowrap" }}>{money(r.net, r.currency)}</td>
+              <td style={{ padding: "6px", whiteSpace: "nowrap", fontWeight: 600 }}>{money(r.gross, r.currency)}</td>
+              <td style={{ padding: "6px", minWidth: 220 }}><select style={{ ...inp, width: "100%" }} value={r.so} disabled={r.dup} onChange={(e: any) => upd(r.key, { so: e.target.value })}><option value="">— not linked to a sales order</option>{(r.candidates || []).map((c: any) => <option key={c.number} value={c.number}>{c.label}</option>)}</select></td>
+            </tr>)}</tbody>
+          </table>
+          <div style={{ display: "flex", justifyContent: "flex-end", padding: "14px 0 6px" }}>
+            <button disabled={!included} onClick={post} style={{ border: "none", background: included ? "#16A34A" : "#D1D5DB", color: "#fff", borderRadius: 8, padding: "9px 18px", fontSize: 12, fontWeight: 700, cursor: included ? "pointer" : "not-allowed" }}>Register {included} invoice{included === 1 ? "" : "s"}</button>
+          </div>
+        </div>}
+      </div>
+    </div>
+  );
+}
+
 function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any) {
   const wh = warehouseOf(inv, contacts); const sites = wh ? [wh.siteId, ...((wh.extraAddresses || []).map((a: any) => a && typeof a === "object" ? a.siteId : null))].filter((x: any) => x != null) : [];
   const prior = inv.allocation || null; const mb = monthBounds(inv.serviceMonth ? inv.serviceMonth + "-01" : (inv.saleDate || inv.issueDate));
@@ -382,6 +451,42 @@ function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any
   );
 }
 
+/** v7.25.1 (FZ-17, owner 17 Oct): AN INVOICE NAMES ITS COMPANY BY ID. The ones that name it in text only are listed once — link each to
+ *  its company (a company of the very same name is suggested), or open the Directory to add it; no free text. */
+function UnlinkedCompanies({ invoices, contacts, setInvoices }: any) {
+  const S = (v: any) => String(v ?? "").trim(); const norm = (v: any) => S(v).toLowerCase().replace(/\s+/g, " ");
+  const live = (contacts || []).filter((c: any) => c && c.status !== "Deleted" && S(c.name));
+  const rows = (invoices || []).filter((i: any) => i && !S(i.counterparty?.id) && !/Cancelled/i.test(S(i.status) + S(i.paymentStatus)));
+  const [open, setOpen] = useState(false); const [pick, setPick] = useState<Record<string, string>>({});
+  if (!rows.length || !setInvoices) return null;
+  const suggest = (i: any) => { const n = norm(i.counterparty?.name); const hit = n ? live.find((c: any) => norm(c.name) === n) : null; return hit ? String(hit.id) : ""; };
+  const link = (i: any, cid: string) => {
+    const c = live.find((x: any) => String(x.id) === String(cid)); if (!c) return;
+    setInvoices((prev: any[]) => (prev || []).map((x: any) => x && x.id === i.id ? { ...x, counterparty: { ...(x.counterparty || {}), id: c.id, name: c.name } } : x));
+    recordAudit({ module: "Invoices", docType: "Invoice", docNumber: S(i.number), action: "updated", summary: `Company linked by id: ${c.name} (was named "${S(i.counterparty?.name) || "—"}" in text) — FZ-17` });
+  };
+  const btn: React.CSSProperties = { padding: "5px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" };
+  return <Card style={{ marginBottom: 14, borderColor: "#FDE68A", background: "#FFFBEB" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <b style={{ fontSize: 13 }}>{rows.length} invoice{rows.length === 1 ? "" : "s"} name{rows.length === 1 ? "s" : ""} the company in text only</b>
+      <span style={{ fontSize: 12, color: "#92400E" }}>Link each to its company once — the statements, the reports and the database then read it by id.</span>
+      <button type="button" onClick={() => setOpen(o => !o)} style={{ ...btn, marginLeft: "auto" }}>{open ? "Hide" : "Review"}</button>
+    </div>
+    {open && <div style={{ marginTop: 10, overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+      <thead><tr>{["Invoice", "Issued", "Named as", "Company", ""].map(h => <th key={h} style={{ textAlign: "left", fontSize: 11, color: "#92400E", padding: "5px 8px", borderBottom: "1px solid #FDE68A" }}>{h}</th>)}</tr></thead>
+      <tbody>{rows.map((i: any) => { const cur = pick[String(i.id)] ?? suggest(i);
+        return <tr key={i.id}>
+          <td style={{ padding: "6px 8px", fontWeight: 700 }}>{i.number || "—"}</td>
+          <td style={{ padding: "6px 8px" }}>{i.issueDate ? formatDMY(S(i.issueDate).slice(0, 10)) : "—"}</td>
+          <td style={{ padding: "6px 8px" }}>{S(i.counterparty?.name) || "—"}</td>
+          <td style={{ padding: "6px 8px", minWidth: 220 }}><Sel value={cur} onChange={(e: any) => setPick(p => ({ ...p, [String(i.id)]: e.target.value }))}><option value="">Choose the company…</option>{live.map((c: any) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}</Sel></td>
+          <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
+            <button type="button" disabled={!cur} onClick={() => link(i, cur)} style={{ ...btn, background: cur ? "#16A34A" : "#F1F5F9", color: cur ? "#fff" : "#94A3B8", borderColor: cur ? "#16A34A" : "#E5E7EB" }}>Link</button>{" "}
+            <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("marianna:navigate", { detail: { module: "contacts", tab: "companies" } }))} style={btn}>＋ New company</button>
+          </td></tr>; })}</tbody></table></div>}
+  </Card>;
+}
+
 export default function Invoices(props: any) {
   // v6.75.0: the account's departments (each = one bank account in one currency)
   // and the stated default per currency. Fetched from Fakturownia on demand and
@@ -404,9 +509,36 @@ export default function Invoices(props: any) {
     setShipments = null, setOperationalCosts = null, setOrders = null, closedPeriods = [], setLots = null } = props;
   const [allocFor, setAllocFor] = useState<any>(null);   // v6.99.109 (A-ST-7): the warehouse invoice being allocated to lots
   const [showImport, setShowImport] = useState(false); // v6.39.0
+  const [showIssued, setShowIssued] = useState(false);   // v7.26.3 (A-INV-3)
   // v6.39.0: everything a posted import touches, in one place.
-  async function handleImportPost({ regs, flips, opCosts }: any) {
-    if (regs.length) setInvoices((prev: any[]) => [...regs.map((r: any) => recomputeInvoiceMoney(r)), ...(prev || [])]);
+  // v7.26.6 (A-INV-2, owner 17 Oct): the PDFs of the invoices that came from or went to Fakturownia, into the company's folder
+  const [pdfBusy, setPdfBusy] = useState(false);
+  async function savePdfs(changeFolder = false) {
+    if (!pdfFolderSupported()) { await invAlert({ tone: "warn", title: "Invoice PDFs", message: "This browser cannot write into a folder — use Chrome or Edge on a computer with the Dropbox folder." }); return; }
+    let folder = changeFolder ? null : await pdfFolder();
+    if (!folder) { const r = await choosePdfFolder(); if (!r.ok) { await invAlert({ tone: "warn", title: "Invoice PDFs", message: r.message || "No folder chosen." }); return; } folder = await pdfFolder(); if (!folder) return; if (changeFolder) { await invAlert({ tone: "info", title: "Invoice PDFs", message: `PDFs will be saved in "${r.name}".` }); return; } }
+    const fktIdOf = (i: any) => i?.fakturownia?.fktId ?? i?.fakturownia?.ref;   // v7.27.4: an invoice the ERP created there keeps the id as 'ref'
+    const todo = (invoices || []).filter((i: any) => i && fktIdOf(i) && i.paymentStatus !== "Cancelled" && !i.pdfSavedAs).slice(0, 40);
+    if (!todo.length) { await invAlert({ tone: "info", title: "Invoice PDFs", message: "Every invoice that came from or went to Fakturownia already has its PDF in the folder." }); return; }
+    setPdfBusy(true); const saved: any[] = []; const failed: string[] = [];
+    for (const inv of todo) {
+      const r = await fetchInvoicePdf(fktIdOf(inv));
+      if (!r.ok || !r.blob) { failed.push(`${inv.number}: ${r.error || "no PDF"}`); continue; }
+      const name = pdfFileName(inv); try { await savePdfToFolder(folder, name, r.blob); saved.push({ id: inv.id, name }); } catch { failed.push(`${inv.number}: the folder refused the file`); }
+    }
+    setPdfBusy(false);
+    if (saved.length) { setInvoices((prev: any[]) => (prev || []).map((i: any) => { const s = saved.find(x => x.id === i.id); return s ? { ...i, pdfSavedAs: s.name, pdfSavedAt: localTodayISO() } : i; })); recordAudit({ module: "Invoices", docType: "PDF", docNumber: `${saved.length} invoice(s)`, action: "updated", summary: `Invoice PDFs saved in the folder: ${saved.map(s => s.name).slice(0, 10).join(", ")}${saved.length > 10 ? ` +${saved.length - 10}` : ""} (A-INV-2)` }); }
+    await invAlert({ tone: failed.length ? "warn" : "info", title: "Invoice PDFs", message: `${saved.length} PDF(s) saved in the folder.${todo.length === 40 ? " Press again for the next ones." : ""}${failed.length ? `\n\nNot saved:\n${failed.slice(0, 8).join("\n")}` : ""}` });
+  }
+  async function handleImportPost({ regs, flips, opCosts, fixes = [] }: any) {
+  if (regs.length) setInvoices((prev: any[]) => [...regs.map((r: any) => recomputeInvoiceMoney(r)), ...(prev || [])]);
+  // v7.26.0 (A-INV-1): the old overhead invoices take the VAT Fakturownia's amounts say (and their operational cost keeps it too)
+  if (fixes.length) {
+  const byInv = new Map(fixes.map((x: any) => [String(x.invoiceId), x])); const byOp = new Map(fixes.map((x: any) => [String(x.opCostId), x]));
+  setInvoices((prev: any[]) => (prev || []).map((i: any) => { const x: any = byInv.get(String(i?.id)); return x ? recomputeInvoiceMoney({ ...i, vatRate: x.vatRate, vatChecked: true }) : i; }));
+  if (setOperationalCosts) setOperationalCosts((prev: any[]) => (prev || []).map((c: any) => { const x: any = byOp.get(String(c?.id)); return x ? { ...c, vatRate: x.vatRate } : c; }));
+  recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "updated", summary: `VAT corrected from Fakturownia (A-INV-1): ${fixes.map((x: any) => `${x.number} ${x.confirmZero ? "0 % confirmed" : Number(x.vatRate).toFixed(2) + " %"}`).join("; ")}` });
+  }
     if (flips.length && setShipments) setShipments((prev: any[]) => (prev || []).map((sh: any) => {
       const mine = flips.filter((f: any) => f.shipmentNumber === sh.number);
       return mine.reduce((acc: any, f: any) => applyReceivedCostLine(acc, f.costLineId, f.invoiceNumber), sh);
@@ -416,7 +548,7 @@ export default function Invoices(props: any) {
     recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "imported", summary: `Import posted: ${regs.length} invoice(s)${flips.length ? `, ${flips.length} shipment cost line(s) -> Received` : ""}${opCosts.length ? `, ${opCosts.length} operational cost(s)` : ""}` });
     await invAlert({ tone: "info", title: "Import posted", message: `Posted: ${regs.length} invoice(s) to the register` +
       (flips.length ? `, ${flips.length} shipment cost line(s) marked Received` : "") +
-      (opCosts.length ? `, ${opCosts.length} operational cost(s)` : "") + "." });
+      (opCosts.length ? `, ${opCosts.length} operational cost(s)` : "") + (fixes.length ? `, the VAT of ${fixes.length} invoice(s) already registered corrected` : "") + "." });
   }
   // v6.99.72: `initialSelectedNumber` opens a detail directly (the render smoke uses it, like the other modules)
   const initialHit = props.initialSelectedNumber ? (invoices as any[]).find((i: any) => String(i.number) === String(props.initialSelectedNumber)) : null;
@@ -458,8 +590,8 @@ export default function Invoices(props: any) {
   // ── handlers ──
   function newInvoice(kind: "SALES" | "COST") {
     setForm(recomputeInvoiceMoney({
-      id: undefined, kind, category: kind === "SALES" ? "SINV" : "PURCHASE",
-      costScope: kind === "COST" ? "SHIPMENT" : undefined,
+      id: undefined, kind, category: kind === "SALES" ? "SALES" : "PURCHASE",
+      costScope: kind === "COST" ? scopeOf("PURCHASE") : undefined,   /* v7.26.1 (A-INV-6): follows the category */
       number: "", counterparty: null, issueDate: localTodayISO(), saleDate: localTodayISO(), dueDate: "",
       paymentMethod: "Transfer", currency: "PLN", fxRate: 1, netAmount: 0, vatRate: kind === "SALES" ? 5 : 23,
       vatAmount: 0, grossAmount: 0, netPLN: 0, grossPLN: 0, positions: [], links: [],
@@ -611,7 +743,7 @@ export default function Invoices(props: any) {
       await invAlert({ tone: "warn", title: "Which bank account?", message: `${blocked}\n\nThe invoice is not sent. Wrong payment details on a document that has reached KSeF can only be corrected by issuing another one.` });
       return;
     }
-    const payload = buildFakturowniaPayload(inv, { sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false, departmentId: choice.department?.id });
+    const payload = buildFakturowniaPayload(inv, { sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false, departmentId: choice.department?.id, ...fktBuyerOpts(inv) });
     const res = await createInvoice(cfg, payload);
     if (res.ok) {
       const legal = res.data?.number || inv.number;
@@ -624,8 +756,15 @@ export default function Invoices(props: any) {
       setPushState({ id: inv.id, msg: `Failed: ${res.error || "unknown error"}`, tone: "#DC2626" });
     }
   }
+  // v7.27.4 (AUD-16): the buyer as the live company (by id) and the sale's delivery terms, for the invoice sent to Fakturownia
+  function fktBuyerOpts(inv: any): { buyer: any; deliveryTerms: string } {
+    const buyer = (contacts || []).find((c: any) => c && inv?.counterparty?.id != null && String(c.id) === String(inv.counterparty.id)) || null;
+    const soNo = (inv?.links || []).find((l: any) => l && l.type === "SO")?.number; const so = soNo ? (orders || []).find((o: any) => String(o.number) === String(soNo)) : null;
+    const term = String(so?.sellIncoterm || "").trim(); const place = so ? String(destinationDisplay(so) || "").replace(/^—$/, "").trim() : "";
+    return { buyer, deliveryTerms: term ? `${term}${place ? ` ${place}` : ""}` : "" };
+  }
   async function copyPayload(inv: Invoice) {
-    const payload = buildFakturowniaPayload(inv, { sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false });
+    const payload = buildFakturowniaPayload(inv, { sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false, ...fktBuyerOpts(inv) });
     const text = JSON.stringify(payload, null, 2);
     try { navigator.clipboard?.writeText(text); setPushState({ id: inv.id, msg: "Payload copied to clipboard.", tone: "#2563EB" }); }
     catch { await invPrompt({ title: "Copy this payload", message: "Copy the text below:", defaultValue: text, confirmLabel: "Done" }); }
@@ -636,7 +775,7 @@ export default function Invoices(props: any) {
     setNoteForm({
       id: undefined, noteType: "CREDIT", direction: againstInvoice ? (againstInvoice.kind === "SALES" ? "outgoing" : "incoming") : "outgoing",
       invoiceId: againstInvoice?.id ?? null, relatedRef: againstInvoice?.links?.[0]?.number || "",
-      partyName: againstInvoice?.counterparty?.name || "", category: "Quality complaint",
+      partyId: againstInvoice?.counterparty?.id ?? null, partyName: againstInvoice?.counterparty?.name || "", category: "Quality complaint",   // v7.27.15 (A-RV-26): by id
       amount: "", currency: againstInvoice?.currency || "PLN", fxRate: againstInvoice?.fxRate || 1, status: "Draft", reason: "", date: localTodayISO(),
     });
     setView("note");
@@ -698,12 +837,17 @@ export default function Invoices(props: any) {
           <button onClick={() => newInvoice("COST")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#334155", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
           + Cost invoice</button>
           <button onClick={() => setShowImport(true)} title="Fetch received cost invoices from Fakturownia, tag them (goods / freight / customs / warehouse / overhead) and post them where they belong." style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Import from Fakturownia</button>
+          <button disabled={pdfBusy} onClick={() => savePdfs(false)} title="v7.26.6 (A-INV-2): each invoice's PDF from Fakturownia into your Dropbox folder (chosen once) — date_number_company.pdf" style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{pdfBusy ? "Saving PDFs…" : "PDFs → folder"}</button>
+          <button onClick={() => savePdfs(true)} title="Choose or change the folder the PDFs go to" style={{ padding: "6px 8px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Folder…</button>
+          <button onClick={() => setShowIssued(true)} title="v7.26.3 (A-INV-3): the sales invoices your team issued in Fakturownia — registered here and linked to their sales order" style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Sales invoices from Fakturownia</button>
+          {showIssued && <ImportIssuedModal invoices={invoices} contacts={contacts} orders={orders} onClose={() => setShowIssued(false)} onPost={async (p: any) => { setShowIssued(false); await handleImportPost(p); }} />}
           {showImport && <ImportFakturowniaModal invoices={invoices} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
           <button onClick={() => newNote()} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>+ Credit/Debit note</button>
         </div>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 28px" }}>
+        <UnlinkedCompanies invoices={invoices} contacts={contacts} setInvoices={setInvoices} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
           {[
             { l: "RECEIVABLE · OPEN", v: money(recvOpen, "PLN"), c: "#16A34A" },
@@ -729,19 +873,20 @@ export default function Invoices(props: any) {
         </div>
 
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "10px 16px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
-            {["TYPE", "NUMBER", "COUNTERPARTY", "ISSUED", "DUE", "GROSS", "STATUS", "LINKED"].map((h, i) => <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
+          <div style={{ display: "grid", gridTemplateColumns: "88px 150px 1fr 92px 92px 118px 118px 124px 90px", padding: "10px 16px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
+            {["TYPE", "NUMBER", "COUNTERPARTY", "ISSUED", "DUE", "NET", "GROSS", "STATUS", "LINKED"].map((h, i) => <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
           </div>
           {filtered.length === 0 && filteredNotes.length === 0 && <div style={{ padding: "36px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No invoices yet. Create one above, or they'll appear here as Sales Orders are invoiced and cost invoices are recorded.</div>}
           {filtered.map((i: Invoice, idx: number) => {
             const d = daysUntil(i.dueDate); const od = i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled" && d !== null && d < 0;
             return (
-              <div key={i.id} onClick={() => { setSelId(i.id); setView("detail"); }} style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "11px 16px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
+              <div key={i.id} onClick={() => { setSelId(i.id); setView("detail"); }} style={{ display: "grid", gridTemplateColumns: "88px 150px 1fr 92px 92px 118px 118px 124px 90px", padding: "11px 16px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><CatBadge cat={i.category} /></div>
                 <div><div style={{ fontSize: 12, fontWeight: 600, color: i.paymentStatus === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: i.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }} title={i.paymentStatus === "Cancelled" ? "Cancelled — kept on record, excluded from the ledger" : undefined}>{i.number || "—"}</div>{i.isProforma && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", padding: "1px 5px", borderRadius: 4 }}>PRO-FORMA</span>}<DirPill inv={i} /></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{i.counterparty?.name || "—"}</div>{i.counterparty?.nip && <div style={{ fontSize: 11, color: "#AAA" }}>NIP {i.counterparty.nip}</div>}</div>
                 <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(i.issueDate) || "—"}</div>
                 <div><div style={{ fontSize: 12, color: od ? "#B45309" : "#555", fontWeight: od ? 600 : 400 }}>{formatDMY(i.dueDate) || "—"}</div>{od && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 600 }}>{Math.abs(d as number)}d late</div>}</div>
+                <div><div style={{ fontSize: 13 }}>{money(i.netAmount, i.currency)}</div>{i.currency !== "PLN" && <div style={{ fontSize: 10, color: "#AAA" }}>{money(i.netPLN, "PLN")}</div>}</div>
                 <div><div style={{ fontSize: 13, fontWeight: 600 }}>{money(i.grossAmount, i.currency)}</div>{i.currency !== "PLN" && <div style={{ fontSize: 10, color: "#AAA" }}>{money(i.grossPLN, "PLN")}</div>}</div>
                 <div><StatusBadge s={i.paymentStatus} /></div>
                 <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{i.links[0]?.number || "—"}{i.links.length > 1 && <span style={{ color: "#AAA" }}> +{i.links.length - 1}</span>}{(i.creditNoteIds?.length > 0) && <span title="has credit/debit notes" style={{ color: "#7C3AED", marginLeft: 6 }}>↩</span>}</div>
@@ -755,11 +900,12 @@ export default function Invoices(props: any) {
             const linked = nt.invoiceId != null ? invoiceById.get(nt.invoiceId) : null;
             const isCredit = nt.noteType !== "DEBIT";
             return (
-              <div key={`note-${nt.id}`} onClick={() => { if (linked) { setSelId(linked.id); setView("detail"); } else { setNoteForm({ ...nt }); setView("note"); } }} style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "11px 16px", borderBottom: idx < filteredNotes.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
+              <div key={`note-${nt.id}`} onClick={() => { if (linked) { setSelId(linked.id); setView("detail"); } else { setNoteForm({ ...nt }); setView("note"); } }} style={{ display: "grid", gridTemplateColumns: "88px 150px 1fr 92px 92px 118px 118px 124px 90px", padding: "11px 16px", borderBottom: idx < filteredNotes.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><span style={{ background: isCredit ? "#FFF7ED" : "#EFF6FF", color: isCredit ? "#9A3412" : "#1D4ED8", padding: "1px 7px", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em" }}>{isCredit ? "CREDIT" : "DEBIT"}</span></div>
                 <div><div style={{ fontSize: 12, fontWeight: 600, color: "#9A3412", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{nt.number || "(note)"}</div><div style={{ fontSize: 10, color: "#AAA" }}>{nt.category || nt.reason || "—"}</div></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{nt.partyName || "—"}</div></div>
                 <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(nt.date) || "—"}</div>
+                <div style={{ fontSize: 12, color: "#AAA" }}>—</div>
                 <div style={{ fontSize: 12, color: "#AAA" }}>—</div>
                 <div><div style={{ fontSize: 13, fontWeight: 600, color: isCredit ? "#9A3412" : "#1D4ED8" }}>{isCredit ? "−" : "+"}{money(nt.amount, nt.currency)}</div></div>
                 <div><StatusBadge s={nt.status} /></div>
@@ -801,7 +947,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
                 <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 6 }}>PAYMENTS ({evts.length}) — {money(evts.reduce((t: number, p: any) => t + (parseFloat(p.amount) || 0), 0), inv.currency)} of {money(inv.grossAmount, inv.currency)}</div>
                 {evts.map((p: any) => (
                   <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "3px 0", borderTop: "1px solid #F1F5F9" }}>
-                    <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", color: "#64748B", minWidth: 82 }}>{p.date || "—"}</span>
+                    <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", color: "#64748B", minWidth: 82 }}>{formatDMY(p.date) || "—"}</span>
                     <span style={{ fontWeight: 700 }}>{money(p.amount, inv.currency)}</span>
                     <span style={{ color: "#64748B" }}>{p.method}</span>
                     {p.note && <span style={{ color: "#94A3B8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{p.note}</span>}
@@ -843,7 +989,8 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
             <Card><SectionTitle>AMOUNTS</SectionTitle>
               <Row k="Net" v={money(inv.netAmount, inv.currency)} /><Row k={`VAT ${inv.vatRate}%`} v={money(inv.vatAmount, inv.currency)} /><Row k="Gross" v={money(inv.grossAmount, inv.currency)} bold />
               {inv.currency !== "PLN" && <Row k="Gross (PLN)" v={money(inv.grossPLN, "PLN")} />}
-              {inv.kind === "COST" && inv.costScope && <Row k="Cost scope" v={inv.costScope === "SHIPMENT" ? "Shipment-scoped" : inv.costScope === "MONTHLY_SHARED" ? "Monthly shared (allocated)" : "Overhead (not allocated)"} />}
+              {inv.kind === "COST" && <Row k="Charged to" v={CHARGED_TO[scopeOf(catKey(inv.category))] || "—"} />}
+              {inv.pdfSavedAs && <Row k="PDF in the folder" v={`${inv.pdfSavedAs}${inv.pdfSavedAt ? ` · ${formatDMY(inv.pdfSavedAt)}` : ""}`} />}
             </Card>
           </div>
 
@@ -861,8 +1008,8 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
               <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 12, color: "#444", padding: "6px 0", borderTop: i ? "1px solid #F3F4F6" : "none" }}>
                 <span><strong>{c.shipment}</strong>{c.plates ? ` · ${c.plates}` : ""}</span>
                 {c.mrn && <span>MRN {c.mrn}</span>}
-                {c.releasedOn && <span>released {c.releasedOn}</span>}
-                {c.exitedOn ? <span style={{ color: "#1D4ED8", fontWeight: 700 }}>exit confirmed {c.exitedOn}{c.exitOffice ? ` · ${c.exitOffice}` : ""}</span> : <span style={{ color: "#B45309", fontWeight: 600 }}>exit not confirmed yet (no CC599C)</span>}
+                {c.releasedOn && <span>released {formatDMY(c.releasedOn)}</span>}
+                {c.exitedOn ? <span style={{ color: "#1D4ED8", fontWeight: 700 }}>exit confirmed {formatDMY(c.exitedOn)}{c.exitOffice ? ` · ${c.exitOffice}` : ""}</span> : <span style={{ color: "#B45309", fontWeight: 600 }}>exit not confirmed yet (no CC599C)</span>}
               </div>
             ))}
           </Card>}
@@ -896,8 +1043,8 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form?.currency, form?.issueDate]);
   const isSales = form.kind === "SALES";
-  const wanted = isSales ? ["Client"] : form.category === "FORWARDER" ? ["Forwarder"] : form.category === "BROKER" ? ["Broker"] : form.category === "WAREHOUSE" ? ["Warehouse"] : form.category === "TRANSPORT" ? ["Carrier"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
-  const partyOptions = pickerParties(contacts, form.counterparty?.id).filter((c: any) => { const ts = [c.type, ...(c.additionalTypes || [])]; return ts.some((t: string) => wanted.includes(t)); });   // v7.10.2 (A-RV-15 · CP-4)
+  const fc = catKey(form.category); const wanted = isSales ? ["Client"] : fc === "FREIGHT" ? ["Carrier", "Forwarder"] : fc === "CUSTOMS" ? ["Broker"] : fc === "WAREHOUSE" ? ["Warehouse"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
+  const partyOptions = pickerParties(contacts, form.counterparty?.id).filter((c: any) => { const ts = rolesOf(c); return ts.some((t: string) => wanted.includes(t)); });   // v7.10.2 (A-RV-15 · CP-4)
   // v6.63.0 (D-06, M3/M4): the old picker concatenated ALL SOs+POs+shipments and
   // hard-capped the render at 40 buttons — any PO past position 40 simply never
   // appeared, and the wall of unfiltered buttons was unusable. Now: search box,
@@ -945,15 +1092,15 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
 
           <Card style={{ marginBottom: 16 }}><SectionTitle>INVOICE DETAILS</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
-              {!isSales && <div><Lbl>Category</Lbl><Sel value={form.category} onChange={(e: any) => sf("category", e.target.value)}>{(["PURCHASE", "FORWARDER", "BROKER", "WAREHOUSE", "TRANSPORT", "OTHER"] as InvoiceCategory[]).map(c => <option key={c} value={c}>{CATEGORY_META[c].label}</option>)}</Sel></div>}
+              {!isSales && <div><Lbl>Category</Lbl><Sel value={catKey(form.category)} onChange={(e: any) => setForm((f: any) => ({ ...f, category: e.target.value, costScope: scopeOf(e.target.value) }))}>{(["PURCHASE", "FREIGHT", "CUSTOMS", "WAREHOUSE", "OVERHEAD", "OTHER"] as InvoiceCategory[]).map(c => <option key={c} value={c}>{CATEGORY_META[c].label}</option>)}</Sel><div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Charged to {CHARGED_TO[scopeOf(catKey(form.category))]}</div></div>}
               <div><Lbl>Document type</Lbl><Sel value={form.isProforma ? "PROFORMA" : "FINAL"} onChange={(e: any) => sf("isProforma", e.target.value === "PROFORMA")}><option value="FINAL">Final invoice</option><option value="PROFORMA">Pro-forma (advance request — not in the ledger)</option></Sel></div>
-              {!isSales && <div><Lbl>Cost scope</Lbl><Sel value={form.costScope} onChange={(e: any) => sf("costScope", e.target.value)}><option value="SHIPMENT">Shipment-scoped</option><option value="MONTHLY_SHARED">Monthly shared</option><option value="OVERHEAD">Overhead</option></Sel></div>}
+              
               <div><Lbl>Invoice number {isSales && <span style={{ color: "#BBB", fontWeight: 400 }}>(Fakturownia assigns on Send)</span>}</Lbl><Inp value={form.number} onChange={(e: any) => sf("number", e.target.value)} placeholder={isSales ? "auto / optional" : "supplier's number"} /></div>
               <div><Lbl>Issue date</Lbl><Inp type="date" value={form.issueDate} onChange={(e: any) => sf("issueDate", e.target.value)} /></div>
               <div><Lbl>Sale date</Lbl><Inp type="date" value={form.saleDate} onChange={(e: any) => sf("saleDate", e.target.value)} /></div>
               <div><Lbl>Due date</Lbl><Inp type="date" value={form.dueDate} onChange={(e: any) => sf("dueDate", e.target.value)} /></div>
               <div><Lbl>Payment method</Lbl><Sel value={form.paymentMethod} onChange={(e: any) => sf("paymentMethod", e.target.value)}>{["Transfer", "Cash", "Card", "Compensation", "Prepaid"].map(p => <option key={p}>{p}</option>)}</Sel></div>
-              {form.costScope === "MONTHLY_SHARED" && <><div><Lbl>Period from</Lbl><Inp type="date" value={form.periodFrom} onChange={(e: any) => sf("periodFrom", e.target.value)} /></div><div><Lbl>Period to</Lbl><Inp type="date" value={form.periodTo} onChange={(e: any) => sf("periodTo", e.target.value)} /></div></>}
+              {catKey(form.category) === "WAREHOUSE" && <><div><Lbl>Period from</Lbl><Inp type="date" value={form.periodFrom} onChange={(e: any) => sf("periodFrom", e.target.value)} /></div><div><Lbl>Period to</Lbl><Inp type="date" value={form.periodTo} onChange={(e: any) => sf("periodTo", e.target.value)} /></div></>}
               <div style={{ gridColumn: "span 2" }}><Lbl>{isSales ? "Buyer (client)" : "Seller (counterparty)"}</Lbl><Sel value={form.counterparty?.id || ""} onChange={(e: any) => setParty(e.target.value)}><option value="">— select —</option>{partyOptions.map((c: any) => <option key={c.id} value={c.id}>{c.name}{c.nip ? ` (NIP ${c.nip})` : ""}</option>)}</Sel></div>
             </div>
           </Card>
@@ -978,7 +1125,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
                 return <div style={{ marginBottom: 8 }}>
                   {miss && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 6 }}>⚠ {miss}</div>}
                   {props.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}><span style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>SUGGESTED (v6.98.0):</span>{props.map((p: any) => <button key={p.type + p.number} onClick={() => { sf("links", [...(form.links || []), { type: p.type === "SHIPMENT" ? "Shipment" : p.type, number: p.number }]); if (p.costId != null) sf("matchCostId", p.costId); }} title={p.reason} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid " + (p.confidence === "high" ? "#166534" : "#E5E7EB"), background: p.confidence === "high" ? "#F0FDF4" : "#fff", color: "#166534", cursor: "pointer", fontWeight: 700 }}>+ {p.type} {p.number} <span style={{ fontWeight: 400, color: "#64748B" }}>· {p.reason}</span></button>)}</div>}
-                  {!form.dueDate && form.counterparty && (() => { const cp = (contacts || []).find((c: any) => String(c.id) === String(form.counterparty?.id)); const due = defaultCostDueDate(form, cp); return due ? <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Due date will default to <b>{due}</b> ({cp?.paymentTermsDays} days from issue — the counterparty's terms) <button onClick={() => sf("dueDate", due)} style={{ marginLeft: 6, fontSize: 10, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer" }}>apply</button></div> : null; })()}
+                  {!form.dueDate && form.counterparty && (() => { const cp = (contacts || []).find((c: any) => String(c.id) === String(form.counterparty?.id)); const due = defaultCostDueDate(form, cp); return due ? <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Due date will default to <b>{due}</b> ({cp?.terms?.paymentDays} days from issue — the counterparty's terms) <button onClick={() => sf("dueDate", due)} style={{ marginLeft: 6, fontSize: 10, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer" }}>apply</button></div> : null; })()}
                 </div>; })()}
               {/* v6.81.0 (D-59): an invoice born from a Sales Order is that order's invoice — its link is fixed. */}
               {form.kind === "SALES" && (form.links || []).some((l: any) => l.type === "SO") ? (
@@ -993,6 +1140,11 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
             </div>
           </Card>
 
+          {isSales && <Card><SectionTitle>NOTES ON THE INVOICE <span style={{ fontWeight: 400, color: "#94A3B8", textTransform: "none", letterSpacing: 0 }}>· printed on it — sent to Fakturownia</span></SectionTitle>   {/* v7.26.4 (A-INV-4) */}
+            <textarea value={form.invoiceNotes || ""} onChange={(e: any) => sf("invoiceNotes", e.target.value)} rows={8} placeholder="Delivery terms, ACID, goods with CN code and origin, weights, packages, trucks, containers, recorders, the origin declaration…" style={{ width: "100%", border: "1.5px solid #BFDBFE", borderRadius: 7, padding: "8px 10px", fontSize: 12, fontFamily: "inherit", boxSizing: "border-box" }} />
+            {(() => { const soNo = (form.links || []).find((l: any) => l && l.type === "SO")?.number; const so = soNo ? (orders || []).find((o: any) => String(o.number) === String(soNo)) : null;
+              return so ? <button type="button" onClick={() => sf("invoiceNotes", exportNotesForSale(so, { shipments, lots, deliveryPlace: destinationDisplay(so), fromPoland: isFromPoland(so, shipments, (id: any, custom: any) => String((locationById(id, contacts) as any)?.country || custom?.country || "")) }))} style={{ marginTop: 6, padding: "5px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Fill again from {so.number}</button> : null; })()}
+          </Card>}
           <Card><SectionTitle>NOTES</SectionTitle><textarea value={form.notes || ""} onChange={(e: any) => sf("notes", e.target.value)} rows={3} style={{ width: "100%", border: "1.5px solid #F59E0B", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }} /></Card>
         </div>
       </div>
@@ -1004,7 +1156,8 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
 function NoteForm({ form, setForm, onSave, onCancel, contacts, invoices, orders, pos, shipments }: any) {
   const sf = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
   const wanted = form.direction === "outgoing" ? ["Client"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
-  const partyOptions = Array.from(new Set((contacts || []).filter((c: any) => ((!c.archived && !c.deleted) || String(c.name) === String(form.partyName)) && [c.type, ...(c.additionalTypes || [])].some((t: string) => wanted.includes(t))).map((c: any) => c.name).filter(Boolean))).sort();   // v7.10.2 (A-RV-15 · CP-4): archived companies out; the one the note already names stays
+  // v7.27.15 (A-RV-26): the note's party by id — the companies of the wanted kinds; the one the note already names stays
+  const partyOptions = (contacts || []).filter((c: any) => c && (((!c.archived && !c.deleted) && rolesOf(c).some((t: string) => wanted.includes(t))) || (form.partyId != null && String(c.id) === String(form.partyId)))).slice().sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "pl"));   // v7.10.2 (A-RV-15 · CP-4): archived companies out; the one the note already names stays
   const invoiceOptions = (invoices || []).filter((i: Invoice) => form.direction === "outgoing" ? i.kind === "SALES" : i.kind === "COST");
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1020,7 +1173,7 @@ function NoteForm({ form, setForm, onSave, onCancel, contacts, invoices, orders,
               <div><Lbl>Note type</Lbl><Sel value={form.noteType} onChange={(e: any) => sf("noteType", e.target.value)}><option value="CREDIT">Credit note (reduces amount)</option><option value="DEBIT">Debit note (increases amount)</option></Sel></div>
               <div><Lbl>Direction</Lbl><Sel value={form.direction} onChange={(e: any) => sf("direction", e.target.value)}><option value="outgoing">Outgoing (to a client)</option><option value="incoming">Incoming (from a supplier/carrier)</option></Sel></div>
               <div style={{ gridColumn: "span 2" }}><Lbl>Against invoice (optional but recommended)</Lbl><Sel value={form.invoiceId ?? ""} onChange={(e: any) => { const id = e.target.value ? parseInt(e.target.value) : null; const inv = invoiceOptions.find((x: Invoice) => x.id === id); setForm((f: any) => ({ ...f, invoiceId: id, partyName: inv?.counterparty?.name || f.partyName, currency: inv?.currency || f.currency, relatedRef: inv?.links?.[0]?.number || f.relatedRef })); }}><option value="">— not linked —</option>{invoiceOptions.map((i: Invoice) => <option key={i.id} value={i.id}>{i.number || "(no number)"} · {i.counterparty?.name} · {money(i.grossAmount, i.currency)}</option>)}</Sel></div>
-              <div><Lbl>Counterparty</Lbl><Sel value={form.partyName} onChange={(e: any) => sf("partyName", e.target.value)}><option value="">— select —</option>{partyOptions.map((nm: any) => <option key={nm}>{nm}</option>)}</Sel></div>
+              <div><Lbl>Counterparty</Lbl><Sel value={form.partyId != null ? String(form.partyId) : ""} onChange={(e: any) => { const c: any = (contacts || []).find((x: any) => String(x.id) === e.target.value); setForm((f0: any) => ({ ...f0, partyId: c ? c.id : null, partyName: c ? c.name : "" })); }}><option value="">{form.partyId == null && form.partyName ? `"${form.partyName}" — typed, not linked: pick its company` : "— select —"}</option>{partyOptions.map((c: any) => <option key={String(c.id)} value={String(c.id)}>{c.name}</option>)}</Sel></div>
               <div><Lbl>Reason</Lbl><Sel value={form.category} onChange={(e: any) => sf("category", e.target.value)}>{["Quality complaint", "Short delivery", "Pricing correction", "Returned goods", "Damaged in transit", "Additional charge", "Other"].map(r => <option key={r}>{r}</option>)}</Sel></div>
               <div><Lbl>Amount</Lbl><Inp type="number" value={form.amount} onChange={(e: any) => sf("amount", e.target.value)} /></div>
               <div><Lbl>Currency{form.invoiceId != null ? " (from invoice)" : ""}</Lbl><Sel value={form.currency} disabled={form.invoiceId != null} title={form.invoiceId != null ? "Currency follows the linked invoice" : ""} onChange={(e: any) => { sf("currency", e.target.value); sf("fxRate", defaultFxRate(e.target.value)); }} style={form.invoiceId != null ? { background: "#F3F4F6", color: "#6B7280" } : undefined}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>

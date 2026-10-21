@@ -22,7 +22,7 @@ function shipmentsForPO(poNumber: string, shipments: any[]): string[] {
   });
   return Array.from(out);
 }
-function shipmentsForSO(soNumber: string, shipments: any[]): string[] {
+export function shipmentsForSO(soNumber: string, shipments: any[]): string[] {   // v7.28.5: shared
   const out = new Set<string>();
   (shipments || []).forEach(s => {
     const hit = refsOf(s.soRefs).includes(soNumber) ||
@@ -34,7 +34,7 @@ function shipmentsForSO(soNumber: string, shipments: any[]): string[] {
 function lotsForPO(poNumber: string, lots: any[]): string[] {
   return (lots || []).filter(l => l.poRef === poNumber).map(l => l.number);
 }
-function invoicesForCounterpartyDoc(docNumber: string, kind: "PO" | "SO", invoices: any[]): string[] {
+export function invoicesForCounterpartyDoc(docNumber: string, kind: "PO" | "SO", invoices: any[]): string[] {   // v7.28.5: shared
   const out = new Set<string>();
   (invoices || []).forEach(inv => {
     // v6.63.0 (BUG #1 fix): canonical invoices carry links as {type, number}
@@ -57,7 +57,7 @@ export function computedPOLinks(po: any, { shipments = [], lots = [], invoices =
   // v7.1.4 (A-PV-5, owner 6 Oct): a sale names its LOT (A-ONE-1) — the PO's sales are the sales of its lots; the old PO-sourced path is kept for history
   const lotNos = new Set((lots || []).filter((l: any) => l && l.poRef === po.number).map((l: any) => String(l.number)));
   const linkedSalesOrders = (orders || [])
-    .filter((o: any) => o && o.status !== "Cancelled" && (o.items || []).some((it: any) => (it.sourceType === "PO" && it.sourceRef === po.number) || (it.sourceType === "STOCK" && lotNos.has(String(it.sourceRef)))))
+    .filter((o: any) => o && o.status !== "Cancelled" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && lotNos.has(String(it.sourceRef)))))
     .map((o: any) => o.number);
   const viaLots = (shipments || []).filter((s: any) => s && s.status !== "Cancelled" && (s.goods || []).some((g: any) => lotNos.has(String(g.lotRef)))).map((s: any) => s.number);
   return {
@@ -75,7 +75,7 @@ export function computedSOLinks(so: any, { shipments = [], invoices = [], lots =
       .map((it: any) => it.sourceType === "STOCK" ? it.sourceRef : null)
       .filter(Boolean)
       .concat((lots || []).filter((l: any) =>
-        (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === l.poRef)).map((l: any) => l.number))
+        false).map((l: any) => l.number))
   ));
   return {
     linkedShipments: shipmentsForSO(so.number, shipments),

@@ -24,7 +24,7 @@ import { resolveFxRate } from "./fx";
 // Both views return the same shape so the UI can flip a toggle without
 // branching at render time.
 
-import { findLotForSOLine, shippedKgByLine } from "./salesOrders.domain";
+import { shippedKgByLine } from "./salesOrders.domain";
 
 export type MarginMode = "forecast" | "actual";
 
@@ -105,22 +105,6 @@ function lotNetShippedForSO(lot: any, soNumber: string): number {
   return Math.max(0, lotShippedKgForSO(lot, soNumber) - lotReversedKgForSO(lot, soNumber));
 }
 
-// Find a PO line referenced by a stock-out SO item.
-// PO shape varies between standalone-stub and integrated — handle both:
-//   { number, items: [{ id, product, unitPrice, qty, ... }], currency, fxRate, ... }
-function findPOLine(pos: any[], poNumber: string, poLineId: any, product?: string, variety?: string): { po: any; line: any } | null {
-  const po = (pos || []).find((p: any) => p.number === poNumber);
-  if (!po) return null;
-  // v6.99.142 (AUD-35): the PO line is found by id, then by product + variety — never "the first line", which priced apples at pepper prices
-  const items = po.items || [];
-  const line = items.find((l: any) => poLineId != null && String(l.id) === String(poLineId))
-    || items.find((l: any) => product && String(l.product || "").toLowerCase() === String(product).toLowerCase() && String(l.variety || "").toLowerCase() === String(variety || "").toLowerCase())
-    || items.find((l: any) => product && String(l.product || "").toLowerCase() === String(product).toLowerCase())
-    || (items.length === 1 ? items[0] : null);
-  if (!line) return null;
-  return { po, line };
-}
-
 // ─── REVENUE ────────────────────────────────────────────────────────────────
 
 function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipments: any[] = []): { lines: MarginLine[]; totalSO: number; warnings: string[] } {
@@ -195,7 +179,6 @@ function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipment
 
 function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode): { lines: MarginLine[]; totalPLN: number; warnings: string[]; hasMissingData: boolean } {
   const lines: MarginLine[] = [];
-  const cogsClaimedLots = new Set<string>(); // v6.32.0 (A1): one lot serves one line
   let totalPLN = 0;
   const warnings: string[] = [];
   let hasMissingData = false;
@@ -234,59 +217,6 @@ function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode): { l
       if (!lot.costs || lot.costs.length === 0) {
         warnings.push(`Line "${product}": lot ${lot.number} has no cost data — COGS shown as 0.`);
         hasMissingData = true;
-      }
-    } else if (it.sourceType === "PO" && it.sourceRef) {
-      // PO-sourced line — use the PO's purchase price as proxy
-      const found = findPOLine(pos, it.sourceRef, it.sourceLineId, it.product, it.variety);
-      if (!found) {
-        warnings.push(`Line "${product}": referenced PO ${it.sourceRef} not found — COGS unknown.`);
-        hasMissingData = true;
-        return;
-      }
-      const { po, line } = found;
-      const poPrice = safe(line.unitPrice);
-      const poFx = safe(po.fxRate || 1) || 1;
-      const purchaseCostPLN = round2(qty * poPrice * poFx);
-
-      if (mode === "actual") {
-        // Has the PO arrived? If a lot has been auto-created for this PO line, count its actual costs;
-        // otherwise the goods haven't physically moved yet, so COGS = 0 for ACTUAL view
-        // v6.32.0 (A1): canonical matcher — poLineId-first, variety-aware. The old
-        // name-only find resolved every line of a multi-line same-product PO to
-        // the FIRST lot (wrong cost basis on real multi-line POs).
-        const matchingLot = findLotForSOLine(lots, it, { claimed: cogsClaimedLots });
-        if (matchingLot) cogsClaimedLots.add(String(matchingLot.number));
-        if (matchingLot) {
-          // Use the lot's cost basis × kg shipped
-          const costPerKg = lotCostPerKg(matchingLot);
-          const shipped = lotNetShippedForSO(matchingLot, order.number);
-          const linePLN = round2(shipped * costPerKg);
-          totalPLN += linePLN;
-          lines.push({
-            label: `${product} · ${shipped.toLocaleString("pl-PL")} kg from ${matchingLot.number} (PO ${po.number}) @ ${round2(costPerKg)} PLN/kg`,
-            amountPLN: linePLN,
-          });
-        } else {
-          // PO not yet arrived → no actual COGS yet
-          lines.push({
-            label: `${product} · ${qty.toLocaleString("pl-PL")} kg from PO ${po.number} (not yet arrived)`,
-            amountPLN: 0,
-            note: "PO not yet arrived — actual COGS not yet known",
-          });
-          if (["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status)) {
-            warnings.push(`Line "${product}": SO is ${order.status} but PO ${po.number} has no matching arrived lot. Cannot compute actual COGS.`);
-            hasMissingData = true;
-          }
-        }
-      } else {
-        // FORECAST: PO commitment price + an estimate of inland costs?
-        // For now: just the purchase price. Logistics costs come from the shipment side.
-        totalPLN += purchaseCostPLN;
-        lines.push({
-          label: `${product} · ${qty.toLocaleString("pl-PL")} kg from PO ${po.number} @ ${poPrice} ${po.currency || "PLN"}/kg`,
-          amountPLN: purchaseCostPLN,
-          note: "Forecast — purchase price only, logistics counted separately",
-        });
       }
     } else {
       warnings.push(`Line "${product}": no source assigned — COGS cannot be computed.`);

@@ -12,6 +12,5 @@ const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader fo
 /** Payment days of a counterparty: the terms first, the retired flat field only for old records. */
 export function paymentDaysOf(cp: any): number {
   const t = cp?.terms || {};
-  if (num(t.paymentDays) > 0) return num(t.paymentDays);
-  return num(cp?.paymentTermsDays);   // F-1: delete this line when the column goes
+  return num(t.paymentDays) > 0 ? num(t.paymentDays) : 0;   // v7.28.1 (Batch L): the flat column is gone — the terms own it
 }

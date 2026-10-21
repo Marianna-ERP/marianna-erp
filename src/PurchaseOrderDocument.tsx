@@ -1,7 +1,7 @@
 // PurchaseOrderDocument.tsx — v6.99.68 (A-AUD-2, owner): moved out of PurchaseOrders.tsx unchanged; the module's shared helpers are imported from it.
 import React from "react";
 import { useConfirm} from "./ui";
-import { paymentBasisOf, paymentTermsLabel } from "./po.domain";
+import { paymentBasisOf, paymentTermsLabel, promisedDateLabel, poPromisedDate } from "./po.domain";
 import { documentTotals } from "./pricingUnit.domain";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { formatDMY } from "./dates";
@@ -19,8 +19,7 @@ export function PODoc({ order }: any) {
   const meta = [
     { en: "PO No.",             pl: "Nr zamówienia",          value: order.number,             strong: true },
     { en: "Order date",         pl: "Data zamówienia",        value: formatDMY(order.orderDate) },
-    { en: "Loading date",       pl: "Data załadunku",         value: formatDMY(order.loadingDate) },
-    { en: "Expected delivery",  pl: "Przewidywana dostawa",   value: formatDMY(order.expectedDeliveryDate) },
+    { en: promisedDateLabel(order), pl: promisedDateLabel(order, "pl"), value: formatDMY(poPromisedDate(order)) },   // v7.28.5 (Batch L · A-PO-3): the one promised date, named by the Incoterms rule
     { en: "Destination",        pl: "Miejsce docelowe",       value: placeForPrint(order.destinationLocationId, order.destinationText, sd.contacts || []).line || destinationDisplay(order) },   // v6.99.39 (D-1): with the address
     { en: "Purchase Incoterm",  pl: "Warunki zakupu Incoterms", value: order.buyIncoterm,      strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },

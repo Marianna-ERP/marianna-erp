@@ -126,7 +126,7 @@ export function lotReservationsForStock(lot: any, sourceSOs: any[], ctx?: Reserv
     }
     (o.items || []).forEach((it: any, li: number) => {
       const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
-      const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product, it.variety, lot.variety);
+      const matchesPOBackedLot = false;
       if (!matchesStock && !matchesPOBackedLot) return;
       if (!productsMatch(it.product, lot.product, it.variety, lot.variety)) return;
       const full = parseFloat(it.qty) || 0;
@@ -137,11 +137,8 @@ export function lotReservationsForStock(lot: any, sourceSOs: any[], ctx?: Reserv
       totalReserved += q;
     });
   });
-  const directBasis = lot.directFlow ? (parseFloat(lot.expectedKg) || 0) : 0;
   const physical = lot.physicalKg ?? lot.receivedKg ?? 0;
-  const notYetReceived = !parseNum(lot.physicalKg) && !parseNum(lot.receivedKg) && parseNum(lot.expectedKg) > 0;
-  // v6.99.127 (A-ONE-1): a lot not yet received (sold ahead, as a PO line used to be) is available for its expected kilos
-  const availabilityBasis = lot.directFlow ? Math.max(directBasis, physical) : notYetReceived ? parseNum(lot.expectedKg) : physical;
+  const availabilityBasis = lotSellableBasis(lot);   // v7.27.7 (FZ-30, P-12): the one rule the data checks read too
   return {
     physicalKg: physical,
     availabilityBasis,
@@ -163,44 +160,39 @@ function effectiveStatusOf(o: any, ctx: any): string {
   return String(o?.status || "");
 }
 
-export function poLineReservations(po: any, poLine: any, allOrders: any[], excludeOrderId: any, ctx?: ReserveCtx): any {
-  const reservations: any[] = [];
-  let totalReserved = 0;
-  (allOrders || []).forEach(o => {
-    if (o.id === excludeOrderId) return;
-    if (!(ctx && ctx.lots) && !SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
-    (o.items || []).forEach((it: any, li: number) => {
-      if (it.sourceType !== "PO") return;
-      if (it.sourceRef !== po.number) return;
-      if (String(it.sourceLineId ?? 1) !== String(poLine.id)) return;   // v6.99.144 (AUD-40): ids mix numbers and "pk-…" strings
-      if (!productsMatch(it.product, poLine.product, it.variety, poLine.variety)) return;
-      const full = parseFloat(it.qty) || 0;
-      if (full <= 0) return;
-      const q = reservedForLine(o, it, li, full, ctx);
-      if (q <= 0) return;
-      reservations.push({ soNumber: o.number, soId: o.id, status: o.status, qty: q });
-      totalReserved += q;
-    });
-  });
-  return {
-    liveAvailable: Math.max(0, (poLine.available ?? 0) - totalReserved),
-    totalReserved,
-    reservations,
-  };
-}
-
 /**
  * Per-line availability for an SO being edited. Extracted 1:1 from
  * SalesOrders.tsx (incl. the v6.18.24 received-PO exclusion and the
  * wrong-product guards). lots/pos are the picker-adapted shapes
  * (lot.availableKg, poLine.available).
  */
+/** v7.27.7 (FZ-30, P-12): the kilos a sale has already TAKEN from a lot — its SHIP_OUT movements, less reversals (a pass-through
+ *  pair counts: the goods left to that sale). Read by the sale line's free kilos and by the data checks alike. */
+export function takenBySale(lot: any, soNumber: any): number {
+  const so = String(soNumber || ""); if (!so) return 0;
+  return Math.max(0, (lot?.movements || []).reduce((a: number, m: any) => {
+    if (!m || m.voided || String(m.soRef || "") !== so) return a;
+    if (m.type === "SHIP_OUT") return a + (parseFloat(m.qtyKg) || 0);
+    if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
+    return a;
+  }, 0));
+}
+/** v7.27.7 (FZ-30, P-12 — one rule, one reader): HOW MUCH OF A LOT CAN BE SOLD. A direct lot: its expected kilos (or what is physically
+ *  there, if more); a lot not yet received: its expected kilos (it is sold ahead — A-ONE-1); otherwise what is physically there. The
+ *  sale lines and the data checks read this same rule (the data check read a stored 'available' that is 0 before the receipt, and
+ *  called 18 lots on the real copy 'oversold' that were sold ahead of their arrival). */
+export function lotSellableBasis(lot: any): number {
+  const physical = parseNum(lot?.physicalKg ?? lot?.receivedKg ?? 0);
+  const expected = parseNum(lot?.expectedKg);
+  if (lot?.directFlow) return Math.max(expected, physical);
+  const notYetReceived = !parseNum(lot?.physicalKg) && !parseNum(lot?.receivedKg) && expected > 0;
+  return notYetReceived ? expected : physical;
+}
+
 export function computeLineAvailability(soItems: any[], allOrders: any[], currentOrderId: any, lots: any[], pos: any[], shipments?: any[]): any[] {
   const _ctx: ReserveCtx | undefined = lots ? { lots, shipments: shipments || [] } : undefined;
   const LOTS = lots || [];
-  const PO_REFS = pos || [];
   const committedFromStock: Record<string, number> = {};
-  const committedFromPO: Record<string, number> = {};
 
   (allOrders || []).forEach(o => {
     if (o.id === currentOrderId) return;
@@ -215,14 +207,6 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
         if (!lot) return;
         if (!productsMatch(it.product, lot.product, it.variety, lot.variety)) return;
         committedFromStock[it.sourceRef] = (committedFromStock[it.sourceRef] || 0) + q;
-      } else if (it.sourceType === "PO") {
-        const po = PO_REFS.find(p => p.number === it.sourceRef);
-        if (!po || !isPOUsableForConfirmedSO(po)) return;
-        const poLine = po.items.find((l: any) => l.id === (it.sourceLineId ?? 1));
-        if (!poLine) return;
-        if (!productsMatch(it.product, poLine.product, it.variety, poLine.variety)) return;
-        const k = `${it.sourceRef}::${it.sourceLineId ?? 1}`;
-        committedFromPO[k] = (committedFromPO[k] || 0) + q;
       }
     });
   });
@@ -232,60 +216,12 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
     if (!lot) return 0;
     return Math.max(0, lot.availableKg - (committedFromStock[lot.number] || 0));
   }
-  function poLineRemaining(poNumber: string, lineId: any) {
-    const po = PO_REFS.find(p => p.number === poNumber);
-    if (!po || !isPOUsableForConfirmedSO(po)) return 0;
-    const line = po.items.find((l: any) => l.id === (lineId ?? 1));
-    if (!line) return 0;
-    const k = `${po.number}::${line.id}`;
-    // v6.45.0 (D): goods that already arrived or left this line are not supply.
-    return Math.max(0, line.available - (committedFromPO[k] || 0) - (goneKgByPOLine[k] || 0));
-  }
 
-  // Decision 1 (Batch 3a) + v6.45.0 (ROOT CAUSE D, shipped-aware supply):
-  // kg that already physically ARRIVED (received into a lot) or LEFT (shipped
-  // out of a lot) against a PO line is no longer incoming supply. Per lot we
-  // count max(received, shipped) — a pass-through lot has received == shipped
-  // and must count ONCE; a warehouse receipt counts via received; a pure
-  // ship-out (no receipt posted) counts via shipped. Keyed per PO LINE via the
-  // lot's poLineId; legacy lots without one fall back to the old
-  // product-keyed received map (applied only in the other-sources path).
-  const goneKgByPOLine: Record<string, number> = {};
-  // v6.51.0 (ROOT CAUSE B): exclude the sales order being evaluated from the
-  // "already gone" figure. Its own shipped goods are what IT sold — subtracting
-  // them made a shipped SO look at its own PO line and see nothing available
-  // ("1 line exceeds available supply" on a perfectly balanced 42 000 kg PO).
+  // v6.51.0 / v6.58.1 (ROOT CAUSE B) carried to the lot a line names (v7.24.2, A-RV-15 b): what THIS sale already took from its
+  // lot is still its own — a pass-through lot shipped to this sale, or a line partly shipped, must not read as supply someone
+  // else took. (The rule lived in the old "from a PO" path; the lot path never had it.)
   const selfSO = String((allOrders || []).find((o: any) => o && o.id === currentOrderId)?.number || "");
-  LOTS.forEach((l: any) => {
-    if (!l.poRef) return;
-    const shipped = (l.movements || []).reduce((a: number, m: any) => {
-      if (!m || m.voided) return a;
-      if (selfSO && String(m.soRef || "") === selfSO) return a;   // our own dispatch
-      if (m.type === "SHIP_OUT") return a + (parseFloat(m.qtyKg) || 0);
-      if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
-      return a;
-    }, 0);
-    // v6.58.1 (ROOT CAUSE B, second half): v6.51.0 excluded the evaluated SO's
-    // own SHIP_OUT movements, but not its own RECEIPT — and a receipt carries no
-    // soRef, so it was counted as "gone" whoever it belonged to. In the
-    // producer -> port -> container flow every lot is a pass-through whose
-    // receipt IS this SO's goods, so all 13 lines of a balanced order reported
-    // "exceeds available supply" against stock they had just brought in.
-    // If the whole lot ships out to the evaluated SO, its receipt is this SO's
-    // own supply and must not count against it either.
-    const shippedToSelf = selfSO ? (l.movements || []).reduce((a: number, m: any) => {
-      if (!m || m.voided || String(m.soRef || "") !== selfSO) return a;
-      if (m.type === "SHIP_OUT") return a + (parseFloat(m.qtyKg) || 0);
-      if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
-      return a;
-    }, 0) : 0;
-    const receivedForOthers = Math.max(0, (l.receivedKg ?? 0) - shippedToSelf);
-    const gone = Math.max(receivedForOthers, Math.max(0, shipped));
-    if (l.poLineId != null) {
-      const k2 = `${l.poRef}::${l.poLineId}`;
-      goneKgByPOLine[k2] = (goneKgByPOLine[k2] || 0) + gone;
-    }
-  });
+  const ownShippedFrom = (lot: any) => takenBySale(lot, selfSO);   // v7.27.7 (P-12): the shared rule
 
   return (soItems || []).map((it: any) => {
     const lineQty = parseFloat(it.qty) || 0;
@@ -297,7 +233,7 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
       const lot = LOTS.find(l => l.number === it.sourceRef);
       if (lot) {
         if (productsMatch(it.product, lot.product)) {
-          primaryAvailable = lotRemaining(it.sourceRef);
+          primaryAvailable = lotRemaining(it.sourceRef) + ownShippedFrom(lot);   // v7.24.2: + what this sale already took from it
           // v6.99.22 (G-1, owner approval): grade is part of the promise. A sorted lot is not one pool —
           // selling class I that sorting turned into class II is selling what we do not have.
           const sorted = (lot.movements || []).some((m: any) => m && !m.voided && m.type === "RECLASS");
@@ -310,16 +246,7 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
         }
         else primaryProductMismatch = true;
       }
-    } else if (it.sourceType === "PO" && it.sourceRef) {
-      const po = PO_REFS.find(p => p.number === it.sourceRef);
-      if (po && isPOUsableForConfirmedSO(po)) {
-        const poLine = po.items.find((l: any) => l.id === (it.sourceLineId ?? 1));
-        if (poLine) {
-          if (productsMatch(it.product, poLine.product)) primaryAvailable = poLineRemaining(it.sourceRef, it.sourceLineId);
-          else primaryProductMismatch = true;
-        }
-      }
-    }
+    } 
 
     // v7.23.2 (A-SOL-1, owner 13 Oct): one statement per line — what its lot still has free; no "other sources", no "combined" figure
     const primaryShortfallAmount = Math.max(0, lineQty - primaryAvailable);
@@ -351,21 +278,11 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
 //                     predate poLineId/variety), first unclaimed.
 export function findLotForSOLine(lots: any[], it: any, opts: { claimed?: Set<string> } = {}): any | null {
   if (!it) return null;
-  const claimed = opts.claimed;
-  const free = (l: any) => !claimed || !claimed.has(String(l.number));
+  void opts;   // v7.24.2 (A-RV-15 b): a line names its lot — nothing to claim any more
   if (it.sourceType === "STOCK" && it.sourceRef) {
     return (lots || []).find(l => String(l.number) === String(it.sourceRef)) || null;
   }
-  if (it.sourceType === "PO" && it.sourceRef) {
-    const byPO = (lots || []).filter(l => String(l.poRef || "") === String(it.sourceRef));
-    if (it.sourceLineId != null) {
-      const exact = byPO.find(l => l.poLineId != null && String(l.poLineId) === String(it.sourceLineId));
-      if (exact) return exact;
-    }
-    const byProduct = byPO.find(l => free(l) && productsMatch(it.product, l.product, it.variety, l.variety));
-    if (byProduct) return byProduct;
-    return byPO.find(l => free(l) && normalizeProduct(l.product) === normalizeProduct(it.product)) || null;
-  }
+  
   return null;
 }
 
@@ -439,7 +356,7 @@ export function shippedKgByLine(order: any, lots: any[], shipments: any[]): { pe
     if (need > 0) {
       const passes: ((g: GoodsRow) => boolean)[] = [
         g => !!lot && String(g.lotRef || "") === String(lot.number),
-        g => it.sourceType === "PO" && !!g.poRef && String(g.poRef) === String(it.sourceRef) && productsMatch(it.product, g.product, it.variety, g.variety),
+        g => false,
         g => productsMatch(it.product, g.product, it.variety, g.variety),
       ];
       for (const pass of passes) {
@@ -455,26 +372,4 @@ export function shippedKgByLine(order: any, lots: any[], shipments: any[]): { pe
     return got;
   });
   return { perLine, totalKg: perLine.reduce((a: number, b: number) => a + b, 0), hasEvidence };
-}
-
-// ─── v6.99.127 (A-ONE-1, owner 4 Oct): ONE SOURCE FOR EVERY SALE — THE LOT ─────────────────────────────────────────
-// A sale line used to point either at a PO line or at a lot; the PO's incoterm already governs how the lot arrives, the
-// sale governs the lot. Every PO-sourced line is pointed at the lot made from its PO line (the lot carries poRef + poLineId);
-// a line whose lot cannot be found (an old PO with no lots) is left as it was and reported.
-export function migrateSaleLinesToLots(orders: any[], lots: any[]): { orders: any[]; moved: number; left: string[] } {
-  let moved = 0; const left: string[] = [];
-  const live = (lots || []).filter((l: any) => l && !/Cancelled/.test(String(l.status || "")));
-  const next = (orders || []).map((o: any) => {
-    let touched = false;
-    const items = (o?.items || []).map((it: any) => {
-      if (!it || String(it.sourceType || "") !== "PO" || !it.sourceRef) return it;
-      const exact = live.filter((l: any) => String(l.poRef) === String(it.sourceRef) && it.sourceLineId != null && String(l.poLineId) === String(it.sourceLineId));
-      const lot = exact.length === 1 ? exact[0] : null;
-      if (!lot) { left.push(`${o.number}: ${it.sourceRef} line ${it.sourceLineId ?? "?"}`); return it; }
-      touched = true; moved++;
-      return { ...it, sourceType: "STOCK", sourceRef: String(lot.number), sourceLineId: undefined, migratedFromPO: String(it.sourceRef) };
-    });
-    return touched ? { ...o, items } : o;
-  });
-  return { orders: next, moved, left };
 }

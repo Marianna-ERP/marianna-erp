@@ -48,17 +48,6 @@ export function parseAddress(text: any, country?: any): Address & { needsCheck: 
   return { ...base, street: raw, needsCheck: true };
 }
 
-/** One-time migration for a record that carries a legacy `address` string. Idempotent. */
-export function migrateAddressOn(rec: any, textField = "address"): { rec: any; changed: boolean } {
-  if (!rec || typeof rec !== "object") return { rec, changed: false };
-  if (rec.addr && (S(rec.addr.street) || S(rec.addr.city) || S(rec.addr.postcode))) return { rec, changed: false };
-  const text = S(rec[textField]);
-  if (!text) return { rec, changed: false };
-  const parsed = parseAddress(text, rec.country);
-  const addr: Address = { street: parsed.street, postcode: parsed.postcode, city: parsed.city, country: parsed.country || S(rec.country), note: parsed.note };
-  return { rec: { ...rec, addr, addressNeedsCheck: parsed.needsCheck || undefined }, changed: true };
-}
-
 /** The line a document prints for a party or a place: its name, then its address. */
 export function addressOf(rec: any): Address {
   if (rec?.addr && hasAddress(rec.addr)) return rec.addr as Address;

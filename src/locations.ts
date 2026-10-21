@@ -1,19 +1,20 @@
 import { nextId } from "./ids";
 import { dataKey, writeSharedStoreValue } from "./useLocalStoredState";
 import { formatAddress as _fmtAddr } from "./address.domain";
+import { rolesOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 · v7.28.10 (Batch L)
 const formatAddressOneLine = (a: any) => _fmtAddr(a, { oneLine: true });
 // ─── SHARED LOCATIONS (v5.8 trunk, Option B consolidation) ──────────────────
 //
 // Single source of truth for all location lookups across PurchaseOrders,
 // SalesOrders, Inventory and Shipments. Replaces the four separate per-module
 // LOCATIONS arrays that had drifted (different spellings) and conflicted
-// (id 8/10 both Biedronka, Shipments had an "(SO/PO id)" workaround).
+// (ids 8/10 were one demo place, Shipments had an "(SO/PO id)" workaround).
 //
 // Option B approach (per decision): we KEEP all existing IDs so no seed data
 // reference needs to change. We only:
 //   1. unify spelling (proper Polish diacritics everywhere)
 //   2. keep both alias IDs pointing at the same real place
-//      (id 8 == id 10 == Biedronka DC Poznań; id 9 == id 11 == Lidl DC Chorzów)
+//      (id 8 == id 10 and id 9 == id 11: the first version's demo client places)
 //   3. add the `type` taxonomy and capability flags for future journey work (V6)
 //
 // A future V6 can renumber to a fully clean scheme; for now this fixes the
@@ -46,6 +47,11 @@ export interface Location {
 }
 
 // Helper to keep the table compact
+
+// v6.86.0 (owner ruling): the built-in list is REFERENCE DATA = PORTS ONLY. The demo
+// warehouses / supplier / client / broker sites that used to sit here appeared in some
+// pickers and not others. Any still referenced by stored documents is migrated into the
+// user's custom locations on load (migrateReferencedSeeds); the rest disappear.
 function L(id: number, type: LocationType, legacyType: string, name: string, country: string, address?: string, aliasOf?: number): Location {
   return { id, type, legacyType, name, country, address, aliasOf };
 }
@@ -54,35 +60,26 @@ function L(id: number, type: LocationType, legacyType: string, name: string, cou
 // warehouses / supplier / client / broker sites that used to sit here appeared in some
 // pickers and not others. Any still referenced by stored documents is migrated into the
 // user's custom locations on load (migrateReferencedSeeds); the rest disappear.
+// v7.27.17 (A-RV-39 · SC-14, owner 19 Oct: "remove now"): the producers', clients' and brokers' places are gone from the code —
+// real partners' names and addresses, and the first version's test places.
+// Your real copy and TEST hold their own copy of every place they use; only public places stay here (ports, cargo airports) and
+// our own warehouses, until the places table of the database step (FZ-04).
 const BUILTIN_ALL: Location[] = [
   // ── Our storage (rented today; will include OwnWarehouse when Marianna opens one) ──
   L(1, "RentedWarehouse", "OWN", "WH-01 Poznań (Logipark)", "Poland", "Poznań / Logipark"),
   L(2, "RentedWarehouse", "OWN", "WH-02 Warszawa (ColdStore)", "Poland", "Warszawa cold storage"),
 
   // ── Supplier facilities ──
-  L(3, "SupplierFacility", "SUPPLIER", "Białski Owoc — Biała Rawska", "Poland", "Wojska Polskiego 6F, 96-230 Biała Rawska"),
-  L(4, "SupplierFacility", "SUPPLIER", "FreshFarm ES — Valencia", "Spain", "Valencia, Spain"),
-  L(5, "SupplierFacility", "SUPPLIER", "AgriTrade MA — Agadir", "Morocco", "Agadir, Morocco"),
 
   // ── Ports (base set) ──
   L(6, "Port", "PORT", "Gdańsk Port", "Poland", "Gdańsk port"),
   L(7, "Port", "PORT", "Hamburg Port", "Germany", "Hamburg port"),
 
   // ── Client facilities (base set) ──
-  // NOTE: id 8 and id 10 are the SAME place (Biedronka). v5.8 had both because
   // different modules referenced different ids. We keep both as aliases so no
   // seed reference breaks; id 10 is the canonical one.
-  L(8, "ClientFacility", "CLIENT", "Biedronka DC Poznań", "Poland", "ul. Górecka 1, 60-201 Poznań", 10),
-  L(9, "ClientFacility", "CLIENT", "Lidl DC Chorzów", "Poland", "Chorzów", 11),
-  L(10, "ClientFacility", "CLIENT", "Biedronka DC Poznań", "Poland", "ul. Górecka 1, 60-201 Poznań"),
-  L(11, "ClientFacility", "CLIENT", "Lidl DC Chorzów", "Poland", "Chorzów"),
-  L(12, "ClientFacility", "CLIENT", "Fresco Hamburg", "Germany", "Hamburg"),
-  L(13, "ClientFacility", "CLIENT", "Metro DC Warszawa", "Poland", "Warszawa"),
-  L(14, "ClientFacility", "CLIENT", "Euro-Papryka Tarczyn", "Poland", "Tarczyn / Wola Przypkowska"),
 
   // ── Additional clients / mixed (from Shipments) ──
-  L(21, "ClientFacility", "CLIENT", "Venice Cold Stores & Logistics SRL", "Italy", "Via Banchina dell'Azoto 17/B, 30175 Marghera"),
-  L(22, "Customs", "BROKER", "AM sped s.c. — Słomczyn", "Poland", "Słomczyn 81, 05-600 Grójec"),
   L(23, "Port", "PORT", "Agadir / Casablanca port area", "Morocco", "Morocco port warehouse"),
 
   // ── Expanded port list (v5.8 added these consistently; IDs preserved) ──
@@ -150,7 +147,23 @@ export const CUSTOM_LOCATION_ID_BASE = 10000;
 // hardcoded. Post-migration adds/edits landed in the stale safety copy (invisible
 // to the live app and to exports). Fixed: address the current version, and adopt
 // the v1 store ONE TIME below (it was the de-facto authoritative store until now).
-const CUSTOM_LOCATIONS_KEY = dataKey("customLocations");
+// v7.29.4: read when used, not while the module loads — the storage module and this one meet in a loop of imports
+const customLocationsKey = () => dataKey("customLocations");
+
+/** v7.27.3 (FZ-26 — owner rulings A-RV-37 and FZ-21: a place is read from its TYPE, no old word kept readable): the group a screen
+ *  shows a place under — our warehouse, a supplier's or a client's site, a port (with port warehouses and cargo airports), customs —
+ *  worked out from the type. The stored legacyType is written for old copies only and read by nothing outside this file. */
+export type PlaceGroup = "OWN" | "SUPPLIER" | "CLIENT" | "PORT" | "BROKER" | "OTHER";
+export function placeGroup(l: any): PlaceGroup {
+  switch (String(l?.placeType || l?.type || "")) {   // placeType: where a screen keeps the real type beside the group
+  case "OwnWarehouse": case "RentedWarehouse": return "OWN";
+    case "SupplierFacility": return "SUPPLIER";
+    case "ClientFacility": return "CLIENT";
+    case "Port": case "PortWarehouse": case "Airport": return "PORT";
+    case "Customs": return "BROKER";
+    default: return "OTHER";
+  }
+}
 
 // Options offered in the Settings UI → mapped to (type, legacyType) pairs.
 export const CUSTOM_LOCATION_TYPE_OPTIONS: { key: LocationType; label: string; legacyType: string }[] = [
@@ -192,7 +205,7 @@ function legacyTypeFor(type: LocationType): string {
 export function readCustomLocations(): Location[] {
   if (typeof window === "undefined" || !window.localStorage) return [];
   try {
-    const raw = window.localStorage.getItem(CUSTOM_LOCATIONS_KEY);
+    const raw = window.localStorage.getItem(customLocationsKey());
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -310,7 +323,7 @@ readCustomLocations().forEach(cl => {
 // bootstrap re-runs, exactly like the legacy custom-locations did.
 
 export const LOGISTICS_POINT_BASE = 800000;
-const LOGISTICS_POINTS_KEY = dataKey("logisticsPoints");
+const logisticsPointsKey = () => dataKey("logisticsPoints");
 
 export const LOGISTICS_POINT_KINDS: { key: string; label: string; type: LocationType; legacyType: string }[] = [
   { key: "PortLoading",   label: "Port of loading",       type: "Port",       legacyType: "PORT" },
@@ -326,7 +339,7 @@ export function logisticsPointLocId(id: any): number {
 export function readLogisticsPoints(): any[] {
   if (typeof window === "undefined" || !window.localStorage) return [];
   try {
-    const raw = window.localStorage.getItem(LOGISTICS_POINTS_KEY);
+    const raw = window.localStorage.getItem(logisticsPointsKey());
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -409,7 +422,7 @@ export function allLocations(): Location[] {
 export const WAREHOUSE_CP_LOC_BASE = 900000;
 
 export function isWarehouseContact(c: any): boolean {
-  return !!c && (c.type === "Warehouse" || (c.additionalTypes || []).includes("Warehouse"));
+  return !!c && (c.type === "Warehouse" || rolesOf(c).includes("Warehouse"));
 }
 
 // Every address a counterparty has: its primary address (index 0) plus any
@@ -419,7 +432,7 @@ export function contactAddresses(c: any): { address: string; index: number; site
   // index-based id is only the first-time default, so re-ordering addresses never moves a lot.
   const list: { address: string; index: number; siteId?: any }[] = [];
   // v6.99.40 (A-ADDR): the structured address is the source; the legacy one-line text is the fallback.
-  const own = c?.addr && (c.addr.street || c.addr.city || c.addr.postcode) ? formatAddressOneLine(c.addr) : String(c?.address || "");
+  const own = companyAddressLine(c, { withCountry: true });   // v7.28.10 (Batch L): the one reader — a place's line keeps the country, as before
   if (own) list.push({ address: own, index: 0, siteId: c?.siteId });
   (c?.extraAddresses || []).forEach((a: any, i: number) => {
     const addr = typeof a === "string" ? a : (a?.addr && (a.addr.street || a.addr.city) ? formatAddressOneLine(a.addr) : (a?.address || ""));
@@ -438,7 +451,7 @@ export function stampSiteIds(contacts: any[]): { contacts: any[]; changed: boole
   const next = (contacts || []).map((c: any) => {
     if (!c) return c;
     let n = { ...c };
-    if (c.address && c.siteId == null) { n.siteId = warehouseCpLocId(c.id, 0); changed = true; }
+    if (companyAddressLine(c) && c.siteId == null) { n.siteId = warehouseCpLocId(c.id, 0); changed = true; }
     if (Array.isArray(c.extraAddresses)) {
       n.extraAddresses = c.extraAddresses.map((a: any, i: number) => {
         const obj = typeof a === "string" ? { address: a } : { ...a };
@@ -475,16 +488,16 @@ export function warehouseAddressLocations(contacts: any[]): Location[] {
     contactAddresses(c).forEach(({ address, index, siteId }) => {
       const id = siteId ?? warehouseCpLocId(c.id, index);   // v6.99.97 (A-ID-1): the stored id owns it
       const name = index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`;
-      out.push({ id, type: "RentedWarehouse", legacyType: "OWN", name, country: c.country || "", address: address || undefined });
+      out.push({ id, type: "RentedWarehouse", legacyType: "OWN", name, country: companyCountryName(c), address: address || undefined });
     });
   });
   out.forEach(loc => {
-    const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
-    if (!existing) LOCATIONS.push(loc);
-    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; }
+  const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
+  if (!existing) LOCATIONS.push({ ...loc, fromDirectory: true } as any);   // v7.30.14: the Directory's, kept fresh
+  else { (existing as any).fromDirectory = true; existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; }
   });
   return out;
-}
+  }
 
 // ─── COUNTERPARTY ADDRESSES AS LOCATIONS (v6.15, #6) ────────────────────────
 // From / To / Destination must offer the supplier, client and warehouse
@@ -499,7 +512,7 @@ export function warehouseAddressLocations(contacts: any[]): Location[] {
 
 function counterpartyLocationRole(c: any): { legacyType: string; type: LocationType } | null {
   if (isWarehouseContact(c)) return { legacyType: "OWN", type: "RentedWarehouse" };
-  const types = [c?.type, ...((c?.additionalTypes) || [])];
+  const types = rolesOf(c);
   if (types.includes("Supplier")) return { legacyType: "SUPPLIER", type: "SupplierFacility" };
   if (types.includes("Client")) return { legacyType: "CLIENT", type: "ClientFacility" };
   if (c?.isPlace === true) return { legacyType: "OTHER", type: "ClientFacility" };   // v7.3.5 (A-LOC-1): any company may be ticked as a place
@@ -520,7 +533,7 @@ export function counterpartyLocations(contacts: any[]): Location[] {
         id: (siteIdOf(c, index) ?? warehouseCpLocId(c.id, index)),
         type: role.type, legacyType: role.legacyType,
         name: index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`,
-        country: c.country || "", address: address || undefined,
+        country: companyCountryName(c), address: address || undefined,
         // v7.3.5 (A-LOC-1, owner 7 Oct): "goods are loaded / delivered here" — unticked, the address still resolves for every document
         // and print (same id), but it is no longer OFFERED in the location pickers
         ...({ ownerId: c.id, pickable: c.isPlace !== false } as any),
@@ -531,11 +544,18 @@ export function counterpartyLocations(contacts: any[]): Location[] {
 }
 
 // Register (idempotently) supplier / client / warehouse counterparty addresses.
+// v7.30.14 (owner test 21 Oct: "the destination dropdown picks still old data … we may have 2 sources"): the module kept a COPY of
+// the companies' addresses taken once, when the app started, and that copy won over the live Directory in every place picker — so an
+// address completed, renamed or unticked afterwards still showed the old way. Now the copy is marked, refreshed whenever the Directory
+// changes (App calls this), loses the addresses that are gone, and the pickers read the live Directory first.
 export function registerCounterpartyLocations(contacts: any[]): void {
-  counterpartyLocations(contacts).forEach((loc: Location) => {
+const live = counterpartyLocations(contacts);
+const keep = new Set(live.map((l: Location) => String(l.id)));
+for (let i = LOCATIONS.length - 1; i >= 0; i--) { const l: any = LOCATIONS[i]; if (l && l.fromDirectory && !keep.has(String(l.id))) LOCATIONS.splice(i, 1); }
+live.forEach((loc: Location) => {
     const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
-    if (!existing) LOCATIONS.push(loc);
-    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; (existing as any).pickable = (loc as any).pickable; (existing as any).ownerId = (loc as any).ownerId; }   // v7.3.5
+    if (!existing) LOCATIONS.push({ ...loc, fromDirectory: true } as any);
+    else { (existing as any).fromDirectory = true; existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; (existing as any).pickable = (loc as any).pickable; (existing as any).ownerId = (loc as any).ownerId; }   // v7.3.5
   });
 }
 
@@ -568,12 +588,15 @@ export const PORT_TYPES = ["Port", "PortWarehouse"];
 export function placeTypeOf(l: any): string { return String(l?.placeType ?? l?.type ?? ""); }
 export function isPortType(l: any, opts: { airports?: boolean } = {}): boolean {
   if (!l) return false; const t = placeTypeOf(l);
-  return PORT_TYPES.includes(t) || t === "PORT" || (!!opts.airports && t === "Airport");
+  return PORT_TYPES.includes(t) || (!!opts.airports && t === "Airport");   // v7.27.3 (FZ-26): the type only — the old word "PORT" no longer makes a port
 }
 export function unifiedLocations(contacts: any[] = []): Location[] {
-  const byId = new Map<string, Location>();
-  [...allLocations(), ...counterpartyLocations(contacts || [])].forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
-  return sortLocations(Array.from(byId.values()));
+// v7.30.14: ONE SOURCE for a company's address — the live Directory first; the module's own list adds only the places that are not a
+// company's (ports, airports, borders, own and custom places). Without a Directory at hand (an old caller), the kept copy still answers.
+const byId = new Map<string, Location>(); const live = counterpartyLocations(contacts || []); const haveDirectory = (contacts || []).length > 0;
+live.forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
+allLocations().forEach((l: any) => { if (!l || byId.has(String(l.id))) return; if (haveDirectory && l.fromDirectory) return; byId.set(String(l.id), l); });
+return sortLocations(Array.from(byId.values()));
 }
 /** Resolve any location id — built-in, custom or counterparty site. */
 export function locationById(id: any, contacts: any[] = []): Location | null {
@@ -632,8 +655,8 @@ export function typedSaleDestinations(orders: any[], contacts: any[]): TypedDest
     if (!e) {
       const c = (contacts || []).find((x: any) => String(x.id) === String(o.client?.id)) || null;
       const legal = c && c.isPlace !== false ? counterpartyLocations([c]).find((l: any) => String(l.name) === String(c.name)) : null;
-      const same = !!legal && [legal.address, c.address].some((a: any) => !!addressKey(a) && addressKey(a) === addressKey(text));
-      e = { key, text: text.replace(/\s+/g, " "), clientId: c ? c.id : (o.client?.id ?? null), clientName: String(c?.name || o.client?.name || "—").trim(), country: String(c?.country || o.client?.country || ""), orders: [], legalSiteId: same ? legal!.id : null };
+      const same = !!legal && [legal.address, companyAddressLine(c)].some((a: any) => !!addressKey(a) && addressKey(a) === addressKey(text));
+      e = { key, text: text.replace(/\s+/g, " "), clientId: c ? c.id : (o.client?.id ?? null), clientName: String(c?.name || o.client?.name || "—").trim(), country: String((c ? companyCountryName(c) : "") || o.client?.country || ""), orders: [], legalSiteId: same ? legal!.id : null };
       map.set(key, e);
     }
     e.orders.push(String(o.number));

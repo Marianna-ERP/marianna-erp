@@ -1,4 +1,4 @@
-import { ENV_LABEL } from "./remoteStore";
+import { ENV_LABEL , fileLabel } from "./remoteStore";
 // ─── v6.99.70 (A-BK-1/2, owner 27 Sept): AUTOMATIC BACKUP TO A FOLDER — the browser part ────────────────────────────
 // The owner chooses a folder once (ideally one OneDrive or Google Drive already syncs, so a copy leaves the laptop). The app
 // writes an "Export all data" file there on opening, then two minutes after the changes stop, at most every 15 minutes,
@@ -245,7 +245,7 @@ export function downloadAllData(): string {
   a.href = url;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   // v6.17: stamp the build + schema version so testers can see at a glance whether a shared file matches their build.
-  a.download = `marianna-erp_v${APP_VERSION}_schema-v${STORAGE_VERSION}_${stamp}.json`;
+  a.download = `marianna-erp${fileLabel()}_v${APP_VERSION}_schema-v${STORAGE_VERSION}_${stamp}.json`;   // v7.24.0 (A-BK-7): "marianna-erp-TEST_v…" on the test copy
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
   const day = localDay(new Date());

@@ -238,6 +238,36 @@ export function bankPaymentEvent(line: BankLine): { date: string; amount: number
 
 
 // ── v6.68.0 (F-4): BANK ACCOUNTS REGISTRY ─────────────────────────────────────
+// ── v7.26.5 (A-INV-5, owner 17 Oct): ONE BANK PAYMENT, SEVERAL INVOICES ─────────────────────────────────────────────────────
+// A supplier is paid for several invoices in one transfer, and a client pays several invoices at once. A bank line can be split over
+// the open invoices of its direction and currency: the ones its title quotes (in the order quoted), else the payer's invoices whose
+// open amounts add up to it (the fewest, oldest first), else the payer's oldest open invoices in turn. What is left stays on the line
+// (recorded as an advance, if wanted). Each invoice gets its share as a payment from that bank line — the line counts as recorded.
+const r2b = (v: number) => Math.round(v * 100) / 100;
+export function splitBankLine(line: BankLine, invoices: any[], opts?: { tolerance?: number }): { allocations: Array<{ invoiceId: any; number: string; amount: number; outstanding: number }>; remainder: number; how: "title" | "exact" | "oldest" | "none"; open: any[] } {
+  const tol = opts?.tolerance ?? 0.05; const amt = r2b(Math.abs(Number(line?.amount) || 0)); const kind = Number(line?.amount) > 0 ? "SALES" : "COST";
+  const outstandingOf = (i: any) => r2b((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0));
+  const open = (invoices || []).filter((i: any) => i && i.kind === kind && !i.isProforma && i.paymentStatus !== "Cancelled" && i.paymentStatus !== "Draft" && outstandingOf(i) > 0.005 && String(i.currency || "PLN").toUpperCase() === String(line?.currency || "PLN").toUpperCase())
+    .sort((a: any, b: any) => String(a.issueDate || "").localeCompare(String(b.issueDate || "")));
+  const fill = (list: any[]) => { let left = amt; const al: any[] = []; list.forEach((i: any) => { if (left <= 0.005) return; const o = outstandingOf(i); const a = r2b(Math.min(o, left)); al.push({ invoiceId: i.id, number: String(i.number || ""), amount: a, outstanding: o }); left = r2b(left - a); }); return { al, left }; };
+  const titleSq = squash(line?.title);
+  const quoted = open.map((i: any) => ({ i, at: squash(i.number).length >= 4 ? titleSq.indexOf(squash(i.number)) : -1 })).filter(x => x.at >= 0).sort((a, b) => a.at - b.at).map(x => x.i);
+  if (quoted.length >= 2) { const f = fill(quoted); return { allocations: f.al, remainder: f.left, how: "title", open }; }
+  const party = open.filter((i: any) => partyOverlap(line?.counterparty, i.counterparty?.name)).slice(0, 12);
+  for (let size = 1; size <= Math.min(6, party.length); size++) {   // the fewest invoices that add up to the line, oldest first
+    const idx: number[] = []; let found: any[] | null = null;
+    const walk = (start: number, sum: number) => { if (found) return; if (idx.length === size) { if (Math.abs(sum - amt) <= tol) found = idx.map(k => party[k]); return; } for (let k = start; k < party.length; k++) { idx.push(k); walk(k + 1, sum + outstandingOf(party[k])); idx.pop(); if (found) return; } };
+    walk(0, 0);
+    if (found) return { allocations: (found as any[]).map((i: any) => ({ invoiceId: i.id, number: String(i.number || ""), amount: outstandingOf(i), outstanding: outstandingOf(i) })), remainder: 0, how: "exact", open };
+  }
+  if (party.length) { const f = fill(party); return { allocations: f.al, remainder: f.left, how: "oldest", open }; }
+  return { allocations: [], remainder: amt, how: "none", open };
+}
+/** One invoice's share of a split bank line, as its payment (the line's source, so a re-import never posts it again). */
+export function bankShareEvent(line: BankLine, amount: number, k: number, n: number): { date: string; amount: number; method: string; note: string; source: string } {
+  const e = bankPaymentEvent(line); return { ...e, amount: r2b(Math.abs(Number(amount) || 0)), note: `${e.note} — part ${k} of ${n}` };
+}
+
 export interface BankAccount {
   id: any; bank: string; accountDigits: string; currency: string;
   lastImportDate: string; lastKnownBalance: number | null; label?: string;

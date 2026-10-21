@@ -117,6 +117,48 @@ removed from it the first time that browser opens the new version.
 
 ---
 
+## One-time database step — the shared numbering counter (v7.27.8)
+
+From v7.27.8 every new PO, SO, shipment, lot, claim, loading protocol and settlement takes its number from one
+counter in the database, so two browsers can never give out the same number. The counter has to be installed
+ONCE in each Supabase project the app uses — first TEST, then the real copy. It is safe to run again.
+
+1. Open supabase.com → your project (TEST first) → **SQL Editor** → **New query**.
+2. Open the file **supabase/numbering.sql** from this zip, copy all of it, paste it into the editor.
+3. Click **Run**. It should say "Success. No rows returned".
+4. In the app (that copy), open **Settings → Numbering**: it should say
+   "✓ The shared counter is installed — every new number comes from the database."
+5. Create one test document on TEST (a draft PO is enough) and check its number follows the last one.
+6. Repeat steps 1–4 on the real copy's project.
+
+Nothing has to be migrated: the first time a document type is numbered in a year, the counter starts above the
+highest number the app already holds. From v7.30.2 (Batch M, audit F-05) a copy that shares its data never numbers a
+document by itself: until the script is installed — or whenever the counter cannot be reached — a NEW document is not
+saved and the app says why; Settings → Numbering says what is wrong.
+
+## One-time database step — the shared lists' security rules (v7.30.0, Batch M)
+
+From v7.30.0 the database itself enforces two rules on the shared lists (external audit, 21 Oct: F-01, F-11):
+only the OWNER (the user marked owner in Settings › Users) can change the users, the roles, the closed months and
+the company profile; and the audit trail only grows — no event can be changed or removed. Install it ONCE in each
+Supabase project — first TEST, then the real copy. It is safe to run again.
+
+1. Before running it, check in the app (that copy): **Settings → Users** has the owner marked, with the owner's
+sign-in e-mail filled in. (While no owner is linked, the lists stay open so the first setup is possible.)
+2. Open supabase.com → your project (TEST first) → **SQL Editor** → **New query**.
+3. Open the file **supabase/security.sql** from this zip, copy all of it, paste it into the editor, click **Run**.
+It should say "Success. No rows returned".
+4. On TEST, sign in as a user who is NOT the owner and open Settings: the users are read-only for them (as before).
+Sign in as the owner and change something small in Settings → Company, then change it back: it saves.
+5. Repeat steps 2–3 on the real copy's project.
+
+If a change is refused, the app's shared-status line says "a change to … was refused — only the owner can make it"
+and the browser takes the shared version back.
+
+After deploying v7.30.5, the owner fills three fields once in **Settings → Company** (they are no longer written into
+the program — audit F-17): **Contact person** (printed on POs), **Trade name on transport orders** (e.g. the full
+registered name; empty → the legal name) and **Emergency phone** (printed on transport orders; empty → the company phone).
+
 ## Why this zip already works (so you don't doubt it)
 
 This package includes the three things that previously caused build failures —

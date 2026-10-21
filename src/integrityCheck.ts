@@ -9,6 +9,7 @@ import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
 import { purchaseInvoiceVariance } from "./po.domain";
 import { claimNoteMismatches } from "./claimReadiness.domain";
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { lotSellableBasis, takenBySale } from "./salesOrders.domain";   // v7.27.7 (FZ-30)
 // ─── DATA INTEGRITY CHECKER ─────────────────────────────────────────────────
 //
 // A single pure function that scans the whole dataset for structural problems —
@@ -48,9 +49,7 @@ export interface IntegrityInputs {
   lots?: any[];
   orders?: any[];
   shipments?: any[];
-  warehouseInvoices?: any[];
   operationalCosts?: any[];
-  creditNotes?: any[];
   invoices?: any[];
   financeNotes?: any[];
   /** v6.63.0 (D-13/audit gaps): claims and load plans join the audit. */
@@ -87,7 +86,6 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   const lots = arr(inp.lots);
   const orders = arr(inp.orders);
   const shipments = arr(inp.shipments);
-  const warehouseInvoices = arr(inp.warehouseInvoices);
 
   // Lookup sets for fast reference checks.
   const poByNumber = new Map(pos.map((p: any) => [String(p.number), p]));
@@ -115,27 +113,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
         add("error", "ORPHAN_SO_LOT", "Sales Orders", o.number || "(unnumbered SO)",
           `Line "${it.product || "—"}" sources stock lot ${it.sourceRef}, which no longer exists. COGS cannot be computed.`);
       }
-      if (it.sourceType === "PO" && it.sourceRef) {
-        const po = poByNumber.get(String(it.sourceRef));
-        if (!po) {
-          add("error", "ORPHAN_SO_PO", "Sales Orders", o.number || "(unnumbered SO)",
-            `Line "${it.product || "—"}" sources PO ${it.sourceRef}, which no longer exists. COGS cannot be computed.`);
-        } else {
-          // v6.30.1: the old `|| po.items.length > 0` made this check dead — any PO
-          // with at least one line passed, so a missing line id was never flagged.
-          // Strict when the SO line names an explicit sourceLineId; a legacy line
-          // (sourceLineId null → defaulted) only requires the PO to have lines,
-          // because legacy PO line ids are timestamps and "1" would never match.
-          const hasLine = it.sourceLineId != null
-            ? arr(po.items).some((l: any) => String(l.id) === String(it.sourceLineId))
-            : arr(po.items).length > 0;
-          const lineId = it.sourceLineId ?? 1;
-          if (!hasLine) {
-            add("warning", "ORPHAN_SO_POLINE", "Sales Orders", o.number || "(unnumbered SO)",
-              `Line "${it.product || "—"}" references PO ${it.sourceRef} line ${lineId}, which is missing.`);
-          }
-        }
-      }
+      
       if (!it.sourceType || !it.sourceRef) {
         // unsourced lines are only a problem once the SO is committed
         if (o.status && o.status !== "Draft") {
@@ -159,7 +137,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // Sum reserving-SO demand per lot and compare to availableKg. The SO form
   // blocks this at entry, but imported/edited data can still arrive oversold.
   lots.forEach((lot: any) => {
-    const avail = num(lot.availableKg ?? lot.physicalKg ?? lot.receivedKg);
+    const avail = lotSellableBasis(lot);   // v7.27.7 (FZ-30, P-12): the sales engine's own rule — a lot not yet received is sold on its expected kilos
     let reserved = 0;
     const claimers: string[] = [];
     orders.forEach((o: any) => {
@@ -168,7 +146,9 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
       if ((shipments || []).some((s: any) => s && String(s.status) !== "Cancelled" && String(s.purpose || "").toUpperCase() !== "INBOUND" && ["Loaded", "In transit", "Delivered", "Closed"].includes(String(s.status)) && ((s.soRefs || []).includes(o.number) || (s.goods || []).some((g: any) => g.soRef === o.number)))) return;
       arr(o.items).forEach((it: any) => {
         if (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number) && norm(it.product) === norm(lot.product)) {
-          const q = num(it.qty);
+          // v7.27.7 (FZ-30): what the sale already took from the lot is no longer committed against what is left in it
+          const sameLot = arr(o.items).filter((x: any) => x && x.sourceType === "STOCK" && String(x.sourceRef) === String(lot.number)); const all = sameLot.reduce((a: number, x: any) => a + num(x.qty), 0);
+          const q = Math.max(0, num(it.qty) - (all > 0 ? takenBySale(lot, o.number) * num(it.qty) / all : 0));
           if (q > 0) { reserved += q; claimers.push(o.number); }
         }
       });
@@ -251,7 +231,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // ── 6. Allocations referencing a missing warehouse invoice ─────────────────
   // Cost lines tagged with a warehouse-invoice ref whose invoice no longer exists.
   // Finance tags allocated warehouse cost lines with source `WHINV-<id>` (hyphen).
-  const whInvoiceIds = new Set([...warehouseInvoices.map((w: any) => `WHINV-${w.id}`), ...arr(inp.invoices).map((i: any) => `WHINV-${i?.id}`)]);   // v7.21.4 (A-ST-10): the register's invoices
+  const whInvoiceIds = new Set(arr(inp.invoices).map((i: any) => `WHINV-${i?.id}`));   // v7.28.12: the register only   // v7.21.4 (A-ST-10): the register's invoices
   lots.forEach((lot: any) => {
     arr(lot.costs).forEach((c: any) => {
       const src = String(c.source || "");
@@ -752,6 +732,21 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
       .forEach((p: any) => add("warning", "PLACE_UNKNOWN", "POs", String(p.number), `${p.number}: its named place (id ${p.destinationLocationId}) is no location any more${p.destinationText ? ` — it read "${p.destinationText}"` : ""}. Choose the location on the PO.`));
     (inp.orders || []).filter((o: any) => o && o.status !== "Cancelled" && o.destinationLocationId != null && o.destinationLocationId !== "" && !known(o.destinationLocationId))
       .forEach((o: any) => add("warning", "PLACE_UNKNOWN", "SOs", String(o.number), `${o.number}: its destination (id ${o.destinationLocationId}) is no location any more${o.destinationText ? ` — it read "${o.destinationText}"` : ""}. Choose the location on the sale.`));
+  }
+  // v7.25.0 (A-RV-13, owner 17 Oct): a document's company is found by its id (or a merged duplicate's) — never by name; one not found
+  // shows its stored copy and is named here, so it can be chosen again
+  {
+    const known = new Set<string>(); (inp.contacts || []).forEach((c: any) => { if (!c) return; known.add(String(c.id)); (c.mergedFromIds || []).forEach((x: any) => known.add(String(x))); });
+    const lost = (s: any) => !!s && typeof s === "object" && s.id != null && !known.has(String(s.id));
+    (inp.pos || []).filter((p: any) => p && p.status !== "Cancelled" && lost(p.supplier)).forEach((p: any) => add("warning", "COMPANY_UNKNOWN", "POs", String(p.number), `${p.number}: its supplier "${p.supplier.name || "?"}" is not in Counterparties (id ${p.supplier.id}) — choose the supplier again`));
+    (inp.orders || []).filter((o: any) => o && o.status !== "Cancelled" && lost(o.client)).forEach((o: any) => add("warning", "COMPANY_UNKNOWN", "SOs", String(o.number), `${o.number}: its client "${o.client.name || "?"}" is not in Counterparties (id ${o.client.id}) — choose the client again`));
+  }
+  // v7.26.0 (A-INV-1, owner 17 Oct): invoices without their VAT — the old overhead path (an operational cost turned into an invoice)
+  // registered the net as the gross; an import that got no gross or no net from Fakturownia says so. Re-importing the month corrects them.
+  {
+    const noVat = (inp.invoices || []).filter((i: any) => i && i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.source || "").startsWith("migrated:opCost:") && /Imported from Fakturownia/.test(String(i.notes || "")) && !(Number(i.vatRate) > 0) && !i.vatChecked);
+    if (noVat.length) add("warning", "INVOICE_VAT_MISSING", "Invoices", noVat.slice(0, 12).map((i: any) => String(i.number)).join(", ") + (noVat.length > 12 ? ` +${noVat.length - 12}` : ""), `${noVat.length} cost invoice(s) registered through the old overhead path carry no VAT — their gross shows their net. Re-run the Fakturownia import for their months: it corrects each one (or confirms a true 0 %).`);
+    (inp.invoices || []).filter((i: any) => i && i.amountsIncomplete && i.paymentStatus !== "Cancelled").forEach((i: any) => add("warning", "INVOICE_AMOUNTS_INCOMPLETE", "Invoices", String(i.number), `${i.number}: Fakturownia sent no net or no gross amount — check the invoice there and correct it here`));
   }
   // v7.8.0 (A-PO-REF-1): the producer's reference used on more than one PO
   duplicateSupplierRefs(inp.pos || [], inp.shipments || []).forEach(d => add("warning", "SUPPLIER_REF_DUPLICATE", "POs", d.on.join(", "), `The producer's reference "${d.ref}" is used on ${d.on.join(" and ")} — each PO needs its own.`));

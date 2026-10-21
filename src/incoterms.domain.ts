@@ -1,7 +1,8 @@
 import { carrierOfUnit, docTypeOf } from "./shipmentModel.domain";   // v7.20.0 (A-INC-2): the review reads who a unit's carrier is and a document's type as the screens do
-import { shipmentTradeDirection } from "./tradeFlow.domain";   // v7.20.0 (A-INC-2): customs are read from the direction, as in the editor
+import { shipmentTradeDirection, shipmentEndPlaceId, shipmentStartPlaceId } from "./tradeFlow.domain";   // v7.20.0 (A-INC-2): customs are read from the direction, as in the editor
 import { normalizeCustoms } from "./shipments.domain";
 import { parseNum } from "./numbers";   // v7.20.0 (A-INC-2): an older shipment's customs read as the editor opens them
+import { placeGroup } from "./locations";   // v7.27.14 (A-RV-38)
 // ─── v7.9.0 (A-INC-1, owner ruling 8 Oct): ICC INCOTERMS® 2020 — the rules own where goods change hands ─────────────────
 // Every rule carries TWO points: the DELIVERY point, where the risk passes, and the NAMED place, up to which the seller pays
 // carriage. For the C-rules they differ (CFR / CIF: risk on board at the port of shipment, freight paid to the named port of
@@ -144,7 +145,18 @@ export function saleOfShipment(sh: any, orders: any[] = []): any {
 }
 /** Goods coming to us: an inbound shipment or the supplier's own truck. */
 export function comesToUs(sh: any): boolean { return up(sh?.purpose) === "INBOUND" || up(sh?.arrangedBy) === "SUPPLIER"; }
-const startOf = (sh: any) => sh?.originLocationId ?? ((sh?.legs || [])[0] || {}).fromLocationId ?? null;
+const startOf = (sh: any) => shipmentStartPlaceId(sh);   // v7.28.7 (Batch L): the route's start first — the guessed origin 1 no longer decides
+/** v7.27.14 (A-RV-38, P-12): THE GOODS STILL TRAVEL UNDER THE PURCHASE — they come to us, or the shipment does not start at the PO's
+*  named place — except a truck of ours that starts at our own warehouse: the purchase ended when the stock was received there. */
+function underPurchase(sh: any, po: any, pt: string, ctx: any = {}): boolean {
+if (!po || !ruleOf(pt)) return false;
+if (comesToUs(sh)) return true;
+const start = startOf(sh);
+if (sameId(start, po.destinationLocationId)) return false;
+const place = ctx && ctx.placeOf && start != null ? (typeof ctx.placeOf === "function" ? ctx.placeOf(start) : null) : null;
+if (place && placeGroup(place) === "OWN") return false;
+return true;
+}
 const arriving = (legs: any[], place: any) => (place == null || place === "") ? -1 : legs.findIndex((l: any) => sameId(l?.toLocationId, place));
 const firstSea = (legs: any[]) => legs.findIndex((l: any) => String(l?.mode || "") === "Sea");
 const idx = (legs: any[], keep: (i: number) => boolean) => legs.map((_: any, i: number) => i).filter(keep);
@@ -210,11 +222,11 @@ export function isSuppliersTruck(sh: any, pos: any[] = []): boolean { return up(
 // the supplier), else under the sale. Import is cleared where they end: under the sale when they go to the client, else under
 // the purchase. An intra-EU route crosses no customs border.
 export interface ClearanceDuty { which: "export" | "import"; party: FreightPayer; why: string; doc: string; }
-export function customsDuties(sh: any, ctx: { pos?: any[]; orders?: any[]; direction?: string } = {}): ClearanceDuty[] {
+export function customsDuties(sh: any, ctx: { pos?: any[]; orders?: any[]; direction?: string; placeOf?: any } = {}): ClearanceDuty[] {
   const dir = up(ctx.direction); if (!dir || dir === "INTRA_EU") return [];
   const po = poOfShipment(sh, ctx.pos), so = saleOfShipment(sh, ctx.orders);
   const pt = up(po?.buyIncoterm), st = up(so?.sellIncoterm);
-  const poSide = !!po && !!ruleOf(pt) && (comesToUs(sh) || !sameId(startOf(sh), po.destinationLocationId));
+  const poSide = underPurchase(sh, po, pt, ctx);   // v7.27.14 (A-RV-38, P-12): one rule
   const soSide = !!so && !!ruleOf(st) && !comesToUs(sh);
   const out: ClearanceDuty[] = [];
   if (dir === "EXPORT" || dir === "CROSS_TRADE") out.push(poSide ? { which: "export", party: pt === "EXW" ? "us" : "supplier", why: `bought ${pt}`, doc: String(po.number) }
@@ -246,7 +258,12 @@ export function riskPassPos(sh: any, term: any, namedPlace: any): number {
   const legs = sh?.legs || []; const n = legs.length; const t = up(term); const k = arriving(legs, namedPlace); const s = firstSea(legs);
   if (t === "EXW") return 0;
   if (t === "FCA") return k >= 0 ? k + 2 : 1;                      // loaded on the buyer's carrier at the named place
-  if (["FAS", "FOB", "CFR", "CIF"].includes(t)) return s >= 0 ? s + 1 : n + 2;   // alongside / on board at the port of shipment
+  // alongside / on board at the port of shipment; with no vessel in this shipment: a truck starting at the named port (after the vessel)
+  // runs after the risk passed (v7.27.14, A-RV-38), any other one runs before it
+  // with no vessel in this shipment: a truck starting at a C rule's named port (the port of DESTINATION) runs after the risk passed on
+  // board; a FAS / FOB named port is the port of shipment — before the vessel, so the risk is still the seller's (v7.29.2: the
+  // v7.27.14 shortcut had been applied to FAS / FOB too, which Incoterms 2020 does not allow)
+  if (["FAS", "FOB", "CFR", "CIF"].includes(t)) return s >= 0 ? s + 1 : (SEA_C.includes(t) && sameId(startOf(sh), namedPlace) ? 0 : n + 2);
   if (["CPT", "CIP"].includes(t)) return 1;                        // handed to the first carrier
   if (t === "DPU") return (k >= 0 ? k + 2 : n + 1) + 1;            // at the named place, unloaded
   if (["DAP", "DDP"].includes(t)) return k >= 0 ? k + 2 : n + 1;   // at the named place, ready for unloading
@@ -254,10 +271,10 @@ export function riskPassPos(sh: any, term: any, namedPlace: any): number {
 }
 export interface RiskAtStage { stage: JourneyStage | null; purchase: { bearer: "supplier" | "us"; term: string; doc: string; insured: boolean } | null; sale: { bearer: "us" | "client"; term: string; doc: string; insured: boolean } | null; }
 /** Who carried the risk at one stage of a shipment, under the purchase and under the sale that governed the goods there. */
-export function riskAtStage(sh: any, stageKey: string, ctx: { pos?: any[]; orders?: any[] } = {}): RiskAtStage {
+export function riskAtStage(sh: any, stageKey: string, ctx: { pos?: any[]; orders?: any[]; placeOf?: any } = {}): RiskAtStage {
   const stage = journeyStages(sh).find(x => x.key === stageKey) || null; if (!stage) return { stage: null, purchase: null, sale: null };
   const po = poOfShipment(sh, ctx.pos), so = saleOfShipment(sh, ctx.orders); const pt = up(po?.buyIncoterm), st = up(so?.sellIncoterm);
-  const poSide = !!po && !!ruleOf(pt) && (comesToUs(sh) || !sameId(startOf(sh), po.destinationLocationId));
+  const poSide = underPurchase(sh, po, pt, ctx);   // v7.27.14 (A-RV-38, P-12): one rule
   const soSide = !!so && !!ruleOf(st) && !comesToUs(sh);
   const before = (term: string, np: any) => { const p = riskPassPos(sh, term, np); return p < 0 || stage.pos < p; };
   return { stage,
@@ -304,11 +321,11 @@ export function claimShipment(claim: any, shipments: any[] = []): any {
 //   v7.20.1  a CFR / CIF named place that is not a port           v7.20.4  a shipment's places against the named places
 //   v7.20.2  a CIF / CIP sale with no insurance certificate held  v7.20.5  a carrier of ours on a leg someone else pays
 //   v7.20.3  a sea-only rule on a journey with no sea and no port v7.20.6  a C- or D-rule sale with no freight of ours
-export type TermsKind = "freight" | "exw" | "customs" | "claim" | "port" | "insurance" | "sea" | "places" | "carrier" | "nofreight" | "outdated";   // v7.22.3 (FZ-21): a term that is not an Incoterms 2020 rule
-export interface TermsFinding { kind: TermsKind; term: string; doc: string; record: string; recordKind: "shipment" | "order" | "po" | "claim"; shipment: string; text: string; }
+export type TermsKind = "freight" | "exw" | "customs" | "claim" | "port" | "insurance" | "sea" | "places" | "carrier" | "nofreight" | "outdated" | "documents" | "rule" | "journey";   // v7.27.11 (FZ-16): an expected document not held at the stage that needs it   // v7.22.3 (FZ-21): a term that is not an Incoterms 2020 rule
+export interface TermsFinding { kind: TermsKind; term: string; doc: string; record: string; recordKind: "shipment" | "order" | "po" | "claim"; shipment: string; text: string; recommend?: { side: "buy" | "sell"; doc: string; to: string }; }
 export interface TermsCtx { pos?: any[]; orders?: any[]; shipments?: any[]; claims?: any[]; contacts?: any[]; lots?: any[]; placeOf?: (id: any) => any; countryOf?: (id: any) => string; }
-export const TERMS_KINDS: TermsKind[] = ["outdated", "port", "nofreight", "exw", "freight", "carrier", "customs", "insurance", "sea", "places", "claim"];
-export const TERMS_KIND_LABEL: Record<TermsKind, string> = { freight: "freight on a leg not ours", exw: "shipment of ours, sold EXW", customs: "customs", claim: "claim routing", port: "named place not a port", insurance: "no insurance certificate", sea: "sea rule, no sea leg", places: "places off the named place", carrier: "carrier on a leg not ours", nofreight: "no freight of ours", outdated: "not an Incoterms 2020 rule" };
+export const TERMS_KINDS: TermsKind[] = ["outdated", "port", "nofreight", "exw", "freight", "carrier", "customs", "insurance", "documents", "sea", "places", "claim", "rule", "journey"];
+export const TERMS_KIND_LABEL: Record<TermsKind, string> = { journey: "the sale's whole journey across its shipments", rule: "the rule that fits what the shipment records", documents: "expected document missing", freight: "freight on a leg not ours", exw: "shipment of ours, sold EXW", customs: "customs", claim: "claim routing", port: "named place not a port", insurance: "no insurance certificate", sea: "sea rule, no sea leg", places: "places off the named place", carrier: "carrier on a leg not ours", nofreight: "no freight of ours", outdated: "not an Incoterms 2020 rule" };
 const S0 = (v: any) => String(v ?? "").trim();
 const known = (v: any) => v != null && v !== "";
 const num0 = (v: any) => parseNum(v);   // numbers.parseNum — the one way to read a typed number (AUD-11)
@@ -319,12 +336,12 @@ const placeOfCtx = (ctx: TermsCtx, id: any) => (known(id) && ctx.placeOf ? ctx.p
 const placeName = (ctx: TermsCtx, id: any) => { const l = placeOfCtx(ctx, id); return l ? S0(l.name) : known(id) ? `place ${id}` : "—"; };
 const contactName = (ctx: TermsCtx, id: any) => S0(((ctx.contacts || []).find((c: any) => sameId(c?.id, id)) || {}).name) || `company ${id}`;
 const money = (c: any) => `${num0(c?.amount).toLocaleString("pl-PL")} ${S0(c?.currency)}`.trim();
-const endOf = (sh: any) => { const legs = sh?.legs || []; return sh?.destinationLocationId ?? (legs.length ? legs[legs.length - 1]?.toLocationId : null) ?? null; };
+const endOf = (sh: any) => shipmentEndPlaceId(sh);   // v7.27.13 (P-12): the route's end first — the header field only without legs
 export const SEA_ONLY = ["FAS", "FOB", "CFR", "CIF"];
 export const C_RULES = ["CFR", "CIF", "CPT", "CIP"];
 /** A place that is a port — of the type Port, or a port warehouse / terminal. Read on the type: the legacy word "PORT" is also
  *  given to airports and to every place of an unlisted type ("Other"), so it does not say "port". */
-export function isPortPlace(loc: any): boolean { if (!loc) return false; const t = S0(loc.type); return t ? ["Port", "PortWarehouse"].includes(t) : up(loc.legacyType) === "PORT"; }
+export function isPortPlace(loc: any): boolean { if (!loc) return false; return ["Port", "PortWarehouse"].includes(S0(loc.placeType || loc.type)); }   // v7.27.3 (FZ-26): by the type only
 /** Every sale a shipment carries — its governing sale, its header references and its goods rows (cancelled sales left out). */
 export function salesCarried(sh: any, orders: any[] = []): any[] {
   const refs = Array.from(new Set([S0(sh?.governingSoRef), ...(sh?.soRefs || []).map(S0), ...(sh?.goods || []).map((g: any) => S0(g?.soRef))].filter(Boolean)));
@@ -340,12 +357,93 @@ export function namedPlaceNotPort(doc: any, side: "buy" | "sell", ctx: TermsCtx 
   return typed ? { term: t, place: typed, typed: true } : null;
 }
 // ── v7.20.2 (A-INC-2, 2): under CIF / CIP the seller — we — insures the cargo (ICC (C) minimum under CIF, (A) under CIP) ──────
+// -- v7.27.11 (FZ-16, P-8 / P-9 / P-11): THE DOCUMENTS A SHIPMENT NEEDS, FROM ITS TERMS, ITS MODES AND WHERE IT GOES ----------------
+// Read, never typed: the packing list always; our sales invoice with the goods we sell; the B/L for a sea leg, the AWB for an air
+// leg (the CMR is captured per truck); the export declaration when we clear the export, and the phytosanitary certificate,
+// certificate of origin and EUR.1 for a destination outside the EU; the import declaration when we clear an import, with the
+// phyto and certificate of origin of goods from outside the EU; the T1 when the goods travel under transit; the insurance
+// certificate when we sold CIF / CIP. The person records only that a document is held ('Have it', or sent).
+export interface ExpectedDoc { type: string; why: string; stage: "loading" | "arrival"; held: boolean }
+const HELD = ["Have it", "Sent", "N/A", "Not bought"];   // v7.29.1 (FZ-39): an insurance not bought is a fact, not a missing paper
+const SYSTEM_EQUIV: Record<string, string[]> = { "Export declaration": ["Export declaration (EAD)"], "Import declaration": ["Customs declaration copy (SAD)"] };
+export function documentHeld(sh: any, type: string): boolean {
+  const kinds = [type, ...(SYSTEM_EQUIV[type] || [])];
+  return (sh?.documents || []).some((d: any) => (!!d && kinds.includes(docTypeOf(d.type).type) && HELD.includes(S0(d.status))) || (!!d && kinds.slice(1).includes(S0(d.type))));
+}
+export function expectedDocuments(sh: any, ctx: TermsCtx = {}): ExpectedDoc[] {
+  if (!sh || !liveRec(sh)) return [];
+  const out: ExpectedDoc[] = [];
+  const add = (type: string, why: string, stage: "loading" | "arrival" = "loading", orAlso: string[] = []) => { if (!out.some(x => x.type === type)) out.push({ type, why, stage, held: documentHeld(sh, type) || orAlso.some(a => documentHeld(sh, a)) }); };
+  const countryOf = ctx.countryOf || (ctx.placeOf ? (id: any) => S0((placeOfCtx(ctx, id) || {}).country) : null);
+  const dir = countryOf ? shipmentTradeDirection(sh, { pos: ctx.pos, orders: ctx.orders, countryOf }) : "";
+  const weClear = dir ? customsDuties(sh, { pos: ctx.pos, orders: ctx.orders, direction: dir, placeOf: ctx.placeOf }).some(x => x.party === "us") : false;
+  const modes = new Set([...(sh.legs || []).map((l: any) => S0(l?.mode)), S0(sh.mode)].filter(Boolean));
+  add("Packing list", "every shipment");
+  const sales = salesCarried(sh, ctx.orders || []);
+  if (!comesToUs(sh) && sales.length) add("Invoice", "our sales invoice travels with the goods");
+  if (modes.has("Sea")) add("BL", "a sea leg"); if (modes.has("Air")) add("AWB", "an air leg");
+  if (dir === "EXPORT") { if (weClear) add("Export declaration", "we clear the export"); ["Phytosanitary certificate", "Certificate of origin", "EUR.1"].forEach(x => add(x, "a destination outside the EU", "arrival")); }
+  // an import proves its origin with the EUR.1 or a certificate of origin — either one is enough
+  if (dir === "IMPORT") { if (weClear) add("Import declaration", "we clear the import", "arrival"); add("Phytosanitary certificate", "goods from outside the EU", "arrival"); add("Certificate of origin", "goods from outside the EU (or their EUR.1)", "arrival", ["EUR.1"]); }
+  const c: any = normalizeCustoms(sh.customs || sh.customsClearance) || {};
+  if (c.transit === true || /transit|\bT1\b/i.test(S0(c.procedure))) add("T1 transit", "the goods travel under transit");
+  if (sales.some((o: any) => ["CIF", "CIP"].includes(up(o?.sellIncoterm)))) add(INSURANCE_DOC, "sold CIF / CIP — we insure the cargo");
+  { const p0 = poOfShipment(sh, ctx.pos); if (comesToUs(sh) && p0 && ["CIF", "CIP"].includes(up(p0.buyIncoterm))) add(INSURANCE_DOC, `bought ${up(p0.buyIncoterm)} — the supplier insures the cargo for us and sends the certificate`, "arrival"); }   // v7.29.2 (Incoterms 2020 A5)
+  return out;
+}
+/** The expected documents not held at the stage that needs them — loaded: what travels with the truck; arrived: the rest. */
+export function documentsMissingAtStage(sh: any, ctx: TermsCtx = {}): ExpectedDoc[] {
+  const st = S0(sh?.status); const loaded = ["Loaded", "In transit", "In Transit", "Arrived", "Delivered", "Closed"].includes(st); const arrived = ["Arrived", "Delivered", "Closed"].includes(st);
+  return expectedDocuments(sh, ctx).filter(x => !x.held && x.type !== INSURANCE_DOC && (x.stage === "loading" ? loaded : arrived));
+}
 export const INSURANCE_DOC = "Insurance certificate";
 /** Does the shipment hold an insurance certificate (on its document list, had or sent)? */
 export function holdsInsurance(sh: any): boolean { return (sh?.documents || []).some((d: any) => docTypeOf(d?.type).type === INSURANCE_DOC && ["Have it", "Sent"].includes(S0(d?.status))); }
 /** The CIF / CIP sales an outbound shipment of ours carries while it holds no insurance certificate. */
+/** v7.29.1 (FZ-39): THE INSURANCE THE SHIPMENT RECORDS — insured (the certificate is held or sent), not insured (marked "Not bought"),
+ *  or not recorded yet. Insurance is decided shipment by shipment. */
+export function insuranceRecorded(sh: any): "insured" | "not insured" | "" {
+  const docs = (sh?.documents || []).filter((d: any) => docTypeOf(d?.type).type === INSURANCE_DOC);
+  if (docs.some((d: any) => ["Have it", "Sent"].includes(S0(d?.status)))) return "insured";
+  return docs.some((d: any) => S0(d?.status) === "Not bought") ? "not insured" : "";
+}
+// v7.29.1 (FZ-41, owner 20 Oct: "Let us stick to the incoterms without changes … in case CIF and no insurance is selected, system should
+// recommend CFR as new basis … in case user mixes the terms system should recommend the correct one"): THE RULE THAT FITS WHAT THE
+// SHIPMENT RECORDS. Incoterms 2020 as written — each rule's twin differs in one duty only: the insurance (CIF / CFR, CIP / CPT), the
+// import clearance (DDP / DAP), the export clearance (FCA / EXW). Nothing is changed by itself; the team changes the document.
+const WITHOUT_INSURANCE: Record<string, string> = { CIF: "CFR", CIP: "CPT" };
+const WITH_INSURANCE: Record<string, string> = { CFR: "CIF", CPT: "CIP" };
+export interface RuleFit { side: "buy" | "sell"; doc: string; from: string; to: string; why: string }
+export function ruleRecommendations(sh: any, ctx: { pos?: any[]; orders?: any[]; direction?: string; placeOf?: any } = {}): RuleFit[] {
+  if (!liveRec(sh)) return [];
+  const out: RuleFit[] = []; const po = poOfShipment(sh, ctx.pos), so = saleOfShipment(sh, ctx.orders);
+  const pt = up(po?.buyIncoterm), st = up(so?.sellIncoterm); const toUs = comesToUs(sh);
+  const add = (side: "buy" | "sell", doc: any, from: string, to: string, why: string) => { if (doc && from && to && from !== to) out.push({ side, doc: S0(doc.number), from, to, why }); };
+  const ins = insuranceRecorded(sh);
+  if (so && !toUs && ins === "not insured" && WITHOUT_INSURANCE[st]) add("sell", so, st, WITHOUT_INSURANCE[st], "the shipment records no insurance bought");
+  if (so && !toUs && ins === "insured" && WITH_INSURANCE[st]) add("sell", so, st, WITH_INSURANCE[st], "the shipment holds an insurance certificate we bought for the client");
+  if (po && toUs && ins === "not insured" && WITHOUT_INSURANCE[pt]) add("buy", po, pt, WITHOUT_INSURANCE[pt], "the supplier provided no insurance");
+  // v7.29.2: under a C or D rule we contract the carriage; when the client collects, the rule that fits is FCA (handed to his carrier)
+  if (so && !toUs && S0(sh?.mode) === "Client pickup" && (C_RULES.includes(st) || D_RULES.includes(st))) add("sell", so, st, "FCA", "the client collects the goods with his own carrier");
+  const c: any = normalizeCustoms(sh.customs || sh.customsClearance) || {};
+  if (c.applies && S0(c.party)) {
+    const dir = up(ctx.direction); const doc = up(c.docType);
+    const which = doc === "EX1" ? "export" : doc === "SAD" ? "import" : dir === "EXPORT" ? "export" : dir === "IMPORT" ? "import" : "";
+    const by = ["OUR_BROKER", "FORWARDER"].includes(up(c.party)) ? "us" : up(c.party) === "CLIENT_BROKER" ? "client" : up(c.party) === "SUPPLIER" ? "supplier" : "";
+    const poSide = !!po && (toUs || underPurchase(sh, po, pt, ctx)); const soSide = !!so && !toUs;
+    if (which === "import" && poSide && by === "supplier" && pt === "DAP") add("buy", po, pt, "DDP", "the import is cleared by the supplier");
+    if (which === "import" && poSide && by === "us" && pt === "DDP") add("buy", po, pt, "DAP", "the import is cleared by us");
+    if (which === "export" && poSide && by === "supplier" && pt === "EXW") add("buy", po, pt, "FCA", "the export is cleared by the supplier");
+    if (which === "export" && poSide && by === "us" && pt === "FCA") add("buy", po, pt, "EXW", "the export is cleared by us");
+    if (which === "import" && soSide && by === "us" && st === "DAP") add("sell", so, st, "DDP", "the import is cleared by us");
+    if (which === "import" && soSide && by === "client" && st === "DDP") add("sell", so, st, "DAP", "the import is cleared by the client's broker");
+    if (which === "export" && soSide && by === "us" && st === "EXW") add("sell", so, st, "FCA", "the export is cleared by us");
+    if (which === "export" && soSide && by === "client" && st === "FCA") add("sell", so, st, "EXW", "the export is cleared by the client's broker");
+  }
+  return out;
+}
 export function insuranceMissing(sh: any, orders: any[] = []): any[] {
-  if (!liveRec(sh) || comesToUs(sh) || S0(sh?.mode) === "Client pickup" || holdsInsurance(sh)) return [];
+if (!liveRec(sh) || comesToUs(sh) || S0(sh?.mode) === "Client pickup" || holdsInsurance(sh) || insuranceRecorded(sh) === "not insured") return [];   // not bought: the rule recommendation speaks
   return salesCarried(sh, orders).filter((o: any) => ["CIF", "CIP"].includes(up(o?.sellIncoterm)));
 }
 // ── v7.20.3 (A-INC-2, 3): FAS / FOB / CFR / CIF are for sea transport only ──────────────────────────────────────────────────
@@ -355,7 +453,7 @@ export function insuranceMissing(sh: any, orders: any[] = []): any[] {
 export function seaRuleWithoutSea(sh: any, ctx: TermsCtx = {}): Array<{ side: "buy" | "sell"; term: string; doc: string }> {
   const legs = sh?.legs || []; if (!liveRec(sh) || !legs.length || firstSea(legs) >= 0 || String(sh?.mode || "") === "Sea") return [];
   if ((sh?.bookings || []).some((b: any) => known(b?.polId) || known(b?.podId) || S0(b?.pol) || S0(b?.pod))) return [];
-  const ids = [sh?.originLocationId, sh?.destinationLocationId, ...legs.flatMap((l: any) => [l?.fromLocationId, l?.toLocationId, ...(l?.vehicles || []).flatMap((u: any) => [u?.pickupLocationId, u?.deliveryLocationId])])].filter(known);
+  const ids = [shipmentStartPlaceId(sh), shipmentEndPlaceId(sh), ...legs.flatMap((l: any) => [l?.fromLocationId, l?.toLocationId, ...(l?.vehicles || []).flatMap((u: any) => [u?.pickupLocationId, u?.deliveryLocationId])])].filter(known);
   if (ids.some(id => isPortPlace(placeOfCtx(ctx, id)))) return [];
   const out: Array<{ side: "buy" | "sell"; term: string; doc: string }> = [];
   const po = poOfShipment(sh, ctx.pos), so = saleOfShipment(sh, ctx.orders);
@@ -405,6 +503,19 @@ export function carrierOnOthersLeg(sh: any, ctx: TermsCtx = {}): Array<{ leg: nu
 /** A C- or D-rule sale whose shipments of ours carry no freight of ours: no freight line (with an amount) and no unit price on
  *  any leg that is ours. A sale with no shipment of ours yet, or whose legs the supplier pays (bought to the same place), is not
  *  flagged. */
+/** v7.29.4 (FZ-37): THE SALE'S WHOLE JOURNEY — read across all the shipments that deliver it (a transshipment is a truck to the port
+ *  warehouse and a container on the vessel, two records): under CFR / CIF one of them must carry the sea leg to the named port; under a
+ *  D rule, CPT or CIP one of them must reach the named place. A single shipment is already checked against the named place on its own;
+ *  this check reads the shipments together. Silent until a shipment exists and while the sale names no place. */
+export function saleJourneyGap(so: any, ctx: TermsCtx = {}): { term: string; shipments: string[]; need: "sea" | "place" } | null {
+  const t = up(so?.sellIncoterm); const r = ruleOf(t); if (!liveRec(so) || !r || r.carriagePaidBy !== "seller" || !known(so?.destinationLocationId)) return null;
+  const mine = (ctx.shipments || []).filter((sh: any) => liveRec(sh) && !comesToUs(sh) && S0(sh?.mode) !== "Client pickup" && salesCarried(sh, ctx.orders).some((o: any) => S0(o.number) === S0(so.number)));
+  if (!mine.length) return null;
+  const legs = mine.flatMap((sh: any) => (sh.legs || []).filter((l: any) => l));
+  if (r.seaOnly) return legs.some((l: any) => S0(l.mode) === "Sea" && sameId(l.toLocationId, so.destinationLocationId)) ? null : { term: t, shipments: mine.map((s: any) => S0(s.number)), need: "sea" };
+  if (mine.length < 2) return null;
+  return legs.some((l: any) => sameId(l.toLocationId, so.destinationLocationId)) ? null : { term: t, shipments: mine.map((s: any) => S0(s.number)), need: "place" };
+}
 export function saleWithoutOurFreight(so: any, ctx: TermsCtx = {}): { term: string; shipments: string[] } | null {
   const t = up(so?.sellIncoterm); if (!liveRec(so) || !(C_RULES.includes(t) || D_RULES.includes(t))) return null;
   const mine = (ctx.shipments || []).filter((sh: any) => liveRec(sh) && !comesToUs(sh) && S0(sh?.mode) !== "Client pickup" && salesCarried(sh, ctx.orders).some((o: any) => S0(o.number) === S0(so.number)));
@@ -412,7 +523,7 @@ export function saleWithoutOurFreight(so: any, ctx: TermsCtx = {}): { term: stri
   let ourLegs = 0, paid = false;
   mine.forEach((sh: any) => {
     const payers = legFreightPayers(sh, ctx);
-    (sh.legs || []).forEach((l: any, i: number) => { if ((payers[i] || {}).payer !== "us") return; ourLegs++; if ((l?.vehicles || []).some((u: any) => num0(u?.costAmount) > 0) || num0(l?.costAmount) > 0) paid = true; });
+    (sh.legs || []).forEach((l: any, i: number) => { if ((payers[i] || {}).payer !== "us") return; ourLegs++; if ((l?.vehicles || []).some((u: any) => num0(u?.costAmount) > 0)) paid = true;   /* v7.28.9: the trucks own the price */ });
     (sh.costs || []).forEach((c: any) => { if (/_freight$/.test(S0(c?.type)) && num0(c?.amount) > 0 && !freightLineNotOurs(c, sh.legs || [], payers)) paid = true; });
   });
   return ourLegs > 0 && !paid ? { term: t, shipments: mine.map((s: any) => S0(s.number)) } : null;
@@ -429,12 +540,20 @@ export function shipmentTermsFindings(sh: any, ctx: TermsCtx = {}): TermsFinding
   const countryOf = ctx.countryOf || (ctx.placeOf ? (id: any) => S0((placeOfCtx(ctx, id) || {}).country) : null);
   const direction = countryOf ? shipmentTradeDirection(sh, { pos: ctx.pos, orders: ctx.orders, countryOf }) : "";
   if (direction) {
-    const duties = customsDuties(sh, { pos: ctx.pos, orders: ctx.orders, direction }); const ours = duties.some(x => x.party === "us");
+    const duties = customsDuties(sh, { pos: ctx.pos, orders: ctx.orders, direction, placeOf: ctx.placeOf }); const ours = duties.some(x => x.party === "us");
     const key = duties.find(x => ours ? x.party === "us" : x.party !== "us") || null; const tm = key ? termOfWhy(key.why) : "", dc = key ? key.doc : "";
     const c = normalizeCustoms(sh.customs || sh.customsClearance) || {}; const said = duties.length ? ` (${customsDutiesText(duties)})` : "";
     if (!!c.applies !== ours) f("customs", tm, dc, `${c.applies ? "Marked 'customs applies'" : "Not marked for customs"}, but under the terms ${ours ? "we clear" : duties.length ? "the other side clears" : "nothing is cleared"}${said}. Saving the shipment follows the terms.`);
     if (!ours) (sh.costs || []).filter((x: any) => S0(x?.type) === "customs").forEach((x: any) => f("customs", tm, dc, `A customs cost line of ${money(x)}, but customs is not ours under the terms${said || " (no customs border on this route)"}. Recharged, or is the incoterm wrong?`));
   }
+  { // v7.27.11 (FZ-16): named by the sale (or purchase) the shipment serves, like every line of the list
+  const keyDoc = S0(sh.governingSoRef || (sh.soRefs || [])[0] || (sh.poRefs || [])[0] || no);
+  const so = (ctx.orders || []).find((o: any) => S0(o?.number) === keyDoc); const po = (ctx.pos || []).find((p: any) => S0(p?.number) === keyDoc);
+  const keyTerm = up(so?.sellIncoterm || po?.buyIncoterm || "") || "—";
+  documentsMissingAtStage(sh, ctx).forEach(x => f("documents", keyTerm, keyDoc, `${x.type} not held — expected for ${x.why} (${x.stage === "loading" ? "with the truck" : "by arrival"}). Record it under Documents.`));
+  }
+  ruleRecommendations(sh, { pos: ctx.pos, orders: ctx.orders, direction, placeOf: ctx.placeOf }).forEach(r => out.push({ kind: "rule", term: r.from, doc: r.doc, record: no, recordKind: "shipment", shipment: no,
+  text: `${r.side === "sell" ? "Sold" : "Bought"} ${r.from}, but ${r.why}: the rule that fits is ${r.to} — change it on ${r.doc}.`, recommend: { side: r.side, doc: r.doc, to: r.to } }));   // v7.29.1 (FZ-41)
   insuranceMissing(sh, ctx.orders || []).forEach((o: any) => { const t = up(o.sellIncoterm); f("insurance", t, S0(o.number), `Sold ${t}: we insure the cargo — ICC ${t === "CIF" ? "(C) minimum" : "(A)"} — but this shipment holds no insurance certificate. Record it under Documents as '${INSURANCE_DOC}'.`); });
   seaRuleWithoutSea(sh, ctx).forEach(x => f("sea", x.term, x.doc, `${sideWord(x.side)} ${x.term}, a rule for sea transport only — this shipment has no sea leg and no port on its way.`));
   placesOffTerms(sh, ctx).forEach(x => f("places", x.term, x.doc, x.what === "start" ? `Bought ${x.term} at ${placeName(ctx, x.named)}: the goods are handed to us there — this shipment starts at ${placeName(ctx, x.actual)}.`
@@ -455,6 +574,8 @@ export function termsToReview(ctx: TermsCtx = {}): TermsFinding[] {
   (ctx.orders || []).filter(liveRec).forEach((o: any) => {
     const no = S0(o.number); const n = namedPlaceNotPort(o, "sell", ctx);
     if (n) out.push({ kind: "port", term: n.term, doc: no, record: no, recordKind: "order", shipment: "", text: `Sold ${n.term}: the named place must be the port of destination — it is ${n.typed ? `"${n.place}", an address typed with no port behind it` : `${n.place}, not a port`}.` });
+    const jg = saleJourneyGap(o, ctx);   // v7.29.4 (FZ-37)
+    if (jg) out.push({ kind: "journey", term: jg.term, doc: no, record: no, recordKind: "order", shipment: jg.shipments[0] || "", text: jg.need === "sea" ? `Sold ${jg.term}: the vessel to the named port is ours to book — ${jg.shipments.length > 1 ? `its shipments (${jg.shipments.join(", ")}) carry` : `its shipment ${jg.shipments[0]} carries`} no sea leg to it yet` : `Sold ${jg.term}: none of its shipments (${jg.shipments.join(", ")}) reaches the named place yet` });
     const nf = saleWithoutOurFreight(o, ctx);
     if (nf) out.push({ kind: "nofreight", term: nf.term, doc: no, record: no, recordKind: "order", shipment: "", text: `Sold ${nf.term}: we pay the carriage to the named place — yet ${nf.shipments.length > 1 ? `its shipments (${nf.shipments.join(", ")}) carry` : `its shipment ${nf.shipments[0]} carries`} no freight of ours (no freight line, no unit price on a leg of ours).` });
   });

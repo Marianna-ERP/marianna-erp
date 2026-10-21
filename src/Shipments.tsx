@@ -1,4 +1,4 @@
-import { fillEmptyPlaces, termsToReview, deliveredAtDestination } from "./incoterms.domain";   // v7.9.2 · v7.20.0 (A-INC-2): the incoterm review
+import { fillEmptyPlaces, termsToReview, deliveredAtDestination , expectedDocuments } from "./incoterms.domain";   // v7.9.2 · v7.20.0 (A-INC-2): the incoterm review
 import { TermsReviewList, TERMS_REVIEW } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { statusWord } from "./format";
 import { ModuleHeader, ActionButton, notifySaved, DocRef } from "./ui";
@@ -14,14 +14,14 @@ import { protocolsForShipment, upsertProtocol, poGateReason } from "./loadingPro
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { shipmentPostBlockReason, newestFirst } from "./moduleGuards.domain";
 import { overShipReport, derivedBillingStatus } from "./shipments.domain";
-import { setFxFallback, applyStuffingReport, spawnFromDevanning, stampEvent, costLinesByCarrierLeg, carrierOfUnit, shipmentDates } from "./shipmentModel.domain";
+import { setFxFallback, applyStuffingReport, spawnFromDevanning, stampEvent, costLinesByCarrierLeg, carrierOfUnit, shipmentDates, unitLoadedAt, unitUnloadedAt } from "./shipmentModel.domain";
 
 import { blankClaim, nextClaimNumber } from "./claims.domain";
 import { SmallButton, useConfirm } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix, removeCostsBySource } from "./costAllocation";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate, documentFxDefault } from "./fx";
-import { unifiedLocations, locationById } from "./locations";
+import { unifiedLocations, locationById, placeGroup } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
@@ -34,8 +34,12 @@ import { clientReportKg } from "./seasonOps.domain";   // v6.99.87   // v6.99.72
 import { CreateShipmentModal } from "./ShipmentCreate";
 import { ShipmentDetail } from "./ShipmentDetail";
 import { TransportOrderPrintModal, TransportOrderEmailModal } from "./ShipmentDocuments";
+import { PlaceRepairPanel } from "./PlaceRepairPanel";   // v7.28.8 (FZ-36)
+import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
+import { peopleOf, rolesOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 (Batch L)
 import { outstandingCustoms } from "./customs.domain";   // v7.10.4 (A-RV-15)
 import { soClientName } from "./salesOrders.domain";   // v7.23.5 (A-SHV-1)
+import { issueNumbers, issueNumber } from "./numbering";   // v7.27.8 (A-W5)
 const CUSTOMS_OPEN = "Customs open";   // v7.10.4 (A-RV-15): the Shipments list filter for clearances not yet Cleared
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
 // v7.22.4 (A-RV-16): no hidden copy of the counterparties — costLinesByCarrierLegApply takes them as a parameter
@@ -164,7 +168,7 @@ function legUnitPriceSum(leg) {
 function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier, contactsList = []) {
   const nameOf = (id) => { const c = (contactsList || []).find((x) => String(x.id) === String(id)); return c ? c.name : ""; };
   return (legs || []).map((leg, idx) => {
-    const amt = legUnitPriceSum(leg) ?? parseNum(leg.costAmount, 0); // v6.80.0 (D-49)
+    const amt = legUnitPriceSum(leg) ?? 0;   // v6.80.0 (D-49) · v7.28.9 (Batch L): the trucks own the price
     const cur = leg.costCurrency || fallbackCurrency || "PLN";
     const fx = resolveFxRate(leg.costFxRate, cur);
     return {
@@ -185,7 +189,7 @@ function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier, contacts
 // counterparty added this session appears in pickers without a browser refresh.
 export function mergedLocations(contacts: any[]) {
   // v6.86.0 (owner ruling): ONE source — unifiedLocations() — no module-level merge, no demo seeds.
-  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, placeType: l.type, type: placeGroup(l) }));   // v7.27.3 (FZ-26): from the type
 }
 
 // v6.32.0 (R7b-5): demo seed STANDALONE_POS moved out of the production bundle → dev/demoSeed.reference.ts
@@ -275,7 +279,7 @@ export function locationTextFromFields(id, custom) {
 function standardDocTypesFor(shipment) {
   const legModes = new Set((shipment.legs || []).map(l => l.mode));
   if (!legModes.size && shipment.mode) legModes.add(shipment.mode);
-  const types = ["Invoice", "Packing list", "EUR.1", "Phytosanitary certificate", "Export declaration"];
+  const types = ["Packing list"];   // v7.27.11 (FZ-16): the export papers are no longer added to every shipment — the expected set is read from its terms
   // v6.14 (#13): CMR is no longer a checklist row — it's captured per road unit.
   // v6.14 (#9): "Transport order" is not a manual row either — the system tracks
   // it from the email action to each carrier/forwarder.
@@ -326,7 +330,7 @@ export function shipmentSORefs(shipment, orders = []) {
   if (!explicitlyLinked && !isInbound) {
     (orders || []).forEach((o: any) => {
       if (!o || o.status === "Cancelled") return;
-      const sourcesPO = (o.items || []).some((it: any) => it.sourceType === "PO" && (shipment.poRefs || []).includes(it.sourceRef));
+      const sourcesPO = false;
       if (sourcesPO && o.number) set.add(String(o.number));
     });
   }
@@ -431,32 +435,13 @@ export function blankTransportUnit(mode = "Road") {
     blNumber: "",
     awbNumber: "",
     shippingLine: "",
-    actualLoadDate: "",
-    actualUnloadDate: "",
+    loadedAt: "",
+    unloadedAt: "",   // v7.28.0 (Batch L): the one pair of a truck's actual dates
     costAmount: 0,
     notes: "",
   };
 }
 
-function legacyUnitFromLeg(leg) {
-  return {
-    id: leg.id || 1,
-    mode: leg.mode || "Road",
-    qtyKg: leg.qtyKg || 0,
-    pallets: leg.pallets || 0,
-    truckPlate: leg.vehiclePlate || leg.truckPlate || "",
-    trailerPlate: leg.trailerPlate || "",
-    driverName: leg.driverName || "",
-    driverPhone: leg.driverPhone || "",
-    containerNumber: leg.containerNumber || "",
-    sealNumber: leg.sealNumber || "",
-    bookingNumber: leg.bookingNumber || "",
-    blNumber: leg.blNumber || "",
-    awbNumber: leg.awbNumber || "",
-    shippingLine: leg.shippingLine || "",
-    notes: leg.notes || "",
-  };
-}
 
 /** v6.99.6 (A-R9-15): the units a given provider carries on a leg (all units when none names a carrier — legacy). */
 export function providerUnitsForLeg(leg: any, providerId: any, sh: any = null): any[] {
@@ -467,10 +452,8 @@ export function providerUnitsForLeg(leg: any, providerId: any, sh: any = null): 
   if (!named.length) return sh ? [] : all;
   return all.filter((u: any) => String(carrierOfUnit(sh, leg, u) ?? "") === pid);
 }
-export function transportUnitsForLeg(leg) {
-  if (Array.isArray(leg.vehicles) && leg.vehicles.length) return leg.vehicles;
-  const hasLegacy = ["vehiclePlate", "truckPlate", "trailerPlate", "driverName", "driverPhone", "containerNumber", "sealNumber", "bookingNumber", "blNumber", "awbNumber"].some(k => leg && leg[k]);
-  return hasLegacy ? [legacyUnitFromLeg(leg)] : [];
+export function transportUnitsForLeg(leg) {   // v7.28.9 (Batch L): the trucks are the leg's units — no unit is made from the leg's old copies
+  return Array.isArray(leg?.vehicles) ? leg.vehicles : [];
 }
 
 /** v6.53.0: how many ROAD trucks this shipment loads — one loading protocol each.
@@ -489,7 +472,7 @@ export function shipmentVehicleCount(shipment) {
 }
 
 function providerFromContact(c) {
-  const cs = c.contacts || [];
+  const cs = peopleOf(c);
   const primary = cs.find(p => p.isPrimary) || cs[0] || {};
   // v6.18.14 (#6): the email shouldn't depend on it being on the primary contact —
   // use the primary's email, else the first contact that has one, else the company email.
@@ -497,11 +480,11 @@ function providerFromContact(c) {
   return {
     id: c.id,
     type: c.type,
-    additionalTypes: c.additionalTypes || [],
+    roles: rolesOf(c),   // v7.28.2 (Batch L)
     name: c.name,
-    country: c.country,
+    country: companyCountryName(c),   // v7.28.11 (Batch L)
     nip: c.nip || "",
-    address: c.address || "",
+    address: companyAddressLine(c),   // v7.28.10 (Batch L)
     services: c.services || [],
     contact: primary.name || "",
     email: emailHolder.email || c.email || "",
@@ -512,7 +495,7 @@ function providerFromContact(c) {
 export function logisticsProviders(contacts = [], service = "") {
   const fromContacts = (contacts || [])
     .filter(c => {
-      const types = [c.type, ...(c.additionalTypes || [])];
+      const types = rolesOf(c);
       const isLogistics = types.some(t => ["Carrier", "Forwarder", "Broker", "Warehouse"].includes(t));
       if (!isLogistics) return false;
       if (!service) return true;
@@ -608,7 +591,7 @@ export function buildManualShipment(opts, shipments) { return withStandardDocs(b
 
 function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null, contactsList = []) {
   const id = nextId();
-  const number = nextShipmentNumber(shipments);
+  const number = (opts && opts.number) || nextShipmentNumber(shipments);   // v7.27.8 (A-W5): the counter's number when the caller took one
   // v6.29.0: the shipment owns the trade direction — seeded from the PO's
   // provisional value here, editable on the shipment afterwards.
   // v6.62.0: no longer computed here. The header is left on Auto so the
@@ -636,7 +619,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
   const originCustom = originLocationId ? "" : (opts.originCustom || (!sellerDelivers && namedPlaceText) || supplierText);
   const destinationLocationId = (sellerDelivers ? namedPlaceId : null) || opts.destinationLocationId || null;
   const destinationCustom = destinationLocationId ? "" : (opts.destinationCustom || (sellerDelivers ? namedPlaceText : ""));
-  const poLotRefs = uniq([...(po.linkedLots || []), ...(lots || []).filter(l => l.poRef === po.number).map(l => l.number)]);
+  const poLotRefs = uniq([...(lots || []).filter(l => l.poRef === po.number).map(l => l.number)]);
   // Find any SO that sources from this PO, so goods rows can carry the SO ref.
   const soRefForPO = (opts.soRefs && opts.soRefs[0]) || "";
   // The user may load only SOME of the PO's products on this shipment. If
@@ -684,7 +667,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
   const currency = opts.currency || (mode === "Sea" || mode === "Multimodal" ? "USD" : "PLN");
   const fxRate = resolveFxRate(opts.fxRate, currency) || defaultFxRate(currency) || 1; // v6.99.6 (A-R9-16): one FX source
 
-  const roadLeg: any = { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: destinationLocationId, toCustom: destinationCustom, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Generated from ${po.number}` };
+  const roadLeg: any = { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: destinationLocationId, toCustom: destinationCustom, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || poExpectedArrival(po) || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Generated from ${po.number}` };
   // v6.3.0 leg defaults: Multimodal starts with TWO legs (road pre-carriage + sea
   // main); every other mode starts with ONE leg of that mode. "+ Add leg" covers
   // anything extra (e.g. on-carriage after customs).
@@ -692,7 +675,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
   if (mode === "Multimodal") {
     legs = [
       { ...roadLeg, id: 1, mode: "Road", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: null, toCustom: "", plannedDeliveryDate: opts.loadingDate || po.loadingDate || todayISO(), costAmount: 0, costPLN: 0, notes: `Pre-carriage for ${po.number}` },
-      { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, fromCustom: "", toLocationId: destinationLocationId, toCustom: destinationCustom, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${po.number}` },
+      { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, fromCustom: "", toLocationId: destinationLocationId, toCustom: destinationCustom, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || poExpectedArrival(po) || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${po.number}` },
     ];
   } else if (mode === "Sea" || mode === "Rail" || mode === "Air") {
     legs = [{
@@ -701,7 +684,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
       toLocationId: destinationLocationId, toCustom: destinationCustom,
       forwarderId: forwarderId || null, carrierId: carrierId || null,
       plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(),
-      plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(),
+      plannedDeliveryDate: opts.expectedDeliveryDate || poExpectedArrival(po) || todayISO(),
       containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", awbNumber: "", shippingLine: "",
       temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8),
       costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100,
@@ -731,7 +714,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
     destinationLocationId,
     destinationCustom,
     loadingDate: opts.loadingDate || po.loadingDate || todayISO(),
-    expectedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(),
+    expectedDeliveryDate: opts.expectedDeliveryDate || poExpectedArrival(po) || todayISO(),
     actualLoadingDate: null,
     actualDeliveryDate: null,
     customsClearance: mode === "Road" ? "Not required / to be confirmed" : "To be confirmed",
@@ -758,7 +741,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
   // which is why direct-export lots showed "Import").
   // v7.12.1 (A-TD-2): no direction is written — every reader asks tradeFlow.shipmentTradeDirection (rule 7: one source)
   const id = nextId();
-  const number = nextShipmentNumber(shipments);
+  const number = (opts && opts.number) || nextShipmentNumber(shipments);   // v7.27.8 (A-W5): the counter's number when the caller took one
   const mode = opts.mode || "Road";
   // No carrier chosen (e.g. EXW sale where the client arranges transport) → leave the
   // road leg unassigned (TBD) rather than forcing a default carrier.
@@ -770,9 +753,11 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
   const _lotForLine = (it: any) => { const l = findLotForSOLine(lots, it, { claimed: _refClaimed }); if (l) _refClaimed.add(String(l.number)); return l; };
   const _lineLots = (so.items || []).map((it: any) => _lotForLine(it));
   const firstLot = _lineLots[0] || null;
-  const originLocationId = firstLot?.locationId || opts.originLocationId || 1;
-  const destinationLocationId = so.destinationLocationId || opts.destinationLocationId || 10;
-  const poRefs = uniq((so.items || []).filter(it => it.sourceType === "PO").map(it => it.sourceRef));
+  // v7.27.13 (owner 19 Oct: the early test place on these shipments "is a mistake … created by an early version to test the data"): no place is ever
+  // guessed — the early versions put place 1 / place 10 on every shipment whose sale named no place; now it stays empty until known
+  const originLocationId = firstLot?.locationId || opts.originLocationId || null;
+  const destinationLocationId = so.destinationLocationId || opts.destinationLocationId || null;
+  const poRefs = uniq((so.items || []).filter(it => false).map(it => it.sourceRef));
   const lotRefs = uniq((so.items || []).map((it: any, i: number) => _lineLots[i]?.number || (it.sourceType === "STOCK" ? it.sourceRef : "")).filter(Boolean));
   // v6.34.8: SO parity with PO — honour selectedItemIds, per-line "ship now" qty
   // (opts.lineQtys, default full line), and stamp soLineId for per-line shipped-kg counting.
@@ -795,7 +780,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
     const qty = (entered === undefined || entered === "") ? parseNum(it.qty) : parseNum(entered);
     return {
       id: gi + 1,
-      poRef: it.sourceType === "PO" ? it.sourceRef : lot?.poRef || "",
+      poRef: lot?.poRef || "",
       soRef: so.number,
       soLineId: it.id ?? idx + 1,   // v6.34.8: stamp the source SO line
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
@@ -863,7 +848,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
 
 function buildManualShipment__raw(opts, shipments) {
   const id = nextId();
-  const number = nextShipmentNumber(shipments);
+  const number = (opts && opts.number) || nextShipmentNumber(shipments);   // v7.27.8 (A-W5): the counter's number when the caller took one
   const mode = opts.mode || "Road";
   const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;   // v7.21.10 (A-RV-33): no carrier until one is picked from the list — never the fixed 1001
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
@@ -889,8 +874,8 @@ function buildManualShipment__raw(opts, shipments) {
     expectedDeliveryDate: opts.expectedDeliveryDate || todayISO(),
     actualLoadingDate: null,
     actualDeliveryDate: null,
-    originLocationId: parseNum(opts.originLocationId, 1),
-    destinationLocationId: parseNum(opts.destinationLocationId, 10),
+    originLocationId: (opts.originLocationId ? parseNum(opts.originLocationId) : null),
+    destinationLocationId: (opts.destinationLocationId ? parseNum(opts.destinationLocationId) : null),
     customsClearance: opts.customsClearance || "To be confirmed",
     temperatureMinC: parseNum(opts.temperatureMinC, 2),
     temperatureMaxC: parseNum(opts.temperatureMaxC, 8),
@@ -901,11 +886,11 @@ function buildManualShipment__raw(opts, shipments) {
     legs: mode === "Multimodal"
       ? [ // v6.35.5 (A1d): a manual Multimodal shipment starts with BOTH legs, like the
           // PO/SO builders — road pre-carriage to the (yet unset) port + sea main leg.
-          { id: 1, mode: "Road", status: "Booked", fromLocationId: parseNum(opts.originLocationId, 1), toLocationId: null, toCustom: "", carrierId, forwarderId: null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.loadingDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: "Pre-carriage (manual)" },
-          { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, fromCustom: "", toLocationId: parseNum(opts.destinationLocationId, 10), forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: "Sea leg (manual)" },
+          { id: 1, mode: "Road", status: "Booked", fromLocationId: (opts.originLocationId ? parseNum(opts.originLocationId) : null), toLocationId: null, toCustom: "", carrierId, forwarderId: null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.loadingDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: "Pre-carriage (manual)" },
+          { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, fromCustom: "", toLocationId: (opts.destinationLocationId ? parseNum(opts.destinationLocationId) : null), forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: "Sea leg (manual)" },
         ]
       : [
-          { id: 1, mode, status: "Booked", fromLocationId: parseNum(opts.originLocationId, 1), toLocationId: parseNum(opts.destinationLocationId, 10), carrierId, forwarderId, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: opts.notes || "Manual leg" },
+          { id: 1, mode, status: "Booked", fromLocationId: (opts.originLocationId ? parseNum(opts.originLocationId) : null), toLocationId: (opts.destinationLocationId ? parseNum(opts.destinationLocationId) : null), carrierId, forwarderId, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: opts.notes || "Manual leg" },
         ],
     goods: [
       { id: 1, poRef: opts.poRef || "", soRef: opts.soRef || "", lotRef: opts.lotRef || "", product: opts.product || "Goods", origin: opts.origin || "", quality: opts.quality || "I", size: opts.size || "", packaging: opts.packaging || "", qtyKg, grossKg: grossForGoodsLine({ qtyKg, product: opts.product, packaging: opts.packaging }, PACKAGING_SEED).grossKg, pallets: parseNum(opts.pallets, Math.max(1, Math.round(qtyKg / 900))), description: opts.product || "Goods" },
@@ -1180,7 +1165,6 @@ export function cargoVariance(sh: any, types: any[]): { told: { pallets: number;
 
 export const th = { padding: "8px 8px", fontSize: 10, letterSpacing: "0.04em", textTransform: "uppercase", fontWeight: 800 };
 export const td = { padding: "9px 8px", verticalAlign: "top" };
-export function pillStyle(bg, color) { return { background: bg, color, padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 800 }; }
 export function ChecklistLine({ ok, label, warnText = "" }: any) {
   return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #F1F5F9" }}><div style={{ fontSize: 12, color: "#444" }}>{label}</div><div style={{ fontSize: 11, fontWeight: 800, color: ok ? "#16A34A" : "#D97706" }}>{ok ? "OK" : (warnText || "Open")}</div></div>;
 }
@@ -1188,6 +1172,7 @@ export function ChecklistLine({ ok, label, warnText = "" }: any) {
 export default function Shipments({ archive = null, claims: extClaims = [], initialStatusFilter = "",   // v7.20.0 (A-INC-2): the claims the review reads; the Dashboard opens the list on its filter
   shipments: extShipments,
   packagingTypes = [],
+  claims = [],   // v7.27.8 (A-W5): the app passes the claims — the counter starts above the highest number
   setClaims = null,
   setShipments: extSetShipments,
   contacts: extContacts = [],
@@ -1457,12 +1442,13 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
     if (recorders.length) evidence.push({ kind: "Temperature recorder", ref: recorders.join(", "), link: "" });
 
     const today = localTodayISO();
+    const clmNo = await issueNumber("CLM", new Date(today).getFullYear() || new Date().getFullYear(), (claims || []).map((x: any) => x.number));   // v7.27.8 (A-W5)
     setClaims((prev) => {
       const list = prev || [];
       return [...list, {
         ...blankClaim(),
         id: nextId(),
-        number: nextClaimNumber(list, new Date(today).getFullYear() || 2026),
+        number: clmNo || nextClaimNumber(list, new Date(today).getFullYear() || 2026),
         direction: "RECOVERY",
         respondent: { kind, contactId: providerId ?? null, name: provider?.name || "" },
         cause: "Transport damage",
@@ -1553,16 +1539,15 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
       const patch: any = { ...s, status };
       if (status === "Confirmed") patch.confirmationStatus = s.confirmationStatus === "Not sent" ? "Generated" : s.confirmationStatus;
       if (status === "Loaded") {
-        patch.actualLoadingDate = s.actualLoadingDate || today;
-        patch.legs = (s.legs || []).map((l, idx) => idx === 0 ? { ...l, status: "Loaded", actualPickupDate: l.actualPickupDate || today } : l);
+        // v7.28.7 (Batch L): the trucks own the actual dates — a truck of the first leg without a loading date gets today's
+        patch.legs = (s.legs || []).map((l, idx) => idx === 0 ? { ...l, status: "Loaded", actualPickupDate: l.actualPickupDate || today, vehicles: (l.vehicles || []).map((u: any) => unitLoadedAt(u) ? u : { ...u, loadedAt: today }) } : l);
       }
       if (status === "Arrived") {
         patch.legs = (s.legs || []).map((l, idx, arr) => idx === arr.length - 1 ? { ...l, status: "Arrived", actualDeliveryDate: l.actualDeliveryDate || today } : l);
       }
       if (status === "Delivered") {
-        patch.actualDeliveryDate = s.actualDeliveryDate || today;
-        patch.billingStatus = "Ready for supplier invoice";
-        patch.legs = (s.legs || []).map((l, idx, arr) => idx === arr.length - 1 ? { ...l, status: "Delivered", actualDeliveryDate: l.actualDeliveryDate || today } : l);
+        patch.billingStatus = "Ready for supplier invoice";   // v7.28.7 (Batch L): the trucks of the last leg without an unloading date get today's
+        patch.legs = (s.legs || []).map((l, idx, arr) => idx === arr.length - 1 ? { ...l, status: "Delivered", actualDeliveryDate: l.actualDeliveryDate || today, vehicles: (l.vehicles || []).map((u: any) => unitUnloadedAt(u) ? u : { ...u, unloadedAt: today }) } : l);
       }
       if (status === "Closed") {
         patch.billingStatus = s.billingStatus === "Not ready" ? "Ready for supplier invoice" : s.billingStatus;
@@ -1752,21 +1737,23 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
     <div style={{ flex: 1, overflow: "auto", padding: "16px 28px 24px", display: tab === "shipments" ? "block" : "none" }}>
       {pageOpen && selected ? (<>   {/* v7.23.5 (A-SHV-1, owner approved 13 Oct): the shipment as its own page, like a PO or an SO */}
         <button type="button" onClick={() => setPageOpen(false)} style={{ border: "none", background: "none", padding: "2px 0", marginBottom: 8, fontSize: 13, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>← Shipments</button>
-          <ShipmentDetail packagingTypes={packagingTypes} shipment={selected} termsFindings={termsAll.filter(x => x.shipment === String(selected.number))} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
+          <ShipmentDetail packagingTypes={packagingTypes} shipment={selected} shipmentInvoices={extInvoices || []} expectedDocs={expectedDocuments(selected, { pos, orders, placeOf: (id: any) => locationById(id, contacts) })} onSetDocument={(type: string, status: string = "Have it") => updateShipment(selected.id, (s: any) => { const docs = s.documents || []; const ix = docs.findIndex((d: any) => String(d.type) === type); const row = { ...(ix >= 0 ? docs[ix] : { id: nextId(), type, ref: "", notes: "", link: "" }), status, date: localTodayISO() }; return { ...s, documents: ix >= 0 ? docs.map((d: any, k: number) => k === ix ? row : d) : [...docs, row] }; })} termsFindings={termsAll.filter(x => x.shipment === String(selected.number))} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
             allShipments={shipments}   /* v7.23.6 (A-SHV-1): one DHL for several shipments of a client */
             onSetOriginals={(nos: string[], dhl: string, date: string) => { setShipments((prev: any[]) => (prev || []).map((s: any) => nos.includes(String(s.number)) ? { ...s, docsCourierTrackingNo: dhl, docsCourierDate: date } : s)); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: nos.join(", "), action: "updated", summary: `Originals sent by DHL ${dhl} on ${date}: ${nos.join(", ")}` }); setToast(`DHL ${dhl} saved on ${nos.length} shipment(s): ${nos.join(", ")}.`); }}
             onMarkTOSent={(key: string) => { updateShipment(selected.id, (s: any) => ({ ...s, transportOrders: { ...(s.transportOrders || {}), [key]: { sentAt: todayISO(), told: sentCargoSnapshot(s, packagingTypes || []) } }, confirmationStatus: "Sent", confirmationSentAt: s.confirmationSentAt || todayISO() })); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: selected.number, action: "status", summary: `Transport order ${key} marked sent` }); }}
             onStuffing={(rows: any[]) => { updateShipment(selected.id, (s: any) => applyStuffingReport(s, rows, { nextId })); setToast(`${selected.number}: ${rows.length} container(s) created from the forwarder's report.`); }}
-            onDevanning={(rows: any[]) => {
+            onDevanning={async (rows: any[]) => {
               const byC: Record<string, any> = {};
               rows.forEach((r: any) => { (byC[String(r.containerId)] = byC[String(r.containerId)] || { containerId: r.containerId, trucks: [] }).trucks.push({ truckPlate: r.truckPlate, kg: parseNum(r.kg, 0), destination: r.destKind === "SO" ? { kind: "SO", soNumber: r.soNumber } : { kind: "WAREHOUSE" } }); });
-              let n = 0; const spawned = spawnFromDevanning(selected, Object.values(byC), { nextId, todayISO, nextNumber: () => { const num = nextShipmentNumber([...shipments, ...Array.from({ length: n }, (_, k) => ({ number: `${nextShipmentNumber(shipments).slice(0, -4)}${String(parseInt(nextShipmentNumber(shipments).slice(-4), 10) + k).padStart(4, "0")}` }))]); n++; return num; } });
+              const issued = (await issueNumbers("SHP", new Date().getFullYear(), (shipments || []).map((x: any) => x.number), Math.max(1, rows.length))).numbers;   // v7.27.8 (A-W5)
+              let n = 0; const spawned = spawnFromDevanning(selected, Object.values(byC), { nextId, todayISO, nextNumber: () => { if (issued[n]) return issued[n++]; const num = nextShipmentNumber([...shipments, ...Array.from({ length: n }, (_, k) => ({ number: `${nextShipmentNumber(shipments).slice(0, -4)}${String(parseInt(nextShipmentNumber(shipments).slice(-4), 10) + k).padStart(4, "0")}` }))]); n++; return num; } });
               setShipments((prev: any[]) => [...(prev || []), ...spawned]);
               recordAudit({ module: "Shipments", docType: "Shipment", docNumber: selected.number, action: "created", summary: `De-vanning report → ${spawned.map((s: any) => s.number + " (" + s.purpose + ")").join(", ")}` });
               setToast(`${spawned.length} onward shipment(s) created from the de-vanning report: ${spawned.map((s: any) => s.number).join(", ")}.`);
             }} />
       </>) : (<>
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) 160px 200px", gap: 8, marginBottom: 12 }}>
+      <PlaceRepairPanel shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} orders={orders} />{/* v7.28.8 (FZ-36): until no route place is left to repair */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) 160px 200px", gap: 8, marginBottom: 12 }}>
           <Inp value={query} onChange={e => setQuery(e.target.value)} placeholder="Search shipment, PO, SO, lot, provider..." />
           <Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}<option value={CUSTOMS_OPEN}>{CUSTOMS_OPEN} ({customsOpenSet.size})</option><option value={TERMS_REVIEW}>{TERMS_REVIEW} ({termsAll.length})</option></Sel>
         </div>
@@ -1777,7 +1764,7 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
     </div>
 
     {showCreate && <CreateShipmentModal productCatalog={productCatalogProp} pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}
-    {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} lots={lots} pos={pos} orders={orders} packagingTypes={packagingTypes} allShipmentsForCap={shipments} invoices={extInvoices} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
+    {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} lots={lots} pos={pos} orders={orders} packagingTypes={packagingTypes} productCatalog={productCatalogProp} allShipmentsForCap={shipments} invoices={extInvoices} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
     {showCustomsImport && <CustomsImportModal shipments={shipments} invoices={extInvoices} onClose={() => setShowCustomsImport(false)} setShipments={(next: any[]) => { setShipments(() => next); notifySaved("customs files"); }} />}
     {protocolShipment && <LoadingProtocolModal
       shipment={protocolShipment}

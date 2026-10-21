@@ -10,26 +10,33 @@ const days = (a: string, b: string) => Math.round((new Date(b + "T00:00:00").get
 // ── FN-4: CLIENT RISK ─────────────────────────────────────────────────────────
 export interface ClientRisk { client: string; limitPLN: number; exposurePLN: number; usagePct: number | null; overduePLN: number; maxOverdueDays: number; openInvoices: number; lastPaymentDate: string; avgDaysToPay: number | null; openOrdersPLN: number; }
 export function clientRisk(clientName: string, invoices: any[], orders: any[], contact: any, todayISO: string): ClientRisk {
-  const key = S(clientName).toLowerCase();
+// v7.27.1 (FZ-24): a client is its company id — an invoice or order linked to it counts by id; one still naming its company in text
+// only (not yet linked, A-RV-26 / FZ-17) counts under that text, never matched to a company by name.
+const key = S(clientName).toLowerCase(); const cid = contact && contact.id != null ? String(contact.id) : "";
+const isMine = (party: any) => cid ? String(party?.id ?? "") === cid : (party?.id == null && S(party?.name).toLowerCase() === key);
   let exposure = 0, overdue = 0, maxOver = 0, open = 0, lastPay = ""; const payDays: number[] = [];
   (invoices || []).forEach(i => {
-    if (!i || i.kind !== "SALES" || i.isProforma || ["Cancelled", "Draft"].includes(i.paymentStatus) || S(i.counterparty?.name).toLowerCase() !== key) return;
+    if (!i || i.kind !== "SALES" || i.isProforma || ["Cancelled", "Draft"].includes(i.paymentStatus) || !isMine(i.counterparty)) return;
     const fx = num(i.fxRate) || 1; const openAmt = r2((num(i.grossAmount) - num(i.paidAmount)) * fx);
     (i.payments || []).forEach((p: any) => { if (S(p.date) > lastPay) lastPay = S(p.date); if (S(i.issueDate) && S(p.date)) payDays.push(days(S(i.issueDate), S(p.date))); });
     if (openAmt <= 0.005) return;
     exposure += openAmt; open++;
     if (S(i.dueDate) && S(i.dueDate) < todayISO) { overdue += openAmt; maxOver = Math.max(maxOver, days(S(i.dueDate), todayISO)); }
   });
-  const openOrders = (orders || []).filter(o => o && ["Confirmed"].includes(o.status) && S(o.client?.name).toLowerCase() === key)
+  const openOrders = (orders || []).filter(o => o && ["Confirmed"].includes(o.status) && isMine(o.client))
     .reduce((s, o) => s + (o.items || []).reduce((a: number, it: any) => a + (String(it.pricingUnit || "") === "box" ? num(it.boxes) : num(it.qty)) * num(it.unitPrice), 0) * (num(o.fxRate) || 1), 0);
-  const limit = num(contact?.creditLimitPLN);
+  const limit = num(contact?.terms?.creditLimitPLN);   // v7.28.1 (Batch L): the terms own the credit limit
   return { client: clientName, limitPLN: limit, exposurePLN: r2(exposure), usagePct: limit > 0 ? r2((exposure + openOrders) / limit * 100) : null, overduePLN: r2(overdue), maxOverdueDays: maxOver, openInvoices: open, lastPaymentDate: lastPay, avgDaysToPay: payDays.length ? Math.round(payDays.reduce((s, d) => s + d, 0) / payDays.length) : null, openOrdersPLN: r2(openOrders) };
 }
 export function clientRiskTable(invoices: any[], orders: any[], contacts: any[], todayISO: string): ClientRisk[] {
-  const names = new Set<string>();
-  (invoices || []).forEach(i => { if (i?.kind === "SALES" && !["Cancelled", "Draft"].includes(i.paymentStatus) && S(i.counterparty?.name)) names.add(S(i.counterparty.name)); });
-  (orders || []).forEach(o => { if (o?.status === "Confirmed" && S(o.client?.name)) names.add(S(o.client.name)); });
-  return Array.from(names).map(n => clientRisk(n, invoices, orders, (contacts || []).find(c => S(c.name).toLowerCase() === n.toLowerCase()), todayISO))
+  // v7.27.1 (FZ-24): one row per company id; parties still named in text only get a row of their own under that text
+  const ids = new Map<string, string>(); const texts = new Set<string>();
+  const note = (party: any) => { if (!party) return; if (party.id != null) ids.set(String(party.id), S(party.name)); else if (S(party.name)) texts.add(S(party.name)); };
+  (invoices || []).forEach(i => { if (i?.kind === "SALES" && !["Cancelled", "Draft"].includes(i.paymentStatus)) note(i.counterparty); });
+  (orders || []).forEach(o => { if (o?.status === "Confirmed") note(o.client); });
+  const byId = (id: string) => (contacts || []).find(c => c && String(c.id) === id) || { id, name: ids.get(id) };
+  return [...Array.from(ids.keys()).map(id => { const c: any = byId(id); return clientRisk(S(c.name) || ids.get(id) || "", invoices, orders, c, todayISO); }),
+  ...Array.from(texts).map(n => clientRisk(n, invoices, orders, null, todayISO))]
     .sort((a, b) => (b.overduePLN - a.overduePLN) || (b.exposurePLN - a.exposurePLN));
 }
 
@@ -37,7 +44,7 @@ export function clientRiskTable(invoices: any[], orders: any[], contacts: any[],
 export interface PoResult { poNumber: string; lots: number; receivedKg: number; soldKg: number; revenuePLN: number; purchasePLN: number; landedOtherPLN: number; directPLN: number; concessionsPLN: number; recoveriesPLN: number; marginPLN: number; marginPerKg: number | null; fullySold: boolean; }
 function sourcesLot(it: any, lot: any): boolean {
   if (it?.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) return true;
-  if (it?.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef)) { if (it.sourceLineId != null && lot.poLineId != null) return String(it.sourceLineId) === String(lot.poLineId); return true; }
+  
   return false;
 }
 export function poResult(po: any, lots: any[], orders: any[], shipments: any[]): PoResult {

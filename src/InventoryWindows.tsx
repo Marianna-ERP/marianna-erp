@@ -4,7 +4,7 @@ import QualityReportDoc from "./QualityReportDoc";
 import React, { useState } from "react";
 import { Lbl, SmallButton, useConfirm } from "./ui";
 import { issueReportNumber, lastReportNumber } from "./reportNumbers";
-import { localTodayISO } from "./dates";
+import { localTodayISO , formatDMY } from "./dates";
 import { nextId } from "./ids";
 import { r0 } from "./format";
 import { sortingJob as runSortingJob, gradeSplit, blankInspection, PEPPER_DEFECTS, applyStockCount, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, clientReportKg, repostDirectToReport } from "./seasonOps.domain";
@@ -182,7 +182,7 @@ export function MovementModal({ lot, liveSOs = [], editing = null, initialMode =
                 {/* Also allow any non-cancelled SO that sources this lot, even if not currently reserving */}
                 {(liveSOs || [])
                   .filter((o: any) => !(reservationState.reservations || []).some((r: any) => r.soNumber === o.number))
-                  .filter((o: any) => (o.items || []).some((it: any) => (it.sourceType === "STOCK" && it.sourceRef === lot.number) || (it.sourceType === "PO" && it.sourceRef === lot.poRef)))
+                  .filter((o: any) => (o.items || []).some((it: any) => (it.sourceType === "STOCK" && it.sourceRef === lot.number)))
                   .map((o: any) => <option key={o.number} value={o.number}>{o.number}{o.client?.name ? ` · ${o.client.name}` : ""}</option>)}
               </select>
             </div>
@@ -190,7 +190,7 @@ export function MovementModal({ lot, liveSOs = [], editing = null, initialMode =
 
           <div style={{ marginBottom: 18 }}>
             <Lbl>Note</Lbl>
-            <Inp value={note} onChange={e => setNote(e.target.value)} placeholder={mode === "quality" ? "e.g. 2 pallets soft/over-ripe found on arrival at Gdańsk" : "e.g. Reserved for SO-2026-0094 (Biedronka)"} />
+            <Inp value={note} onChange={e => setNote(e.target.value)} placeholder={mode === "quality" ? "e.g. 2 pallets soft/over-ripe found on arrival at Gdańsk" : "e.g. Reserved for SO-2026-0094 (the client)"} />
           </div>
           {isInvalid && qty && (
             <div style={{ padding: "8px 12px", background: "#FEE2E2", color: "#9A1B1B", fontSize: 12, borderRadius: 6, marginBottom: 12 }}>
@@ -298,7 +298,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
           <div key={String(x.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
             <span style={{ width: 20 }}>🔬</span>
             <b style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{x.number || qrNos[String(x.id)] || lastReportNumber("QR", String(x.id)) || "—"}</b>
-            <span>{x.date} · {x.stage} · {x.inspector || "—"}</span>
+            <span>{formatDMY(x.date)} · {x.stage} · {x.inspector || "—"}</span>
             <span>checked {num(x.checkedQty).toLocaleString("pl-PL")} {x.unit || "kg"} ({samplePctOf(x)} %)</span>
             <span>defects <b>{v.totalPct} %</b></span>
             <span style={{ fontWeight: 800, color: v.acceptable ? "#16A34A" : "#DC2626" }}>{v.acceptable ? "Acceptable" : "Not acceptable"}</span>
@@ -313,7 +313,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
         ); })}
         {myJobs.map((j: any) => (
           <div key={String(j.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
-            <span style={{ width: 20 }}>⚖</span><span>{j.date}</span>
+            <span style={{ width: 20 }}>⚖</span><span>{formatDMY(j.date)}</span>
             <span>sorted <b>{Math.round(num(j.kgIn)).toLocaleString("pl-PL")} kg</b> → I {Math.round(num(j.classIKg)).toLocaleString("pl-PL")} · II {Math.round(num(j.classIIKg)).toLocaleString("pl-PL")} · waste {Math.round(num(j.wasteKg)).toLocaleString("pl-PL")}</span>
             {j.by ? <span>· {j.by}</span> : null}{j.hours ? <span>· {j.hours} h</span> : null}
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -324,7 +324,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
         ))}
         {myCounts.map((c: any) => { const mine = (c.lines || []).filter((l: any) => String(l.lotNumber) === String(lot.number)); return (
           <div key={String(c.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
-            <span style={{ width: 20 }}>📋</span><span>{c.date} count</span>
+            <span style={{ width: 20 }}>📋</span><span>{formatDMY(c.date)} count</span>
             {mine.map((l: any, k: number) => <span key={k}>{l.grade ? `class ${l.grade}: ` : ""}counted {Math.round(num(l.countedKg)).toLocaleString("pl-PL")} vs system {Math.round(num(l.systemKg)).toLocaleString("pl-PL")} → <b style={{ color: num(l.diffKg) ? "#B45309" : "#16A34A" }}>{num(l.diffKg) >= 0 ? "+" : ""}{Math.round(num(l.diffKg))} kg</b></span>)}
             {c.by ? <span>· {c.by}</span> : null}
           </div>

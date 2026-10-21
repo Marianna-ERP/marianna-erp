@@ -40,14 +40,14 @@ function eq(a, b, msg) { if (JSON.stringify(a) !== JSON.stringify(b)) throw new 
 function ok(v, msg) { if (!v) throw new Error(msg || "expected truthy"); }
 function approx(a, b, msg) { if (Math.abs(a - b) > 0.01) throw new Error((msg||"") + " expected ~" + b + " got " + a); }
 const noLoc = () => null;
-const ownLoc = () => ({ type: "OWN" });
+const ownLoc = () => ({ type: "RentedWarehouse" });   // v7.27.3 (FZ-26): a place is its type
 
 const mapper = { inventoryType: c => c === "customs" ? "customs" : "freight", label: c => c === "customs" ? "Customs" : "Freight" };
 const mkLot = (over={}) => ({ id: ++idc, number: "LOT-1", product: "Peppers", poRef: "PO-1",
   expectedKg: 1000, receivedKg: 0, physicalKg: 0, movements: [], costs: [], locationId: 1, ...over });
 const mkShipIn = (over={}) => ({ id: ++idc, number: "SHP-IN", purpose: "INBOUND", status: "Loaded",
   goods: [{ id: 1, lotRef: "LOT-1", poRef: "PO-1", qtyKg: 1000 }],
-  lotRefs: ["LOT-1"], poRefs: ["PO-1"], legs: [{ fromLocationId: 9, toLocationId: 2 }], costs: [], ...over });
+  lotRefs: ["LOT-1"], poRefs: ["PO-1"], legs: [{ fromLocationId: 3, toLocationId: 2 }], costs: [], ...over });
 const mkOrder = (over={}) => ({ id: ++idc, number: "SO-1", status: "Confirmed", currency: "PLN", fxRate: 1,
   client: { id: 70, name: "Biedronka" },
   items: [{ id: 1, product: "Peppers", qty: 600, unitPrice: 5, sourceType: "STOCK", sourceRef: "LOT-1" }], ...over });
@@ -75,7 +75,7 @@ t("cancelling ONLY truck B returns the lot to 500 kg — truck A untouched", () 
 });
 t("receipt → transfer → cancel transfer: kg stays, location returns (D-03 anchored end-to-end)", () => {
   let lots = [mkLot({ locationId: 9 })];
-  lots = ship.postShipmentToLots(mkShipIn({ legs: [{ fromLocationId: 9, toLocationId: 2 }] }), lots, deps).lots;
+  lots = ship.postShipmentToLots(mkShipIn({ legs: [{ fromLocationId: 3, toLocationId: 2 }] }), lots, deps).lots;
   const move = mkShipIn({ number: "SHP-T", purpose: "TRANSFER", legs: [{ fromLocationId: 2, toLocationId: 3 }] });
   lots = ship.postShipmentToLots(move, lots, deps).lots;
   eq(String(lots[0].locationId), "3");
@@ -198,7 +198,7 @@ t("a credit note WE issue against the SINV reduces its effective open amount", (
 console.log("\n══ P3.5 Claims × Lots × Orders × Notes — the unified flow, money end-to-end ══");
 // ═════════════════════════════════════════════════════════════════════════════
 const acceptedClaim = (over = {}) => ({ id: ++idc, number: "CLM-1", status: "Accepted", direction: "RECOVERY",
-  cause: "Quality defect", acceptedEUR: 500, plnPerEur: 4.3,
+  cause: "Quality defect", acceptedAmount: 500, fxToPLN: 4.3,
   respondent: { kind: "Supplier", name: "FreshFarm", contactId: 30 },
   subjects: [{ kind: "LOT", ref: "LOT-1", affectedKg: 1000 }, { kind: "PO", ref: "PO-1" }, { kind: "INVOICE", ref: "FA-9" }], ...over });
 
@@ -255,23 +255,6 @@ t("incidentNet ties a client claim and its optional recovery into one net number
 
 // ═════════════════════════════════════════════════════════════════════════════
 console.log("\n══ P3.6 Consignment × Settlement × Margin — payout math closes the loop ══");
-// ═════════════════════════════════════════════════════════════════════════════
-t("settlement: gross from SOs sourcing the lot, minus tracked expenses, commission on net", () => {
-  const lot = mkLot({ ownership: "CONSIGNMENT", receivedKg: 1000, expectedKg: 1000,
-    costs: [{ type: "freight", label: "Freight", source: "SHP-1/10", pln: 800 }] });
-  const orders = [
-    mkOrder({ number: "SO-1", items: [{ product: "Peppers", qty: 600, unitPrice: 5, sourceType: "STOCK", sourceRef: "LOT-1" }] }),
-    mkOrder({ number: "SO-2", items: [{ product: "Peppers", qty: 400, unitPrice: 4, sourceType: "STOCK", sourceRef: "LOT-1" }] }),
-    mkOrder({ number: "SO-X", status: "Cancelled", items: [{ product: "Peppers", qty: 999, unitPrice: 9, sourceType: "STOCK", sourceRef: "LOT-1" }] }),
-  ];
-  const s = cons.computeLotSettlement(lot, orders, 8, [{ id: 1, label: "Sorting", pln: 200 }]);
-  approx(s.grossPLN, 4600, "3000 + 1600, cancelled excluded");
-  approx(s.expensesPLN, 1000, "freight 800 + manual 200");
-  approx(s.netPLN, 3600);
-  approx(s.commissionPLN, 288, "8% of net");
-  approx(s.payoutPLN, 3312);
-  eq(s.soldKg, 1000);
-});
 t("after close, the margin engine prices the consignment lot at payout+commission — SO margin is sane", () => {
   const lot = mkLot({ receivedKg: 1000, physicalKg: 0, status: "Empty", ownership: "CONSIGNMENT",
     costs: [

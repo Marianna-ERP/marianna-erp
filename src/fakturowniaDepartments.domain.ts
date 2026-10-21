@@ -118,7 +118,7 @@ export function mapDepartments(raw: any[]): FktDepartment[] {
   return (raw || []).map((d: any) => {
     // v6.76.0: the LABEL is the shortcut ("Marianna EUR PKO"), not `name` —
     // `name` is the LEGAL name and is identical on every department
-    // ("Marianna Hazem Osman"). Reading `name` first made all seven accounts
+    // ("the company's full registered name"). Reading `name` first made all seven accounts
     // display the same text, and since that text contains no currency they all
     // fell back to PLN. Two columns on Fakturownia's own page; we were reading
     // the wrong one.

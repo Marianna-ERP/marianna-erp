@@ -19,6 +19,7 @@ import { primeIdsFrom } from "./ids";   // v7.21.13 (FZ-15): every store raises 
 import { useState, useEffect } from "react";
 import { APP_VERSION } from "./version";
 import { addressWithCountry } from "./counterparty.domain";   // v7.19.6 (A-TD-5)
+declare const process: any;   // v7.24.0 (A-BK-7): the build replaces process.env.REACT_APP_* literals
 
 export const STORAGE_VERSION = 2; // v6.37.0: flow-model retirement (migration 2)
 // v6.99.70 (A-BK-3): the planning budget of the browser store, in characters — the same conservative figure the Settings
@@ -149,7 +150,7 @@ export const DATA_KEYS = [
   "roles",   // v7.5.0 (A-ROLE-1): the business's roles and their rights — shared
   "heals",   // v6.99.145 (AUD-46): which one-time heals this DATASET has had — travels with the data, so an older file imported here is healed again
   "contacts", "pos", "lots", "orders", "shipments", "operationalCosts",
-  "customLocations", "warehouseInvoices", "settledRefs", "creditNotes", // v6.18.1: the Invoicing module's stores were missing — without these, invoices
+  "customLocations", // v6.18.1 · v7.28.12 (Batch L): the old warehouse-invoice, "settled" and credit-note stores are gone; without the others, invoices
   // and credit/debit notes were dropped from shared JSON files, auto-backups and
   // reset. They are real data and must travel with everything else.
   "invoices", "financeNotes",
@@ -189,13 +190,11 @@ export function exportAllData(pretty: boolean = true): string {
       version: STORAGE_VERSION,
       appVersion: APP_VERSION,
       exportedAt: new Date().toISOString(),
+      copy: String(process.env.REACT_APP_ENV_LABEL || "").trim().toUpperCase() || "REAL",   /* the literal is replaced at build time, as in remoteStore */   // v7.24.0 (A-BK-7): which copy the file came from
     },
   };
   for (const key of DATA_KEYS) {
     const v = readFromStorage(key, null);
-    // v6.79.0 (W-10): creditNotes is a DEPRECATED store (folded into financeNotes on load).
-    // It stays importable so old backups still fold, but an empty one is not exported.
-    if (key === "creditNotes" && Array.isArray(v) && v.length === 0) continue;
     data[key] = v;
   }
   return pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
@@ -232,13 +231,13 @@ export function clearAllData(): void {
 // ── v6.99.67 (A-AUD-1, owner): ONE company profile. Five documents carried their own literal company block — a copy of
 // master data — so a change in Settings never reached them. They read this instead; the literal values are the fallback
 // for a field Settings has not filled yet, so nothing printed changes until the owner changes it in Settings.
-export const COMPANY_DEFAULTS = { name: "MARIANNA", person: "Hazem Osman", address: "ul. Długa 29,\n00-238 Warszawa\nPolska", country: "Poland", nip: "PL525-284-27-87", regon: "387501311", phone: "", email: "", emergencyPhone: "+48 784 775 065" };
+export const COMPANY_DEFAULTS = { name: "MARIANNA", person: "", address: "ul. Długa 29,\n00-238 Warszawa\nPolska", country: "Poland", nip: "PL525-284-27-87", regon: "387501311", phone: "", email: "", emergencyPhone: "" };   // v7.30.4 (Batch M · M-5, audit F-17): no personal detail in the program — the contact person and the emergency phone are filled in Settings › Company
 /** The transport order's letterhead used a longer trade name and a two-line address; it derives from the profile the same way. */
 /** v7.19.6 (A-TD-5): the company's address lines as printed — the country follows when the address does not already name it. */
 export function companyAddressLines(p: any = companyProfile()): string[] { return addressWithCountry(p?.address, p?.country); }
 export function companyForTransportOrder(): { name: string; address1: string; address2: string; nip: string; emergencyPhone: string } {
   const p = companyProfile(); const lines = companyAddressLines(p);   // v7.19.6 (A-TD-5)
-  return { name: p.tradeName || (p.name === COMPANY_DEFAULTS.name ? "MARIANNA HAZEM OSMAN" : p.name), address1: lines[0]?.replace(/,$/, "") === "ul. Długa 29" ? "ul. Dluga 29" : (lines[0] || "").replace(/,$/, ""), address2: lines.length > 1 ? lines.slice(1).join(" - ") : "", nip: p.nip === COMPANY_DEFAULTS.nip ? "PL 525-284-27-87" : p.nip, emergencyPhone: p.emergencyPhone || p.phone || "" };
+  return { name: p.tradeName || p.name, address1: lines[0]?.replace(/,$/, "") === "ul. Długa 29" ? "ul. Dluga 29" : (lines[0] || "").replace(/,$/, ""), address2: lines.length > 1 ? lines.slice(1).join(" - ") : "", nip: p.nip === COMPANY_DEFAULTS.nip ? "PL 525-284-27-87" : p.nip, emergencyPhone: String(p.emergencyPhone || p.phone || "").trim()};   // v7.30.4 (M-5): the trade name printed on transport orders is a Settings › Company field
 }
 export function companyProfile(): typeof COMPANY_DEFAULTS & Record<string, any> {
   let stored: any = {}; try { stored = readFromStorage("company", {}) || {}; } catch { stored = {}; }

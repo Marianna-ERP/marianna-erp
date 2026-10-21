@@ -4,6 +4,7 @@ import { gradeSplit } from "./seasonOps.domain";   // v6.99.108 (A-QC-6)
 import { nbpRateBeforeKnown } from "./fx";   // v7.18.6 (A-AU-12)
 import { localTodayISO } from "./dates";
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { countryIso, isEU } from "./counterparty.domain";   // v7.27.5 (AUD-26)
 // poSettlement.domain.ts — v6.90.0: THE TRUCK'S FINAL RESULT (settlement per PO)
 // Owner rulings 6 Sept 2026 (VEGA_PRO_REPORTING_MAPPING.md §1, §4, §5):
 //   V1 one PO = one truck → the settlement is FOR THE PO, summing its lots by variety
@@ -28,10 +29,7 @@ export interface POSettlementRecord {
 function lotsOfPO(po: any, lots: any[]): any[] { return (lots || []).filter(l => String(l?.poRef) === String(po?.number)); }
 function sourcesLot(it: any, lot: any): boolean {
   if (it?.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) return true;
-  if (it?.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef)) {
-    if (it.sourceLineId != null && lot.poLineId != null) return String(it.sourceLineId) === String(lot.poLineId);
-    return S(it.product).toLowerCase() === S(lot.product).toLowerCase() && (!it.variety || !lot.variety || S(it.variety).toLowerCase() === S(lot.variety).toLowerCase());
-  }
+  
   return false;
 }
 
@@ -43,7 +41,7 @@ export interface POSettlementCalc {
   grossPLN: number; creditNotesPLN: number; warehousePLN: number; additionalPLN: number; thirdPartyRecoveriesPLN: number; expensesPLN: number;
   producerRecoveriesPLN: number; netPLN: number;
   ratePLNperEUR: number; netSalesEUR: number; commissionPct: number; commissionEUR: number; netAfterCommissionEUR: number;
-  provisionalEUR: number; differenceEUR: number; expectedCreditNoteEUR: number; extraInvoiceEUR: number; transferEUR: number;
+  provisionalEUR: number; differenceAmount: number; expectedCreditNoteEUR: number; extraInvoiceEUR: number; transferEUR: number;
   // v6.99.84 (A-ST-1/3, owner 30 Sept): the "EUR" fields are in the PO's CURRENCY (EUR, USD or PLN) — `currency` names it.
   // correction = the producer's credit note (−) or extra invoice (+) against net sales BEFORE commission (ruling 30 Sept);
   // balance = correction − our commission invoice, i.e. what moves after compensation (+ we owe the producer, − he owes us);
@@ -88,11 +86,29 @@ export function computePOSettlement(input: {
   const salesInvoicesOf = (o: any) => (input.invoices || []).filter((i: any) => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && !i.isProforma && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(o.number)));
   const invNetPLN = (i: any) => num(i.netPLN) || num(i.netAmount) * (num(i.fxRate) || 1);
   const noteSignedPLN = (n: any) => (n.noteType === "DEBIT" ? 1 : -1) * Math.abs(num(n.amountPLN) || num(n.amount) * (num(n.fxRate) || 1));
+  // v7.27.5 (AUD-30 — A-ST-1, owner 30 Sept; P-11): a sale line's kilos in the settlement are the kilos LOADED for that sale from the
+  // lot — the goods rows (lot, sale) of its trucks once loaded (Loaded, Arrived, Delivered, Closed) — shared among the sale's lines on
+  // the same lot by their ordered kilos. Ordered kilos not (yet) loaded are not sold. The goods rows, not the lot's movements: a
+  // groupage truck posts one movement per lot naming one sale (FZ-31), while its goods rows name each sale's own kilos.
+  const LOADED = new Set(["Loaded", "Arrived", "In Transit", "Delivered", "Closed"]);
+  const loadedPool = new Map<string, number>();
+  (input.shipments || []).forEach((sh: any) => {
+  if (!sh || !LOADED.has(String(sh.status))) return;
+  // a goods row names its sale; a truck of one sale may leave it to the truck (its governing sale, or its only sale)
+  const named = Array.from(new Set((sh.goods || []).map((g: any) => String(g?.soRef || "")).filter(Boolean)));
+  const truckSale = String(sh.governingSoRef || "") || (named.length === 1 ? named[0] : "") || ((sh.soRefs || []).length === 1 ? String(sh.soRefs[0]) : "");
+  (sh.goods || []).forEach((g: any) => { const so = String(g?.soRef || "") || truckSale; if (!g || !g.lotRef || !so) return; const k = `${g.lotRef}|${so}`; loadedPool.set(k, (loadedPool.get(k) || 0) + num(g.qtyKg)); });
+  });
+  const deliveredKgOf = (it: any, o: any): number => {
+    const total = loadedPool.get(`${it?.sourceRef}|${o?.number}`) || 0; if (!total) return 0;
+    const same = (o.items || []).filter((x: any) => x && String(x.sourceRef) === String(it.sourceRef)); const all = same.reduce((a: number, x: any) => a + num(x.qty), 0);
+    return all > 0 ? total * num(it.qty) / all : 0;
+  };
   const invoiceFacts = new Map<string, { factor: number; notesPLN: number; notesOnMyLotsPLN: number; invoiced: boolean }>();
   const factsOf = (o: any) => {
     const k = String(o.number); if (invoiceFacts.has(k)) return invoiceFacts.get(k)!;
     const invs = salesInvoicesOf(o); const ids = new Set(invs.map((i: any) => String(i.id)));
-    const orderedPLN = (o.items || []).reduce((a: number, it: any) => { const price = String(it.pricingUnit || "") === "box" && num(it.kgPerBox) > 0 ? num(it.unitPrice) / num(it.kgPerBox) : num(it.unitPrice); return a + num(it.qty) * price * soRate(o); }, 0);
+    const orderedPLN = (o.items || []).reduce((a: number, it: any) => {   /* v7.27.5 (AUD-30): valued on the kilos delivered */  const price = String(it.pricingUnit || "") === "box" && num(it.kgPerBox) > 0 ? num(it.unitPrice) / num(it.kgPerBox) : num(it.unitPrice); return a + deliveredKgOf(it, o) * price * soRate(o); }, 0);
     const invoicedPLN = invs.reduce((a: number, i: any) => a + invNetPLN(i), 0);
     const notes = (input.financeNotes || []).filter((n: any) => n && n.direction === "outgoing" && ids.has(String(n.invoiceId)) && !/Cancelled|Void/i.test(String(n.status || "")));
     // v6.99.131 (AUD-28): a note that names a lot (itself, or through its claim) belongs to that lot's truck in full; an unnamed note is shared by kilos
@@ -107,7 +123,7 @@ export function computePOSettlement(input: {
     const sales: SaleRow[] = [];   // v6.99.105 (A-ST-9, owner 2 Oct): each sale of this lot — SO, client, class, kilos, value, the claims that touch it
     liveOrders.forEach(o => (o.items || []).forEach((it: any) => {
       if (!sourcesLot(it, lot)) return;
-      const kg = num(it.qty); const fx = soRate(o) * factsOf(o).factor;
+      const kg = deliveredKgOf(it, o); const fx = soRate(o) * factsOf(o).factor;   // v7.27.5 (AUD-30): delivered, not ordered
       const price = String(it.pricingUnit || "") === "box" && num(it.kgPerBox) > 0 ? num(it.unitPrice) / num(it.kgPerBox) : num(it.unitPrice);
       const isII = /\bII\b|class ?2|klasa ?2|second/i.test(String(it.quality || it.grade || ""));
       if (isII) { soldKgII += kg; salesPLNII += kg * price * fx; } else { soldKg += kg; salesPLN += kg * price * fx; }
@@ -187,22 +203,22 @@ export function computePOSettlement(input: {
   const provPLN = provCur === "PLN" ? provAmt : provCur === currency ? provAmt * rate : provAmt * num(input.provisionalRate);
   const provisionalEUR = r2(provCur === currency ? provAmt : (rate > 0 ? provPLN / rate : 0));
   if (provAmt > 0 && provCur !== currency && provCur !== "PLN" && !(num(input.provisionalRate) > 0)) warnings.push(`The provisional invoice is in ${provCur} — enter its PLN rate.`);
-  const differenceEUR = r2(netSalesEUR - provisionalEUR);
+  const differenceAmount = r2(netSalesEUR - provisionalEUR);
   const fullySold = lines.every(l => l.onStockKg <= 1);
   if (!fullySold) warnings.push(`Not fully sold: ${lines.filter(l => l.onStockKg > 1).map(l => `${l.variety || l.lotNumber} ${l.onStockKg} kg on stock`).join(", ")} — this is an INTERIM report.`);
   return { poNumber: po.number, lines, grossPLN, creditNotesPLN, warehousePLN, additionalPLN, thirdPartyRecoveriesPLN, expensesPLN, producerRecoveriesPLN, netPLN,
     ratePLNperEUR: rate, netSalesEUR, commissionPct: pct, commissionEUR, netAfterCommissionEUR,
     // v7.16.2 (AUD-31): no rate → no net sales in the PO's currency → nothing can be expected from the producer (it was the whole provisional, at 1.0)
-    provisionalEUR, differenceEUR, expectedCreditNoteEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, -differenceEUR)) : 0, extraInvoiceEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, differenceEUR)) : 0,
+    provisionalEUR, differenceAmount, expectedCreditNoteEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, -differenceAmount)) : 0, extraInvoiceEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, differenceAmount)) : 0,
     transferEUR: r2(netAfterCommissionEUR), fullySold, warnings,
     currency, provisionalCurrency: provCur, provisionalOriginal: r2(provAmt),
-    correctionEUR: provisionalEUR > 0 ? differenceEUR : 0, balanceEUR: provisionalEUR > 0 ? r2(differenceEUR - commissionEUR) : r2(netAfterCommissionEUR),
+    correctionEUR: provisionalEUR > 0 ? differenceAmount : 0, balanceEUR: provisionalEUR > 0 ? r2(differenceAmount - commissionEUR) : r2(netAfterCommissionEUR),
     ...(() => { const no = S(input.provisionalInvoiceNo); const pinv = no ? (input.invoices || []).find((i: any) => i && i.kind !== "SALES" && i.paymentStatus !== "Cancelled" && S(i.number).replace(/\s/g, "").toUpperCase() === no.replace(/\s/g, "").toUpperCase()) : null;
       if (!pinv || !(provisionalEUR > 0)) return { provisionalPaidEUR: null, stillToTransferEUR: null };
       const paidOwn = (pinv.payments || []).reduce((a: number, p: any) => a + num(p.amount), 0) || num(pinv.paidAmount);
       const pc = S(pinv.currency || provCur).toUpperCase(); const paidPLN = pc === "PLN" ? paidOwn : paidOwn * (num(pinv.fxRate) || (pc === currency ? rate : num(input.provisionalRate)));
       const paidPO = r2(pc === currency ? paidOwn : (rate > 0 ? paidPLN / rate : 0));
-      return { provisionalPaidEUR: paidPO, stillToTransferEUR: r2(Math.max(0, provisionalEUR - paidPO) + (differenceEUR - commissionEUR)) }; })(),
+      return { provisionalPaidEUR: paidPO, stillToTransferEUR: r2(Math.max(0, provisionalEUR - paidPO) + (differenceAmount - commissionEUR)) }; })(),
     salesBasis: (bases.has("invoice") && bases.has("order") ? "mixed" : bases.has("invoice") ? "invoice" : "order") as any };
 }
 
@@ -231,12 +247,23 @@ export function expectedProducerCreditNote(po: any, calc: POSettlementCalc, deps
 }
 
 /** V4/V6: one commission invoice per truck, drafted by the run; the offset (compensation) is proposed, never posted silently. */
-export function commissionInvoiceDraft(po: any, calc: POSettlementCalc, settlement: POSettlementRecord, deps: { nextId: () => any; todayISO: () => string }): any {
-  const fx = num(calc.ratePLNperEUR); if (!(fx > 0)) return null;   // v7.16.2 (AUD-31): no rate, no document — never booked at 1.0
+/** v7.27.5 (AUD-26): the VAT of our commission (a service) by where the producer is — a Polish producer 23 %; a producer in another
+*  EU state: not taxable in Poland, reverse charge (art. 28b); outside the EU: not taxable in Poland. The accountant confirms. */
+export function commissionVat(producer: any): { vatRate: number; vatCode?: "np"; reverseCharge?: boolean } {
+const iso = countryIso(producer?.countryIso || producer?.addr?.country || producer?.country || "");
+if (!iso || iso === "PL") return { vatRate: 23 };
+return isEU(iso) ? { vatRate: 0, vatCode: "np", reverseCharge: true } : { vatRate: 0, vatCode: "np" };
+}
+export function commissionInvoiceDraft(po: any, calc: POSettlementCalc, settlement: POSettlementRecord, deps: { nextId: () => any; todayISO: () => string; producerOf?: (po: any) => any }): any {
+const fx = num(calc.ratePLNperEUR); if (!(fx > 0)) return null;   // v7.16.2 (AUD-31): no rate, no document — never booked at 1.0
+// v7.27.5 (AUD-26): dated on the day the settlement closed (the service is complete then), not on the day of the run
+const day = String(settlement.closedAt || "").slice(0, 10) || deps.todayISO();
+const vat = commissionVat(deps.producerOf ? deps.producerOf(po) : null); const gross = r2(calc.commissionEUR * (1 + vat.vatRate / 100));
   return { id: deps.nextId(), kind: "SALES", category: "COMMISSION", number: "", isProforma: false,
     counterparty: { id: po.supplier?.id ?? null, name: po.supplier?.name || "Producer", nip: po.supplier?.nip || "", address: po.supplier?.address || "" },
-    issueDate: deps.todayISO(), saleDate: deps.todayISO(), dueDate: deps.todayISO(), currency: calc.currency || "EUR", fxRate: fx,
-    netAmount: calc.commissionEUR, vatRate: 0, grossAmount: calc.commissionEUR, netPLN: r2(calc.commissionEUR * fx), grossPLN: r2(calc.commissionEUR * fx),
+    issueDate: day, saleDate: day, dueDate: day, currency: calc.currency || "EUR", fxRate: fx,
+    netAmount: calc.commissionEUR, vatRate: vat.vatRate, ...(vat.vatCode ? { vatCode: vat.vatCode } : {}), ...(vat.reverseCharge ? { reverseCharge: true } : {}),
+    vatAmount: r2(gross - calc.commissionEUR), grossAmount: gross, netPLN: r2(calc.commissionEUR * fx), grossPLN: r2(gross * fx),
     paymentStatus: "Draft", paidAmount: 0, payments: [],
     positions: [{ name: `Commission ${calc.commissionPct}% — ${po.number}${settlement.number ? " · " + settlement.number : ""} — net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} ${calc.currency || "EUR"}`, quantity: 1, unit: "service", vatRate: 0, grossTotal: calc.commissionEUR }],
     links: [{ type: "PO", number: po.number }, ...(settlement.number ? [{ type: "SET", number: settlement.number }] : [])],
@@ -244,7 +271,7 @@ export function commissionInvoiceDraft(po: any, calc: POSettlementCalc, settleme
 }
 
 /** The Monday run: every CLOSED settlement without a commission invoice gets one (per truck). */
-export function commissionRun(settlements: POSettlementRecord[], pos: any[], calcFor: (po: any, s: POSettlementRecord) => POSettlementCalc, deps: { nextId: () => any; todayISO: () => string }): { invoices: any[]; settlements: POSettlementRecord[]; runId: any } {
+export function commissionRun(settlements: POSettlementRecord[], pos: any[], calcFor: (po: any, s: POSettlementRecord) => POSettlementCalc, deps: { nextId: () => any; todayISO: () => string; producerOf?: (po: any) => any }): { invoices: any[]; settlements: POSettlementRecord[]; runId: any } {
   const runId = deps.nextId();
   const invoices: any[] = [];
   const next = (settlements || []).map(s => {

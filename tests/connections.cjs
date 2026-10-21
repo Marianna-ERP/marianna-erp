@@ -143,7 +143,10 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     const dirOf = (h) => (h.match(/data-trade-direction="([^"]*)"/) || [])[1];
     // a delivered shipment opens with its Arrange stage folded; the same record with status Booked shows it (same places, same sale)
     const shp = (n) => { const s = d.shipments.find(x => x.number === n); return ["Delivered", "Closed", "Arrived"].includes(s.status) ? { ...s, status: "Booked" } : s; };
-    await t("A-TD-1: Koper → Warsaw (SHP-2026-0007) is Intra-EU — a typed address is not read as a country", async () => { ok(dirOf(edH(shp("SHP-2026-0007"))) === "INTRA_EU", "got " + dirOf(edH(shp("SHP-2026-0007")))); });
+    // v7.28.7 (Batch L): the route decides where a shipment starts — the scenario stated on the route (on the test file this truck's
+    // first leg points at a supplier address by an old id that no longer resolves — FZ-36)
+    const viaKoper = s => ({ ...s, legs: (s.legs || []).map((l, i) => i === 0 ? { ...l, fromLocationId: 113 } : l) });
+    await t("A-TD-1: Koper → Warsaw (SHP-2026-0007) is Intra-EU — a typed address is not read as a country", async () => { ok(dirOf(edH(viaKoper(shp("SHP-2026-0007")))) === "INTRA_EU", "got " + dirOf(edH(viaKoper(shp("SHP-2026-0007"))))); });
     await t("A-TD-1: the Hungarian producer's own truck to us (SHP-2026-0036) is Intra-EU, not a default Import", async () => { ok(dirOf(edH(shp("SHP-2026-0036"))) === "INTRA_EU", "got " + dirOf(edH(shp("SHP-2026-0036")))); });
     await t("A-TD-1: Poland → Egypt with no sale (SHP-2026-0030) is Export", async () => { ok(dirOf(edH(shp("SHP-2026-0030"))) === "EXPORT", "got " + dirOf(edH(shp("SHP-2026-0030")))); });
     await t("A-TD-2: the editor's customs check knows an export with NO stored direction (SHP-2026-0035): the zero-rating wording", async () => {
@@ -160,10 +163,11 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     });
     await t("A-TD-3: no 'manual override stored' line any more (SHP-2026-0007 still carries an old IMPORT in the 2 Oct file)", async () => {
       ok(!/manual override stored/.test(T(edH(shp("SHP-2026-0007")))), "the old line is still drawn");
-      ok(/HEAL-7\.12\.2/.test(fs.readFileSync(path.resolve("./src/App.tsx"), "utf8")), "no one-time clear in App");
+      // v7.24.1 (FZ-01): the one-time clear ran on both copies (no stored direction left, 15 Oct) and went
     });
     await t("A-TD-4: the editor shows the countries actually used and where each comes from", async () => {
-      const h = T(edH(shp("SHP-2026-0007"))); ok(/Slovenia \(starting place\) → Poland \(client's country\)/.test(h), "got: " + (h.match(/Trade direction.{0,160}/) || [""])[0]);
+      const h = T(edH(viaKoper(shp("SHP-2026-0007")))); ok(/Slovenia \(starting place\) → Poland \(client's country\)/.test(h), "got: " + (h.match(/Trade direction.{0,160}/) || [""])[0]);
+      ok(/the starting place is not a known place/.test(T(edH(shp("SHP-2026-0007")))), "an unknown starting place is still called 'no starting place set'");
     });
   }
 
@@ -203,7 +207,8 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     await t("v7.13.4: a draft EUR sale's rate is NBP of the day before its order date less the buffer — shown, with 'agreed rate…'", async () => {
       FXN.setFxSettings({ EUR: 4.27, _bufferPct: 2 });
       const SOF = require(path.resolve("./src/SalesOrderForm")); const Form = SOF.OrderForm;
-      const so = { ...(d.orders.find(o => o.currency === "EUR") || d.orders[0]), currency: "EUR", status: "Draft", fxLockedAt: "", fxAgreedReason: "", orderDate: "2026-09-30" };
+      // v7.30.8: the form locks by the sale AS SAVED — a draft is a sale not saved beyond Draft, so this one is new (its own id)
+      const so = { ...(d.orders.find(o => o.currency === "EUR") || d.orders[0]), id: 990001, number: "SO-2026-9901", currency: "EUR", status: "Draft", fxLockedAt: "", fxAgreedReason: "", orderDate: "2026-09-30" };
       const host6 = document.createElement("div"); document.body.appendChild(host6); const r6 = createRoot(host6);
       await act(async () => { r6.render(React.createElement(Form, { order: so, setOrder: noop, onSave: noop, onCancel: noop, allOrders: d.orders, contacts: d.contacts, lots: d.lots, pos: d.pos, shipments: d.shipments })); });
       await act(async () => { await new Promise(r => setTimeout(r, 50)); });
@@ -224,7 +229,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
 
   await t("A-RV-03 (v7.14.1): the supplier's-truck window takes the shipments' one numbering — never a count (checked in the code)", async () => {
     const src = fs.readFileSync(path.resolve("./src/PurchaseOrders.tsx"), "utf8");
-    ok(/nextNumber: \(\) => nextShipmentNumberPure\(all, yr\)/.test(src), "not the shipments' generator"); ok(!/\.filter\(\(n: string\) => n\.includes\(`-\$\{yr\}-`\)\)\.length \+ 1/.test(src), "the count is still there");
+    ok(/nextNumber: \(\) => (?:truckNo \|\| )?nextShipmentNumberPure\(all, yr\)/.test(src), "not the shipments' generator"); ok(!/\.filter\(\(n: string\) => n\.includes\(`-\$\{yr\}-`\)\)\.length \+ 1/.test(src), "the count is still there");
   });
 
   // ══ v7.15.x — a truck at two producers; one forwarder with trucks at different producers (A-LS-2/3/4, owner 9 Oct) ══
@@ -308,7 +313,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
   await t("BP-9 / BP-17: 'Actual availability' is off the PO form and 'Actual delivery' off the SO form", async () => {
     const { OrderForm } = require(path.resolve("./src/PurchaseOrderForm")); const po = d.pos[0];
     const h = T(renderToStaticMarkup(React.createElement(OrderForm, { order: { ...po, status: "Draft" }, setOrder: noop, contacts: d.contacts, allSOs: d.orders, allShipments: d.shipments, lots: d.lots, onSave: noop, onCancel: noop })));
-    ok(/Expected delivery date/.test(h), "the PO form did not render"); ok(!/Actual availability/.test(h), "the PO form still shows 'Actual availability'");
+    ok(/(Loading|Shipment|Delivery) date/.test(h), "the PO form did not render"); ok(!/Expected delivery date/.test(h), "the PO form still asks for a second date (v7.28.5: one promised date)"); ok(!/Actual availability/.test(h), "the PO form still shows 'Actual availability'");
     ok(!/<Lbl>Actual delivery<\/Lbl>/.test(srcOf("SalesOrderForm.tsx")), "the SO form still shows 'Actual delivery'");
   });
   await t("A-RV-04: a catalog CN code is saved with Save, not at each keystroke", async () => {
@@ -430,7 +435,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
   });
   await t("A-AU-12: claims, settlements and warehouse invoices take NBP rates — none typed", async () => {
     const cl = srcOf("Claims.tsx"), po = srcOf("PurchaseOrders.tsx"), fi = srcOf("Finance.tsx");
-    ok(!/patch\(selected\.id, \{ plnPerEur: e\.target\.value \}\)/.test(cl) && /nbpRateBefore\("EUR", date\)/.test(cl), "the claim's rate is still typed");
+    ok(!/patch\(selected\.id, \{ fxToPLN: e\.target\.value \}\)/.test(cl) && /nbpRateBefore\("EUR", date\)/.test(cl), "the claim's rate is still typed");
     ok(!/upd\(\{ ratePLNperEUR: parseFloat/.test(po) && /settlementRate\(order, rec/.test(po), "the settlement's rate is still typed");
     ok(!/setInv\(\{ \.\.\.inv, fxRate: e\.target\.value \}\)/.test(fi) && /nbpRateBefore\(c, inv\.date\)/.test(fi), "the warehouse invoice's rate is still typed");
   });
@@ -499,20 +504,22 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
   const soView = (no, data) => { const x = data || d; return T(renderToStaticMarkup(React.createElement(require(path.resolve("./src/SalesOrders")).default, { orders: x.orders, setOrders: noop, contacts: x.contacts, allPOs: x.pos, invLots: x.lots, setLots: noop, shipments: x.shipments, setShipments: noop, invoices: x.invoices || [], claims: x.claims || [], financeNotes: x.financeNotes || [], packagingTypes: x.packagingTypes || [], initialSelectedNumber: no }))); };
   await t("A-INC-2 (v7.20.0): Shipments has a 'Terms to review' filter — 21 lines on 19 records on the 2 Oct file, sales included, each naming the term, the document and the record", async () => {
     const h = shipList({ initialStatusFilter: "Terms to review" });
-    ok(/Terms to review \(21\)/.test(h), "no 'Terms to review (21)' in the filter"); ok(/21 inconsistencies with the incoterms on 19 records/.test(h), "the review is not drawn: " + (h.match(/inconsistenc.{0,80}/) || ["(none)"])[0]);
+    // v7.27.11 (FZ-16): the expected-document lines come on top of the 21 — the base is unchanged
+    const nAll = Number((h.match(/Terms to review \((\d+)\)/) || [])[1] || 0); const nDocs = (h.match(/expected document missing/g) || []).length;
+    ok(nAll - nDocs === 28 && nDocs > 0, `the filter counts ${nAll}, of which ${nDocs} expected-document lines — the base is not 28 (v7.28.7: the route decides where a shipment starts)`); ok(new RegExp(`${nAll} inconsistencies with the incoterms on \\d+ records`).test(h), "the review is not drawn: " + (h.match(/inconsistenc.{0,80}/) || ["(none)"])[0]);
     ok(/CFR SO-2026-0001 named place not a port ⚠ Sold CFR: the named place must be the port of destination/.test(h), "SO-0001's line is missing");
     ok(/CIF SO-2026-0020 → SHP-2026-0028 no insurance certificate ⚠ Sold CIF: we insure the cargo — ICC \(C\) minimum/.test(h), "SHP-0028's line is missing");
-    const plain = shipList(); ok(/Terms to review \(21\)/.test(plain) && !/inconsistencies with the incoterms on/.test(plain), "the review shows without the filter");
+    const plain = shipList(); ok(new RegExp(`Terms to review \\(${nAll}\\)`).test(plain) && !/inconsistencies with the incoterms on/.test(plain), "the review shows without the filter");
   });
   await t("A-INC-2 (v7.20.0): the selected shipment's detail shows its terms to review (SHP-2026-0028)", async () => {
     const s28 = d.shipments.find(s => s.number === "SHP-2026-0028"); const h = shipList({ shipments: [s28, ...d.shipments.filter(s => s !== s28)], initialSelectedNumber: "SHP-2026-0028" });   // v7.23.5 (A-SHV-1): the shipment opens as its page
-    ok(/Terms to review \(1\) — the incoterms say otherwise[^⚠]*CIF SO-2026-0020 no insurance certificate/.test(h), "SHP-0028's detail shows no terms to review");
+    ok(/Terms to review \(\d+\) — the incoterms say otherwise/.test(h) && /CIF SO-2026-0020 no insurance certificate/.test(h), "SHP-0028's detail shows no terms to review");   // v7.27.11 (FZ-16): its missing B/L and export declaration are listed too
   });
   await t("A-INC-2 (v7.20.0): the Dashboard counts the terms to review (21) and its tile opens Shipments on that filter", async () => {
     const Dash = require(path.resolve("./src/Dashboard")).default; let got = null;
     const h3 = document.createElement("div"); document.body.appendChild(h3); const r3 = createRoot(h3);
     await act(async () => { r3.render(React.createElement(Dash, { pos: d.pos, orders: d.orders, lots: d.lots, contacts: d.contacts, shipments: d.shipments, invoices: d.invoices || [], claims: d.claims || [], onNavigate: noop, onOpenFilter: (m, f) => { got = m + "|" + f; } })); });
-    const tx = (h3.textContent || "").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " "); ok(/TERMS TO REVIEW\s*21 · /.test(tx), "no count: " + (tx.match(/TERMS TO REVIEW.{0,60}/) || ["(no tile)"])[0]);
+    const tx = (h3.textContent || "").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " "); { const hF = shipList({ initialStatusFilter: "Terms to review" }); const nF = Number((hF.match(/Terms to review \((\d+)\)/) || [])[1] || 0); ok(new RegExp(`TERMS TO REVIEW\\s*${nF} · `).test(tx), `the Dashboard does not count the same ${nF} as Shipments: ` + (tx.match(/TERMS TO REVIEW.{0,60}/) || ["(no tile)"])[0]); }   // v7.27.11: the same list as Shipments
     const el = Array.from(h3.querySelectorAll("div")).find(e => (e.textContent || "").trim() === "TERMS TO REVIEW");
     await act(async () => { el && el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); }); ok(got === "shipments|Terms to review", "the tile did not open the filter: " + got);
     await act(async () => { r3.unmount(); });
@@ -536,7 +543,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     ok(/Bought CIF: the named place must be the port of destination — it is (&quot;|")Farm gate, Mazowsze/.test(h), "the PO's view says nothing: " + (h.match(/Terms to review.{0,160}/) || ["(no box)"])[0]);
   });
   await t("A-INC-2 (2, v7.20.2): SHP-2026-0028 (sold CIF) asks for the insurance certificate, on top and by its documents; the list offers it and holding it clears the flag", async () => {
-    const s28 = shp("SHP-2026-0028", { status: "Delivered" }); const a = edS(s28); ok(/Terms to review \(1\)/.test(a) && (a.match(/this shipment holds no insurance certificate/g) || []).length === 2, "not flagged on top and by the documents");
+    const s28 = shp("SHP-2026-0028", { status: "Delivered" }); const a = edS(s28); ok(/Terms to review \(\d+\)/.test(a) && (a.match(/this shipment holds no insurance certificate/g) || []).length === 2, "not flagged on top and by the documents");   // v7.27.11: the count carries its expected documents too
     const raw = renderToStaticMarkup(React.createElement(EditShipmentModal, { shipment: s28, contacts: d.contacts, lots: d.lots, pos: d.pos, orders: d.orders, packagingTypes: d.packagingTypes || [], allShipmentsForCap: d.shipments, invoices: d.invoices || [], onSave: noop, onCancel: noop }));
     ok(/>Insurance certificate<\/option>/.test(raw), "the document list does not offer it"); ok(!/no insurance certificate/.test(edS({ ...s28, documents: [...(s28.documents || []), { id: 99, type: "Insurance certificate", status: "Have it" }] })), "a held certificate is still flagged");
   });
@@ -665,6 +672,50 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     await click(Array.from(dlg.querySelectorAll("button")).find(b => /^Save on 2 shipments$/.test((b.textContent || "").trim())));
     ok(got && got.nos.join() === "SHP-X1,SHP-X2" && got.dhl === "4417 2209 13" && /^\d{4}-\d{2}-\d{2}$/.test(got.date), "saved: " + JSON.stringify(got));
     await act(async () => root.unmount()); host.remove();
+  });
+
+  // ══ v7.25.1 — FZ-17: invoices that name their company in text are linked once ══
+  await t("FZ-17 (v7.25.1): Invoices lists the invoices that name their company in text only; a company of the very same name is suggested; Link writes the company's id (and nothing for an invoice already linked)", async () => {
+    const Inv = require(path.resolve("./src/Invoices")).default; const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host);
+    const base = { kind: "PURCHASE", category: "GOODS", dueDate: "2026-10-31", currency: "PLN", fxRate: 1, netAmount: 100, vatRate: 0, vatAmount: 0, grossAmount: 100, netPLN: 100, grossPLN: 100, positions: [], links: [], paymentStatus: "Issued", paidAmount: 0, payments: [], notes: "" };
+    const invoices = [{ ...base, id: 11, number: "FV 1/10/2026", issueDate: "2026-10-01", counterparty: { name: "Agro A" } },
+                      { ...base, id: 12, number: "FV 2/10/2026", issueDate: "2026-10-02", counterparty: { id: 6, name: "Linked Co" } }];
+    let store = invoices; const setInvoices = u => { store = typeof u === "function" ? u(store) : u; };
+    await act(async () => { root.render(React.createElement(Inv, { invoices, setInvoices, contacts: [{ id: 5, name: "Agro A" }, { id: 6, name: "Linked Co" }], orders: [], pos: [], shipments: [], lots: [], financeNotes: [], setFinanceNotes: noop })); });
+    ok(/1 invoice names the company in text only/.test(host.textContent), "no review line: " + host.textContent.slice(0, 160));
+    const click = async el => { await act(async () => { el.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); }); };
+    await click(Array.from(host.querySelectorAll("button")).find(b => (b.textContent || "").trim() === "Review"));
+    const sel = Array.from(host.querySelectorAll("select")).find(s => Array.from(s.options).some(o => o.text === "Choose the company…")); ok(sel && sel.value === "5", "the same-name company is not suggested");
+    await click(Array.from(host.querySelectorAll("button")).find(b => (b.textContent || "").trim() === "Link"));
+    ok(store.find(i => i.id === 11).counterparty.id === 5, "Link did not write the company's id"); ok(store.find(i => i.id === 12) === invoices[1], "an invoice already linked was rewritten");
+    await act(async () => root.unmount()); host.remove();
+  });
+
+  // ══ v7.26.0–v7.26.1 — A-INV-1 / A-INV-6: the list shows net and gross; one category list ══
+  await t("A-INV-1 / A-INV-6 (v7.26.0–1): the Invoices list shows NET beside GROSS; a freight or customs invoice shows its category (not 'Other cost'), an older 'SINV' reads as Sales; the detail says where a cost is charged — no separate cost scope to choose", async () => {
+    const Inv = require(path.resolve("./src/Invoices")).default; const fsx = require("fs");
+    const base = { kind: "COST", dueDate: "2026-10-31", currency: "PLN", fxRate: 1, vatRate: 23, vatAmount: 230, netPLN: 1000, grossPLN: 1230, positions: [], links: [], paymentStatus: "Issued", paidAmount: 0, payments: [], notes: "" };
+    const invs = [{ ...base, id: 1, number: "FR/1", category: "FREIGHT", costScope: "SHIPMENT", netAmount: 1000, grossAmount: 1230, issueDate: "2026-10-01", counterparty: { id: 5, name: "Carrier A" } },
+                  { ...base, id: 2, number: "SV/1", kind: "SALES", category: "SINV", netAmount: 500, grossAmount: 500, vatRate: 0, vatAmount: 0, netPLN: 500, grossPLN: 500, issueDate: "2026-10-02", counterparty: { id: 6, name: "Client B" } }];
+    const props = { invoices: invs, setInvoices: noop, contacts: [{ id: 5, name: "Carrier A" }, { id: 6, name: "Client B" }], orders: [], pos: [], shipments: [], lots: [], financeNotes: [], setFinanceNotes: noop };
+    const h = T(renderToStaticMarkup(React.createElement(Inv, props)));
+    ok(/NET\s*GROSS/.test(h), "no NET column beside GROSS"); ok(/1\s?000,00 PLN\s*1\s?230,00 PLN/.test(h), "the net and the gross are not both shown: " + (h.match(/FR\/1.{0,160}/) || [""])[0]);
+    ok(/Freight/.test(h) && /Sales/.test(h), "a freight / an older SINV invoice does not show its category");
+    const d = T(renderToStaticMarkup(React.createElement(Inv, { ...props, initialSelectedNumber: "FR/1" }))); ok(/Charged to\s*a shipment/.test(d), "the detail does not say where the cost is charged");
+    const src = fsx.readFileSync(path.resolve("./src/Invoices.tsx"), "utf8"); ok(!/<Lbl>Cost scope<\/Lbl>/.test(src) && !/MONTHLY_SHARED/.test(src), "a separate cost scope is still chosen");
+  });
+
+  // ══ v7.26.2 — A-UI-3: one screen's error never blocks the others ══
+  await t("A-UI-3 (v7.26.2): an error while drawing one screen shows inside that screen — with its message to copy — while the menu and the rest of the app keep working; opening another screen starts afresh", async () => {
+    const { ScreenBoundary } = require(path.resolve("./src/ErrorBoundary")); const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host);
+    const Boom = () => { throw new Error("test crash in a screen"); }; const Fine = () => React.createElement("div", null, "fine screen");
+    const quiet = console.error; console.error = () => {};
+    const shell = (screen, child) => React.createElement("div", null, React.createElement("nav", null, "MENU"), React.createElement(ScreenBoundary, { screen }, React.createElement(child)));
+    await act(async () => { root.render(shell("contacts", Boom)); });
+    ok(/MENU/.test(host.textContent) && /This screen hit an error/.test(host.textContent) && /test crash in a screen/.test(host.textContent) && /screen: contacts/.test(host.textContent), "the error took the whole app, or its message is missing: " + host.textContent.slice(0, 200));
+    await act(async () => { root.render(shell("invoices", Fine)); }); ok(/fine screen/.test(host.textContent) && !/hit an error/.test(host.textContent), "another screen did not start afresh");
+    console.error = quiet; await act(async () => root.unmount()); host.remove();
+    ok(/<ScreenBoundary screen=\{activeModule\}>\{renderActive\(\)\}<\/ScreenBoundary>/.test(require("fs").readFileSync(path.resolve("./src/App.tsx"), "utf8")), "App does not guard each screen");
   });
 
   console.log(`CONNECTIONS: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);

@@ -50,6 +50,16 @@ async function fktCall(op: string, params: Record<string, any> = {}, body?: any)
   }
 }
 
+/** v7.26.6 (A-INV-2): an invoice's PDF from Fakturownia, through the app's server part (the token never reaches the browser). */
+export async function fetchInvoicePdf(fktId: any): Promise<{ ok: boolean; blob?: Blob; error?: string }> {
+  const token = await sessionToken(); if (!token) return { ok: false, error: "Sign in to MARIANNA first." };
+  try {
+    const res = await fetch(`/api/fakturownia?op=pdf&id=${encodeURIComponent(String(fktId ?? ""))}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/pdf" } });
+    if (!res.ok) { let j: any = null; try { j = await res.json(); } catch { j = null; } return { ok: false, error: (j && j.error) || `The server part answered HTTP ${res.status}.` }; }
+    return { ok: true, blob: await res.blob() };
+  } catch { return { ok: false, error: "The app's server part could not be reached." }; }
+}
+
 /** Whether the server part holds a Fakturownia connection (and which account); null when it cannot be asked. */
 export async function fakturowniaStatus(): Promise<{ configured: boolean; account: string; testCopy: boolean } | null> {
   const r = await fktCall("status");
@@ -127,6 +137,7 @@ export interface MappedInvoice {
   netTotal: number;
   grossTotal: number;
   currency: string;
+  exchangeRate: number;   // v7.26.3 (A-INV-3 / FZ-06): the rate printed on the invoice (0 when Fakturownia sends none)
   paid: boolean;
   paidAmount: number;
   status: string;
@@ -139,7 +150,9 @@ function num(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
 function str(v: any): string { return v === null || v === undefined ? "" : String(v); }
 
 export function mapInvoice(raw: any): MappedInvoice {
-  const gross = num(raw?.price_gross ?? raw?.gross_price ?? raw?.total_price_gross);
+  // v7.26.0 (A-INV-1): the gross as Fakturownia gives it; when it gives none, net + VAT — never the net alone
+  const g0 = raw?.price_gross ?? raw?.gross_price ?? raw?.total_price_gross; const t0 = raw?.price_tax ?? raw?.tax_price;
+  const gross = g0 != null && String(g0).trim() !== "" ? num(g0) : (t0 != null && String(t0).trim() !== "" ? num(raw?.price_net ?? raw?.net_price ?? raw?.total_price_net) + num(t0) : 0);
   const paidAmount = num(raw?.paid ?? raw?.paid_price);
   const statusStr = str(raw?.status).toLowerCase();
   return {
@@ -160,6 +173,7 @@ export function mapInvoice(raw: any): MappedInvoice {
     netTotal: num(raw?.price_net ?? raw?.net_price ?? raw?.total_price_net),
     grossTotal: gross,
     currency: str(raw?.currency || "PLN").toUpperCase(),
+    exchangeRate: num(raw?.exchange_rate ?? raw?.exchange_currency_rate ?? raw?.currency_exchange_rate),
     // "paid" in Fakturownia is the paid AMOUNT; status "paid" is authoritative.
     paid: statusStr === "paid" || (gross > 0 && paidAmount >= gross),
     paidAmount,

@@ -13,6 +13,7 @@ import {
   PALLET_CAPACITY,
 } from "./loadingProtocol.domain";
 import { truckLoadingStops, unitForStop } from "./shipmentModel.domain";   // v7.15.2
+import { issueNumber } from "./numbering";   // v7.27.8 (A-W5)
 
 // ─── v6.46.0  LOADING PROTOCOL / KARTA ZAŁADUNKU ─────────────────────────────
 // Generated for the producer, who fills it in and has it signed and stamped by
@@ -105,9 +106,7 @@ export default function LoadingProtocolModal({
     const out: any[] = [];
     (shipment?.legs || []).forEach((leg: any) => {
       if (leg?.mode !== "Road") return;
-      const units = (Array.isArray(leg.vehicles) && leg.vehicles.length)
-        ? leg.vehicles
-        : [{ id: `leg${leg.id}-u1`, truckPlate: leg.vehiclePlate || "", trailerPlate: leg.trailerPlate || "", driverName: leg.driverName || "" }];
+      const units = Array.isArray(leg.vehicles) ? leg.vehicles : [];   // v7.28.9 (Batch L): the trucks own their plates and drivers
       units.forEach((u: any, i: number) => {
         const plate = u.truckPlate || u.vehiclePlate || `Truck ${out.length + 1}`;
         // v7.15.2 (A-LS-3, owner 9 Oct): a truck collecting at several producers has ONE SHEET PER PRODUCER — each with only what was
@@ -223,7 +222,11 @@ export default function LoadingProtocolModal({
       await uiAlert({ tone: "warn", title: "Order not confirmed", message: gateReason });
       return;
     }
-    const next = status ? { ...p, status, returnedAt: status === "Returned" ? (p.returnedAt || localTodayISO()) : p.returnedAt } : p;
+    // v7.27.8 (A-W5): a sheet saved for the first time takes its number from the shared counter (the draft showed a provisional one)
+    const stored = (allShipments || []).flatMap((s: any) => protocolsForShipment(s));
+    const first = !stored.some((x: any) => x && String(x.id) === String(p.id));
+    const p0 = first ? { ...p, number: await issueNumber("LP", parseInt(String(p.date || localTodayISO()).slice(0, 4), 10) || new Date().getFullYear(), stored.map((x: any) => x.number)) } : p;
+    const next = status ? { ...p0, status, returnedAt: status === "Returned" ? (p0.returnedAt || localTodayISO()) : p0.returnedAt } : p0;
     if (status === "Returned" && gaps.length) {
       const ok = await uiConfirm({
         tone: "warn", title: "Record as returned anyway?",

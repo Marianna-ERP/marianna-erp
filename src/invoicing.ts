@@ -15,13 +15,18 @@
 import { nextId } from "./ids";
 import { resolveFxRate } from "./fx";
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6): the scope follows the category
+import { countryIso, isEU } from "./counterparty.domain";   // v7.27.4 (AUD-16)
 
 export type InvoiceKind = "SALES" | "COST";
-export type CostScope = "SHIPMENT" | "MONTHLY_SHARED" | "OVERHEAD";
+// v7.26.1 (A-INV-6 / FZ-10, owner 17 Oct): ONE CLASSIFICATION — the direction (kind) and one category; where the cost is charged
+// follows from the category (invoicePlus.domain.scopeOf) and is never chosen apart. Older values (SINV, FORWARDER, BROKER,
+// TRANSPORT, MONTHLY_SHARED) are read as their category until the database step folds them.
+export type CostScope = "SALES" | "PURCHASE" | "SHIPMENT" | "OVERHEAD" | "OTHER";
 // v6.30.1: COMMISSION added — the settlement close (settlement.domain) drafts a
 // SALES invoice with this category; it was previously outside the union and
 // unmapped in the Invoices UI (CATEGORY_META lookup crashed the list render).
-export type InvoiceCategory = "SINV" | "COMMISSION" | "PURCHASE" | "FORWARDER" | "BROKER" | "WAREHOUSE" | "TRANSPORT" | "OTHER";
+export type InvoiceCategory = "SALES" | "COMMISSION" | "PURCHASE" | "FREIGHT" | "CUSTOMS" | "WAREHOUSE" | "OVERHEAD" | "OTHER";
 export type PaymentStatus = "Draft" | "Issued" | "Sent" | "Partially paid" | "Paid" | "Overdue" | "Cancelled";
 
 export interface InvoiceLink { type: "SO" | "PO" | "Shipment" | "Lot"; number: string; }
@@ -71,7 +76,8 @@ export interface Invoice {
   paidAmount: number;
   notes: string;
   attachment: { name: string; size?: string } | null;
-  creditNoteIds: number[];          // ids of credit/debit notes against this invoice
+  creditNoteIds?: number[];         // retired (IV-5): the notes point at their invoice — no new invoice writes it (v7.24.3)
+  invoiceNotes?: string;            // v7.26.4 (A-INV-4): the notes printed on the invoice (sent to Fakturownia), filled from the sale
   allocation: any | null;           // written by the cost-allocation engine (v6.19)
   fakturownia: { exported: boolean; ref?: string | number; legalNumber?: string };
   source: string;                   // provenance, e.g. "SO:SO-2026-0091", "migrated:warehouseInvoice"
@@ -122,7 +128,7 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
   const vat = r2(n(pi.vatAmount) || net * vatRate / 100);
   const gross = r2(n(pi.grossAmount) || net + vat);
   return {
-    id: nextId(), kind: "SALES", category: "SINV",
+    id: nextId(), kind: "SALES", category: "SALES",
     number: pi.number || "", counterparty: pi.counterparty || order.client || null,
     issueDate: pi.issueDate || "", saleDate: pi.saleDate || "", dueDate: pi.dueDate || "",
     paymentMethod: pi.paymentMethod || "Transfer",
@@ -164,31 +170,15 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
     paymentStatus: (pi.paymentStatus as PaymentStatus) || "Draft",
     paidAmount: n(pi.paidAmount),
     notes: pi.notes || "", attachment: pi.attachment || null,
-    creditNoteIds: [], allocation: null,
+    allocation: null,
     fakturownia: { exported: !!pi.fktMatched, ref: pi.fktId, legalNumber: pi.fktMatched ? pi.number : undefined },
     source: salesInvoiceSourceTag(order.number, pi.number || pi.id),
     createdAt: pi.createdAt || pi.issueDate || "", locked: pi.paymentStatus === "Sent" || !!pi.fktMatched,
   } as Invoice;
 }
 
-// v6.33.0 (A3-6): once the register owns an SO's invoices, the legacy
-// order.pendingInvoices arrays are stripped. Pure; returns the SAME array
-// reference when there is nothing to strip so React effects don't loop.
-export function stripPendingInvoices(orders: any[]): { orders: any[]; changed: boolean } {
-  let changed = false;
-  const out = arr(orders).map((o: any) => {
-    if (!o || !o.pendingInvoices || !o.pendingInvoices.length) return o;
-    changed = true;
-    const { pendingInvoices, ...rest } = o;
-    return rest;
-  });
-  return { orders: changed ? out : orders, changed };
-}
-
 export function migrateLegacyInvoices(opts: {
   existing: Invoice[];
-  orders: any[];
-  warehouseInvoices: any[];
   operationalCosts: any[];
 }): Invoice[] {
   const existing = arr<Invoice>(opts.existing);
@@ -201,54 +191,15 @@ export function migrateLegacyInvoices(opts: {
     haveSource.add(source);
   };
 
-  // 1. SALES invoices from SO pendingInvoices — same builder as the live A3-6
-  // path (salesInvoiceFromSODraft), so folded and API-created invoices are one
-  // shape and one source-tag namespace.
-  arr(opts.orders).forEach((o: any) => {
-    arr(o.pendingInvoices).forEach((pi: any) => {
-      const src = salesInvoiceSourceTag(o.number, pi.number || pi.id);
-      pushIf(src, () => salesInvoiceFromSODraft(o, pi));
-    });
-  });
-
-  // 2. COST / WAREHOUSE from warehouseInvoices (monthly shared)
-  // v6.64.1 (D-17): number-level twin guard. The fold's pushIf only knows its own
-  // source markers, so a register invoice written DIRECTLY (e.g. by an import)
-  // with the same legal number + counterparty was invisible to it and got folded
-  // again. Same number from a DIFFERENT counterparty is legitimate and still folds.
+  // v7.28.12 (Batch L · FZ-01): the folds of the old sales drafts (SO pendingInvoices) and of the old warehouse-invoice store are gone
+  // — neither exists in the data any more; what stays is the operational cost that carries an invoice number
+  // v6.64.1 (D-17): number-level twin guard — a register invoice written DIRECTLY (e.g. by an import) with the same legal number +
+  // counterparty is not folded again; the same number from a DIFFERENT counterparty is legitimate and still folds
   const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
   const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
-  const registerTwins = new Set(
-    arr(opts.existing)
-      .filter((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim())
-      .map((i: any) => normNo(i.number) + "|" + normParty(i.counterparty?.name)));
+  const registerTwins = new Set(arr(opts.existing).filter((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim()).map((i: any) => normNo(i.number) + "|" + normParty(i.counterparty?.name)));
   const hasTwin = (number: any, party: any) => registerTwins.has(normNo(number) + "|" + normParty(party));
-
-  arr(opts.warehouseInvoices).forEach((w: any) => {
-    if (hasTwin(w.invoiceNo, w.warehouseName)) return; // v6.64.1 (D-17)
-    const src = `migrated:warehouseInvoice:${w.id}`;
-    pushIf(src, () => {
-      const fx = resolveFxRate(w.fxRate, w.currency);
-      const net = r2(n(w.amount) || n(w.amountPLN) / (fx || 1));
-      return {
-        id: nextId(), kind: "COST", category: "WAREHOUSE", costScope: "MONTHLY_SHARED",
-        number: w.invoiceNo || "", counterparty: { name: w.warehouseName || "Warehouse" },
-        issueDate: w.date || "", saleDate: w.date || "", dueDate: w.dueDate || "",
-        paymentMethod: "Transfer", currency: w.currency || "PLN", fxRate: fx,
-        netAmount: net, vatRate: 0, vatAmount: 0, grossAmount: r2(net),
-        netPLN: r2(n(w.amountPLN) || net * fx), grossPLN: r2(n(w.amountPLN) || net * fx),
-        periodFrom: w.period ? `${w.period}-01` : undefined, periodTo: undefined,
-        positions: [], links: [],
-        paymentStatus: (w.status === "Approved" ? "Issued" : (w.status as PaymentStatus)) || "Issued",
-        paidAmount: 0, notes: w.notes || "", attachment: null,
-        creditNoteIds: [], allocation: w.allocatedLots ? { method: w.allocationMethod || "by_kg_days", lots: w.allocatedLots } : null,
-        fakturownia: { exported: false },
-        source: src, createdAt: w.date || "",
-      };
-    });
-  });
-
-  // 3. COST from operationalCosts that carry an invoice number
+  // COST from operationalCosts that carry an invoice number
   arr(opts.operationalCosts).forEach((c: any) => {
     if (!String(c.invoiceNo || "").trim()) return; // payroll/taxes without an invoice stay out
     if (String(c.source || "").startsWith("invoice:")) return; // v6.68.0 (D-34): this opCost IS a mirror of a register invoice — folding it back would loop
@@ -257,26 +208,26 @@ export function migrateLegacyInvoices(opts: {
     pushIf(src, () => {
       const fx = resolveFxRate(c.fxRate, c.currency);
       const net = r2(n(c.amount));
-      const gross = r2(n(c.amountPLN) || net * fx);
+      const rate = n(c.vatRate);   // v7.26.0 (A-INV-1): the VAT the import found on the invoice (0 for a cost typed by hand)
+      const grossAmt = r2(net + r2(net * rate / 100));
       const cat: InvoiceCategory =
-        /forward/i.test(c.category || "") ? "FORWARDER" :
-        /custom|broker|cło|clo/i.test(c.category || c.description || "") ? "BROKER" :
-        /transport|freight|carrier/i.test(c.category || "") ? "TRANSPORT" :
+        /forward|transport|freight|carrier/i.test(c.category || "") ? "FREIGHT" :
+        /custom|broker|cło|clo/i.test(c.category || c.description || "") ? "CUSTOMS" :
         /warehouse|storage|magazyn/i.test(c.category || "") ? "WAREHOUSE" :
         /purchase|goods|towar/i.test(c.category || "") ? "PURCHASE" : "OTHER";
-      const scope: CostScope = cat === "WAREHOUSE" || cat === "BROKER" ? "MONTHLY_SHARED" : (c.costCenter === "general" || cat === "OTHER" ? "OVERHEAD" : "SHIPMENT");
+      const scope: CostScope = cat === "OTHER" && c.costCenter === "general" ? "OVERHEAD" : scopeOf(cat);   // v7.26.1: the scope follows the category
       return {
-        id: nextId(), kind: "COST", category: cat, costScope: scope,
+        id: nextId(), kind: "COST", category: (cat === "OTHER" && scope === "OVERHEAD" ? "OVERHEAD" : cat) as InvoiceCategory, costScope: scope,
         number: c.invoiceNo, counterparty: { name: c.supplierName || c.seller || "—" },
         issueDate: c.date || "", saleDate: c.date || "", dueDate: c.dueDate || "",
         paymentMethod: "Transfer", currency: c.currency || "PLN", fxRate: fx,
-        netAmount: net, vatRate: 0, vatAmount: 0, grossAmount: r2(net),
-        netPLN: r2(net * fx), grossPLN: gross,
+        netAmount: net, vatRate: rate, vatAmount: r2(grossAmt - net), grossAmount: grossAmt,
+        netPLN: r2(net * fx), grossPLN: r2(grossAmt * fx),
         periodFrom: c.period ? `${c.period}-01` : undefined,
         positions: [], links: [],
         paymentStatus: (c.status as PaymentStatus) || "Issued", paidAmount: 0,
         notes: c.notes || c.description || "", attachment: null,
-        creditNoteIds: [], allocation: null, fakturownia: { exported: false },
+        allocation: null, fakturownia: { exported: false },
         source: src, createdAt: c.date || "",
       };
     });
@@ -299,7 +250,37 @@ export function fallbackLineName(inv: any): string {
 // ── FAKTUROWNIA PUSH PAYLOAD (verified contract, spec §10) ──
 // Builds the POST /invoices.json body for a SALES invoice. Auto-numbering (number:null).
 // gov_save_and_send defaults OFF — KSeF stays Fakturownia-managed for now.
-export function buildFakturowniaPayload(inv: Invoice, opts: { sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean ; departmentId?: any}) {
+/** v7.27.4 (AUD-16): the buyer as Fakturownia (and later KSeF) needs it — address, ISO country and the KIND of its tax number: a Polish
+*  NIP (kind left empty = NIP), an EU VAT number of another member state ('nip_ue'), another country's tax number ('other'), or none
+*  ('empty'). Read from the live company (by id) the caller passes. */
+export function buyerFields(inv: any, company: any): Record<string, any> {
+const S = (v: any) => String(v ?? "").trim();
+const iso = countryIso(company?.countryIso || company?.addr?.country || company?.country || "");
+const nip = S(inv?.counterparty?.nip || company?.nip), eu = S(company?.vatEuId);
+const out: Record<string, any> = {};
+if (!iso || iso === "PL") { out.buyer_tax_no = nip; if (!nip) out.buyer_tax_no_kind = "empty"; }
+else if (isEU(iso) && (eu || nip)) { out.buyer_tax_no = eu || nip; out.buyer_tax_no_kind = "nip_ue"; }
+else if (nip || eu) { out.buyer_tax_no = nip || eu; out.buyer_tax_no_kind = "other"; }
+else { out.buyer_tax_no = ""; out.buyer_tax_no_kind = "empty"; }
+const a = company?.addr || {};
+if (S(a.street)) out.buyer_street = S(a.street);
+if (S(a.postcode)) out.buyer_post_code = S(a.postcode);
+if (S(a.city)) out.buyer_city = S(a.city);
+if (iso) out.buyer_country = iso;
+return out;
+}
+/** v7.27.4: the invoice's notes as Fakturownia's notes — one entry per line ('Label: text' keeps its label), none longer than the
+*  256 characters KSeF accepts (a longer line continues in the next entry). */
+export function notesAsDescriptions(notes: any): Array<{ kind: string; content: string }> {
+const out: Array<{ kind: string; content: string }> = [];
+String(notes ?? "").split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(line => {
+const m = line.match(/^([^:]{1,40}):\s*(.+)$/); const kind = m ? m[1].trim() : "Uwaga"; let content = m ? m[2].trim() : line;
+while (content.length > 256) { out.push({ kind, content: content.slice(0, 256) }); content = content.slice(256); }
+if (content) out.push({ kind, content });
+});
+return out;
+}
+export function buildFakturowniaPayload(inv: Invoice, opts: { sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean ; departmentId?: any; buyer?: any; deliveryTerms?: string }) {
   // v6.65.0 (D-07b): Fakturownia requires total_price_gross per position and her
   // first live push proved a position can arrive without stored totals. The
   // payload now derives them in order of preference — stored gross → stored net
@@ -317,7 +298,7 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { sellerName?: strin
       name: p.name || "—",
       quantity: qty,
       quantity_unit: p.unit || "kg",
-      tax: vat,
+      tax: (inv as any).vatCode === "np" ? "np" : vat,   // v7.27.5 (AUD-26): not taxable in Poland
       total_price_gross: gross || (all.length === 1 ? r2(n(inv.grossAmount)) : 0),   // v6.99.116 (AUD-14): the invoice total is never spread over lines — an unpriced line stays 0 and blocks the push (pushBlockers)
     };
   }).filter(p => n(p.total_price_gross) > 0);
@@ -332,8 +313,8 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { sellerName?: strin
   // If no per-line positions exist (migrated invoices), fall back to one summary line.
   const safePositions = positions.length ? positions : [{
     name: fallbackLineName(inv), quantity: 1, quantity_unit: "szt.",   // v7.16.4 (AUD-17): never named from the notes
-    tax: n(inv.vatRate), total_price_gross: r2(n(inv.grossAmount)),
-  }];
+    tax: (inv as any).vatCode === "np" ? "np" : n(inv.vatRate), total_price_gross: r2(n(inv.grossAmount)),
+    }];
   const body: any = {
     invoice: {
       kind: inv.isProforma ? "proforma" : "vat", // v6.68.1: pro-formas push as pro-formas
@@ -343,11 +324,14 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { sellerName?: strin
       payment_to: inv.dueDate || undefined,
       payment_type: (inv.paymentMethod || "transfer").toLowerCase(),
       buyer_name: inv.counterparty?.name || "",
-      buyer_tax_no: inv.counterparty?.nip || "",
+      ...buyerFields(inv, opts.buyer),   // v7.27.4 (AUD-16): address, ISO country, the kind of tax number
+      ...((inv as any).reverseCharge ? { reverse_charge: true } : {}),   // v7.27.5 (AUD-26): a service to a business in another EU state
       buyer_company: true,          // clients are companies — needed for KSeF auto-send
+      ...(String(opts.deliveryTerms || "").trim() ? { delivery_terms: String(opts.deliveryTerms).trim().slice(0, 256) } : {}),   // v7.27.4: the sale's Incoterms 2020 rule and place
       currency: inv.currency || "PLN",
       positions: safePositions,
-    },
+      ...(notesAsDescriptions((inv as any).invoiceNotes).length ? { descriptions: notesAsDescriptions((inv as any).invoiceNotes) } : {}),   // v7.26.4 (A-INV-4) / v7.27.4: the notes, one entry per line, ≤256 characters each (KSeF)
+      },
   };
   // v6.66.0 (D-07c): seller fields removed. Sending seller_name made Fakturownia
   // try to CREATE a department, which the account's bank-account security level
@@ -414,37 +398,4 @@ export function pushBlockers(inv: Invoice): string[] {
     if (g > 0 && Math.abs(sum - g) > 0.02) out.push(`the lines add up to ${sum.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} but the invoice says ${g.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}`);
   }
   return out;
-}
-
-
-// ── v7.21.4 (A-ST-10, owner 9 Oct batch): ONE PLACE FOR A WAREHOUSE INVOICE — THE REGISTER ─────────────────────────────────
-// The separate warehouse-invoices store held the same documents the register already holds (folded by migrateLegacyInvoices:
-// source migrated:warehouseInvoice:<id>, or a twin by number and party). This moves what only the store still knew — the
-// warehouse's id, the month, an allocation to lots — onto the register invoice, points the lots' cost lines (WHINV-<store id>)
-// at it (WHINV-<register id>), and empties the store. It waits while an entry has no register invoice yet (the fold runs first).
-// An empty store changes nothing; a second pass changes nothing.
-export function foldWarehouseInvoiceStore(input: { store: any[]; invoices: any[]; lots: any[] }): { store: any[]; invoices: any[]; lots: any[]; moved: string[]; waiting: string[] } {
-  const store = arr(input.store), reg = arr(input.invoices);
-  if (!store.length) return { store: [], invoices: reg, lots: arr(input.lots), moved: [], waiting: [] };
-  const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
-  const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
-  const homeOf = (w: any) => reg.find((i: any) => i && i.source === `migrated:warehouseInvoice:${w.id}`)
-    || reg.find((i: any) => i && i.kind === "COST" && i.paymentStatus !== "Cancelled" && normNo(i.number) === normNo(w.invoiceNo) && normParty(i.counterparty?.name) === normParty(w.warehouseName));
-  const waiting = store.filter((w: any) => !homeOf(w)).map((w: any) => String(w.invoiceNo || w.id));
-  if (waiting.length) return { store, invoices: reg, lots: arr(input.lots), moved: [], waiting };
-  const moveTo = new Map<string, string>(); let invoices = reg;
-  store.forEach((w: any) => {
-    const h: any = homeOf(w); moveTo.set(`WHINV-${w.id}`, `WHINV-${h.id}`);
-    const patch: any = {};
-    if (w.warehouseId != null && w.warehouseId !== "" && (h.counterparty || {}).id == null) patch.counterparty = { ...(h.counterparty || {}), id: w.warehouseId };
-    if (!h.periodFrom && w.period) patch.periodFrom = `${w.period}-01`;
-    if (!h.allocation && Array.isArray(w.allocatedLots) && w.allocatedLots.length) patch.allocation = { method: w.allocationMethod || "by_expected_charges", lots: w.allocatedLots };
-    if (Object.keys(patch).length) invoices = invoices.map((i: any) => i.id === h.id ? { ...i, ...patch } : i);
-  });
-  const lots = arr(input.lots).map((l: any) => {
-    let changed = false;
-    const costs = (l?.costs || []).map((c: any) => { const to = moveTo.get(String(c?.source || "")); if (!to) return c; changed = true; return { ...c, source: to }; });
-    return changed ? { ...l, costs } : l;
-  });
-  return { store: [], invoices, lots, moved: store.map((w: any) => String(w.invoiceNo || w.id)), waiting: [] };
 }

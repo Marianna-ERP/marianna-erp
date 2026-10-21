@@ -8,6 +8,7 @@ import { SmallButton } from "./ui";
 import { recordAudit } from "./audit";
 import { CUSTOMS_FILE_LABEL } from "./customsClearance.domain";
 import { ImportRow, planImport, applyImport, withChoice, homeKey, homeLabel } from "./customsImport.domain";
+import { formatDMY } from "./dates";   // v7.27.2 (FZ-25)
 
 const KIND_COLOR: Record<string, string> = { CC529C: "#0F766E", CC599C: "#1D4ED8", SAD: "#6B7280", unknown: "#DC2626" };
 
@@ -47,7 +48,7 @@ export function CustomsImportView({ rows, setRows, onAttach, onClose, onFiles, r
                     {p.invoiceRef && <span>invoice <strong>{p.invoiceRef}</strong> · </span>}
                     {p.netKg ? <span>{Math.round(p.netKg).toLocaleString("pl-PL")} kg net · </span> : null}
                     {p.consignee && <span>to {p.consignee} · </span>}
-                    {p.kind === "CC599C" ? <span>left the EU <strong>{p.exitedOn || "?"}</strong>{p.exitOffice ? ` at ${p.exitOffice}` : ""}</span> : p.releasedOn ? <span>released {p.releasedOn}</span> : p.declaredOn ? <span>declared {p.declaredOn}</span> : null}
+                    {p.kind === "CC599C" ? <span>left the EU <strong>{formatDMY(p.exitedOn) || "?"}</strong>{p.exitOffice ? ` at ${p.exitOffice}` : ""}</span> : p.releasedOn ? <span>released {formatDMY(p.releasedOn)}</span> : p.declaredOn ? <span>declared {formatDMY(p.declaredOn)}</span> : null}
                   </div>
                 )}
                 {r.done ? (

@@ -2,14 +2,14 @@
 // Counterparties answer "who"; locations answer "where". A counterparty's addresses ARE locations (sites), so there is
 // one list: ports · port warehouses / customs points · our warehouses · supplier sites · client sites · other.
 import React from "react";
-import { unifiedLocations , isPortType } from "./locations";
+import { unifiedLocations, placeGroup } from "./locations";
 
 const KIND_LABEL: Record<string, string> = { PORT: "Ports", PORT_WAREHOUSE: "Port warehouses / customs", CUSTOMS: "Port warehouses / customs", BORDER: "Border crossings", OWN: "Our warehouses", WAREHOUSE: "Warehouses", SITE: "Sites (counterparties)", OTHER: "Other" };
 // v6.99.15 (A-R11-7b): a counterparty may be client AND supplier — its site is just a SITE; one alphabetical group, no who-is-what split
 const KIND_MAP: Record<string, string> = { SUPPLIER: "SITE", CLIENT: "SITE", BROKER: "SITE", WAREHOUSE: "WAREHOUSE" };
 const ORDER = ["OWN", "WAREHOUSE", "SITE", "PORT", "PORT_WAREHOUSE", "CUSTOMS", "BORDER", "OTHER"];
 // v7.21.14 (A-RV-37 · FZ-05): a place of type Other carries the old word "PORT" — it is grouped as OTHER, by its type
-const kindOf = (l: any): string => { const lg = String(l.legacyType || "").toUpperCase(); if (lg === "PORT" && !isPortType(l, { airports: true })) return "OTHER"; return String(l.legacyType || l.type || "OTHER").toUpperCase(); };
+const kindOf = (l: any): string => placeGroup(l);   // v7.27.3 (FZ-26): the group from the place's type — never the old code
 
 export default function LocationPicker({ value, onChange, contacts = [], kinds = null, preferredKinds = null, placeholder = "— location —", disabled = false, style = {}, title = "" }: any) {
   const all = unifiedLocations(contacts || []).filter((l: any) => { const raw = kindOf(l); return !kinds || kinds.includes(raw) || kinds.includes(KIND_MAP[raw] || raw); });

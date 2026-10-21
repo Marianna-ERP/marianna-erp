@@ -30,9 +30,19 @@ drop policy if exists "marianna update" on public.stores;
 create policy "marianna read"   on public.stores for select to authenticated using (true);
 create policy "marianna insert" on public.stores for insert to authenticated with check (true);
 create policy "marianna update" on public.stores for update to authenticated using (true) with check (true);
+
+-- v7.29.5: the Data API access, granted explicitly. Since 30 Oct 2026 Supabase no longer grants it by itself to a NEW table in
+-- "public"; a table created before keeps its grants. Only signed-in users (authenticated) — never anon: the app always signs in.
+grant select, insert, update on public.stores to authenticated;
+grant select, insert, update, delete on public.stores to service_role;   -- Supabase's own tools; this key never reaches the browser
 ```
 
 It should say "Success. No rows returned".
+
+## Step 2b — the security rules (v7.30.0)
+After Step 3 (the owner marked in Settings › Users with the owner's sign-in e-mail), run **supabase/security.sql** in the
+SQL Editor: only the owner then changes the users, the roles, the closed months and the company profile, and the audit
+trail only grows. See HOW_TO_DEPLOY.md, "One-time database step — the shared lists' security rules".
 
 ## Step 3 — the three users
 Supabase → left menu **Authentication** → **Users** → **Add user** → *Create new user*: e-mail + password, tick **Auto Confirm User**. One for each of you.
@@ -91,6 +101,10 @@ create index if not exists store_snapshots_taken_at on public.store_snapshots (t
 alter table public.store_snapshots enable row level security;
 drop policy if exists "marianna read snapshots" on public.store_snapshots;
 create policy "marianna read snapshots" on public.store_snapshots for select to authenticated using (true);
+-- v7.29.5: read through the Data API by signed-in users only; written by the snapshot function below (as its owner)
+grant select on public.store_snapshots to authenticated;
+grant select, insert, update, delete on public.store_snapshots to service_role;
+grant usage, select on sequence public.store_snapshots_id_seq to service_role;
 
 create or replace function public.take_store_snapshot() returns void language plpgsql security definer as $$
 declare t timestamptz := date_trunc('minute', now());

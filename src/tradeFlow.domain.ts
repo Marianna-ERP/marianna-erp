@@ -36,20 +36,48 @@ export function dispositionFromSO(so: any): string {
   return "OUR_WAREHOUSE";
 }
 
-/** Phase B core: a PO is a DIRECT (never-our-warehouse) flow when a governing
- *  active SO sources it and that sale's terms send goods straight onward. */
-export function poDirectFromSOs(po: any, orders: any[]): boolean {
-  return (orders || []).some((o: any) => {
-    if (!o || o.status === "Cancelled" || o.status === "Draft") return false;
-    const sources = (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === po.number);
-    if (!sources) return false;
-    const d = dispositionFromSO(o);
-    return d === "DIRECT_TO_CLIENT" || d === "TO_PORT" || d === "CLIENT_PICKUP";
-  });
+/** Phase B core: a PO is a DIRECT (never-our-warehouse) flow when an active sale sells one of ITS LOTS and that sale's terms
+ *  send the goods straight onward. v7.24.2 (A-RV-41): a sale line names a lot (A-ONE-1) — the rule reads the PO's lots; it
+ *  used to look for lines "sourced from the PO", which no sale has had since, so it answered "not direct" for every PO. */
+export function poDirectFromSOs(po: any, orders: any[], lots: any[] = []): boolean {
+return salesOfPO(po, orders, lots).some((o: any) => { const d = dispositionFromSO(o); return d === "DIRECT_TO_CLIENT" || d === "TO_PORT" || d === "CLIENT_PICKUP"; });
+}
+
+/** v7.27.0 (FZ-23, P-12 — owner 19 Oct): THE SALES OF A PO, ONE READER. A sale line names a lot (A-ONE-1), so a PO's sales are the
+*  sales of its lots — for the 'direct' rule, for the shipment created from a PO (its delivery date, the 'which client?' choice when one
+*  PO feeds two sales) and for every screen that asks. Deleted sales never count; drafts only when asked for. */
+export function salesOfPO(po: any, orders: any[], lots: any[], opts: { includeDrafts?: boolean } = {}): any[] {
+const mine = new Set((lots || []).filter((l: any) => l && String(l.poRef) === String(po?.number)).map((l: any) => String(l.number)));
+if (!mine.size) return [];
+return (orders || []).filter((o: any) => o && o.status !== "Cancelled" && (opts.includeDrafts || o.status !== "Draft") && (o.items || []).some((it: any) => it && it.sourceRef != null && mine.has(String(it.sourceRef))));
+}
+/** v7.27.0 (FZ-23): the POs a sale's goods come from — through the lots its lines name. */
+export function posOfSale(so: any, pos: any[], lots: any[]): any[] {
+const lotPo = new Map((lots || []).filter((l: any) => l).map((l: any) => [String(l.number), String(l.poRef || "")]));
+const nos = new Set((so?.items || []).map((it: any) => lotPo.get(String(it?.sourceRef))).filter(Boolean));
+return (pos || []).filter((p: any) => p && nos.has(String(p.number)));
 }
 
 
 
+
+/** v7.24.4 (A-RV-41, owner option 1, 17 Oct): "DIRECT" IS NEVER TYPED — the one rule keeps the stored flag current. Whenever a sale,
+ *  a PO or a lot changes, each PO's flag is what poDirectFromSOs says, and each of its lots carries its PO's flag; a lot not yet
+ *  received follows it in its status too (Expected ↔ Direct Expected). Lots already received keep their status — posting never
+ *  receives them again. Only differences are returned: nothing to change gives back the very arrays. */
+export function directSync(pos: any[], orders: any[], lots: any[]): { pos: any[]; lots: any[]; changedPOs: string[]; changedLots: string[] } {
+  const want = new Map<string, boolean>();
+  (pos || []).forEach((p: any) => { if (p && p.status !== "Cancelled" && p.buyIncoterm) want.set(String(p.number), poDirectFromSOs(p, orders || [], lots || [])); });
+  const changedPOs: string[] = [], changedLots: string[] = [];
+  const nextPOs = (pos || []).map((p: any) => { const w = p && want.get(String(p.number)); if (w === undefined || !!p.directFlow === w) return p; changedPOs.push(String(p.number)); return { ...p, directFlow: w }; });
+  const nextLots = (lots || []).map((l: any) => {
+    const w = l && want.get(String(l.poRef)); if (w === undefined) return l;
+    const st = String(l.status || ""); const st2 = !w && st === "Direct Expected" ? "Expected" : (w && st === "Expected" ? "Direct Expected" : st);
+    if (!!l.directFlow === w && st2 === st) return l;
+    changedLots.push(String(l.number)); return { ...l, directFlow: w, status: st2 };
+  });
+  return { pos: changedPOs.length ? nextPOs : pos, lots: changedLots.length ? nextLots : lots, changedPOs, changedLots };
+}
 
 /** A country string for the goods' ORIGIN — the producer, from the PO. */
 export function poOriginCountry(po: any): string {
@@ -80,14 +108,13 @@ export function shipmentTradeEnds(sh: any, ctx: { pos?: any[]; orders?: any[]; c
   const poRefs = (sh?.poRefs || []).map(String);
   const po = (ctx.pos || []).find((p: any) => poRefs.includes(String(p?.number))) || null;
   const so = S_(sh?.governingSoRef) ? (ctx.orders || []).find((o: any) => String(o?.number) === S_(sh.governingSoRef)) || null : null;
-  const legs = sh?.legs || [];
   const first = isReceiptOfPO(sh) || S_(sh?.arrangedBy).toUpperCase() === "SUPPLIER";
   let origin: TradeEnd = { country: "", from: "" };
-  if (!first) { const c = cOf(sh?.originLocationId) || cOf(legs[0]?.fromLocationId); if (c) origin = { country: c, from: "starting place" }; }
-  if (!origin.country) { const c = poOriginCountry(po); if (c) origin = { country: c, from: first ? "producer" : "producer — no starting place set" }; }
+  if (!first) { const c = cOf(shipmentStartPlaceId(sh)); if (c) origin = { country: c, from: "starting place" }; }   // v7.28.7: the route's start first
+  if (!origin.country) { const c = poOriginCountry(po); if (c) origin = { country: c, from: first ? "producer" : (shipmentStartPlaceId(sh) != null ? "producer — the starting place is not a known place" : "producer — no starting place set") }; }
   let destination: TradeEnd = { country: "", from: "" };
   if (so) { const c = cOf(so.destinationLocationId); destination = c ? { country: c, from: "sale's place" } : S_(so.client?.country) ? { country: S_(so.client.country), from: "client's country" } : destination; }
-  if (!destination.country) { const c = cOf(sh?.destinationLocationId) || cOf(legs.length ? legs[legs.length - 1]?.toLocationId : null); if (c) destination = { country: c, from: "shipment's destination" }; }
+  if (!destination.country) { const c = cOf(shipmentEndPlaceId(sh));   /* v7.27.13 (P-12): the route's end first */ if (c) destination = { country: c, from: "shipment's destination" }; }
   if (!destination.country && po) { const c = cOf(po.destinationLocationId); if (c) destination = { country: c, from: "PO's named place" }; }
   if (!destination.country) destination = { country: ourCountry(), from: "our company" };
   if (!origin.country) return { origin, destination, direction: "", missing: "set the starting place (or link the PO)" };
@@ -97,6 +124,19 @@ export function shipmentTradeEnds(sh: any, ctx: { pos?: any[]; orders?: any[]; c
   return { origin, destination, direction: movementFromEnds(oEU, dEU), missing: "" };
 }
 /** The direction alone ("" when an end is unknown). Every reader asks this — nothing is stored (A-TD-2). */
+/** v7.27.13 (P-12): WHERE A SHIPMENT ENDS — its route's last leg (places live on the route since A-R12-4); the shipment's own
+ *  destination field only when it has no legs. One reader for the terms review, the trade direction and the documents. */
+/** v7.28.7 (Batch L · FZ-08, P-12): WHERE A SHIPMENT STARTS — its route's first leg; its own origin field only without legs. */
+export function shipmentStartPlaceId(sh: any): any {
+  const first = (sh?.legs || []).filter((l: any) => l)[0];
+  const v = first && first.fromLocationId != null && first.fromLocationId !== "" ? first.fromLocationId : (sh?.originLocationId ?? null);
+  return v === "" ? null : v;
+}
+export function shipmentEndPlaceId(sh: any): any {
+  const legs = (sh?.legs || []).filter((l: any) => l); const last = legs.length ? legs[legs.length - 1] : null;
+  const v = last && last.toLocationId != null && last.toLocationId !== "" ? last.toLocationId : (sh?.destinationLocationId ?? null);
+  return v === "" ? null : v;
+}
 export function shipmentTradeDirection(sh: any, ctx: { pos?: any[]; orders?: any[]; countryOf?: (id: any) => string } = {}): string {
   return shipmentTradeEnds(sh, ctx).direction;
 }

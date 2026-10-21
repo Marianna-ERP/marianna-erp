@@ -194,15 +194,3 @@ export function isShippedOrLater(order: any, shipments: any[]): boolean {
   const s = effectiveSoStatus(order, shipments);
   return ["Shipped", "Delivered", "Invoiced", "Closed"].includes(s);
 }
-/** Stored status must be COMMERCIAL. A typed physical status (pre-v6.79 data)
- *  is normalised: supported by shipments → Confirmed (the derivation shows it);
- *  not supported → kept as a visible OVERRIDE, never as a silent fact. */
-export function normaliseStoredSoStatus(order: any, shipments: any[]): any {
-  const held = S(order?.status);
-  if (held === "Reserved") return { ...order, status: "Confirmed" };
-  if (!PHYSICAL_SO_STATUSES.includes(held)) return order;
-  const p = soShipmentProgress(order, shipments || []);
-  const supported = held === "Delivered" ? p.allDelivered : held === "Shipped" ? p.allMoved : (p.movedKg > 0 || p.bookedKg > 0);
-  if (supported) return { ...order, status: "Confirmed" };
-  return { ...order, status: "Confirmed", statusOverride: held, statusOverrideReason: order?.statusOverrideReason || "Migrated v6.79.0 — typed before status derivation existed; shipments do not show it", statusOverrideAt: order?.statusOverrideAt || "" };
-}

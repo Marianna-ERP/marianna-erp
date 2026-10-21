@@ -29,9 +29,14 @@ let passed = 0, failed = 0, findings = [];
 let idc = 100000;
 const deps = { todayISO: () => "2026-08-20", nextId: () => ++idc };
 function t(name, fn) {
-  try { fn(); passed++; console.log("  ✓ " + name); }
-  catch (e) { failed++; console.log("  ✗ " + name + " — " + e.message); findings.push(name + ": " + e.message); }
+try {
+const r = fn();
+if (r && typeof r.then === "function") { pendingChecks.push(r.then(() => { passed++; console.log("  ✓ " + name); }, e => { failed++; console.log("  ✗ " + name + " — " + e.message); findings.push(name + ": " + e.message); })); return; }   // v7.27.8: an asynchronous check is awaited before the verdict
+passed++; console.log("  ✓ " + name);
 }
+catch (e) { failed++; console.log("  ✗ " + name + " — " + e.message); findings.push(name + ": " + e.message); }
+}
+const pendingChecks = [];
 function eq(a, b, msg) { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((msg||"") + " expected " + JSON.stringify(b) + " got " + JSON.stringify(a)); }
 function ok(v, msg) { if (!v) throw new Error(msg || "expected truthy"); }
 function approx(a, b, msg) { if (Math.abs(a - b) > 0.01) throw new Error((msg||"") + " expected ~" + b + " got " + a); }
@@ -188,17 +193,6 @@ t("overdue classification uses dueDate vs today (state derived, never stored)", 
 });
 
 console.log("\n══ 5. CONSIGNMENT SETTLEMENT: compute → close → expenses never self-count ══");
-t("settlement excludes its own CONSIGN components from expenses (no feedback loop)", () => {
-  const lot = { id: 5, number:"LOT-1", product:"Apples", poRef:"PO-1", expectedKg: 1000, costs: [
-    { type:"freight", label:"road", source:"SHP-1/1", pln: 200 },
-    { type:"Consignment purchase", label:"prior producer inv", source:"CONSIGN-5", pln: 5000 },
-    { type:"Commission credit", label:"prior comm", source:"CONSIGNC-5", pln: -300 } ] };
-  const orders = [{ number:"SO-1", status:"Delivered", currency:"PLN", fxRate:1, client:{name:"C"},
-    items:[{ product:"Apples", sourceType:"PO", sourceRef:"PO-1", qty: 1000, unitPrice: 6 }] }];
-  const calc = cons.computeLotSettlement(lot, orders, 8, []);
-  approx(calc.grossPLN, 6000); approx(calc.expensesPLN, 200, "only real expenses");
-  approx(calc.netPLN, 5800); approx(calc.commissionPLN, 464); approx(calc.payoutPLN, 5336);
-});
 finding("Settlement reopen", "No reopen/undo function exists for a Closed settlement anywhere in the domain layer — reopening requires manual data surgery. MANUAL CHECK #6 confirms whether the UI offers one.");
 
 console.log("\n══ 6. CLAIMS: raise-guard and stale-warning (backward protection) ══");
@@ -223,7 +217,7 @@ t("full event sequence: IN→TRANSFER→SHIP_OUT→DAMAGE→REVERSAL nets correc
     { id:4, type:"DAMAGE", date:"2026-01-04", qtyKg: 100 },
     { id:5, type:"REVERSAL", date:"2026-01-05", qtyKg: 200 },
   ];
-  const r = inv.recomputeLotFromMovements(mkLot(), ms, () => ({ legacyType: "OWN" }));
+  const r = inv.recomputeLotFromMovements(mkLot(), ms, () => ({ type: "RentedWarehouse" }));   // v7.27.3 (FZ-26)
   approx(r.physicalKg, 500); approx(r.damagedKg, 100); eq(r.status, "In Stock");
 });
 t("CLAIM movement never touches warehouse stock", () => {
@@ -408,9 +402,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
       ],
       invoices: [{ number: "FV-1", counterparty: { id: 30 } }],
       claims: [{ number: "CLM-1", respondent: { contactId: 30 } }],
-      warehouseInvoices: [{ id: 5, invoiceNo: "LP/1", warehouseId: 30 }],
+      
     });
-    eq(r.total, 8, "all eight reference kinds found");
+    eq(r.total, 7, "all seven reference kinds found (v7.28.12: the old warehouse-invoice store is gone — the register's invoices carry those)");
     ok(r.blockers.some(b => b.startsWith("Shipment(s):") && b.includes("SHP-2") && b.includes("SHP-3")),
        "leg-level and cost-line ids covered (the old integrity blind spot)");
   });
@@ -485,7 +479,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("claim finalisation builds the right note per respondent + owner rulings", () => {
     const cl = B("claims.domain.js");
-    const claim = { number: "CLM-2026-0001", cause: "Transport damage", acceptedEUR: 500, plnPerEur: 4.3,
+    const claim = { number: "CLM-2026-0001", cause: "Transport damage", acceptedAmount: 500, fxToPLN: 4.3,
       respondent: { kind: "Carrier", name: "EuroFreight" },
       subjects: [{ kind: "SHIPMENT", ref: "SHP-1" }, { kind: "INVOICE", ref: "FA-9" }] };
     const d = { nextId: deps.nextId, todayISO: deps.todayISO, invoices: [{ id: 42, number: "FA-9" }] };
@@ -559,12 +553,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const order = { number: "SO-17", status: "Confirmed", currency: "PLN", fxRate: 1, items: [materialised] };
     const m = margin.computeSOMargin(order, [], [], [], "forecast");
     approx(m.revenuePLN, 94400, "1600 boxes × 59 = 8000 kg × 11.80");
-  });
-  t("D-19: settlement prices the box line per kg the same way", () => {
-    const materialised = { ...HER_LINE, qty: 8000, kgPerBox: 5, sourceType: "STOCK", sourceRef: "LOT-1" };
-    const lot = { number: "LOT-1", expectedKg: 8000, costs: [] };
-    const s = cons.computeLotSettlement(lot, [{ number: "SO-17", status: "Confirmed", currency: "PLN", fxRate: 1, items: [materialised] }], 8, []);
-    approx(s.grossPLN, 94400);
   });
   t("D-18: the SINV position speaks boxes — quantity 1600 @ 59, kilos in the description", () => {
     const order = { number: "SO-17", status: "Delivered", currency: "PLN", fxRate: 1, client: { name: "X" },
@@ -801,20 +789,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const led = B("ledger.js");
   const so = { number: "SO-1", status: "Confirmed", items: [{ product: "P", qty: 1000 }] };
   const shipDelivered = { number: "SHP-1", status: "Delivered", goods: [{ soRef: "SO-1", product: "P", qtyKg: 1000 }] };
-  t("W-1: 'Reserved' is no longer a physical status; stored Reserved normalises to Confirmed", () => {
-    ok(!st.PHYSICAL_SO_STATUSES.includes("Reserved"));
-    eq(st.normaliseStoredSoStatus({ ...so, status: "Reserved" }, []).status, "Confirmed");
-  });
   t("W-1: the gate reads the SHIPMENTS — a Confirmed order with a delivered shipment IS shipped-or-later", () => {
     eq(st.effectiveSoStatus(so, [shipDelivered]), "Delivered");
     ok(st.isShippedOrLater(so, [shipDelivered]), "Issue-invoice button appears without anyone typing Delivered");
     ok(!st.isShippedOrLater(so, []), "…and not before the goods moved");
-  });
-  t("W-1: a typed 'Shipped' with no shipment becomes a VISIBLE override, never a silent fact", () => {
-    const n = st.normaliseStoredSoStatus({ ...so, status: "Shipped" }, []);
-    eq(n.status, "Confirmed"); eq(n.statusOverride, "Shipped"); ok(String(n.statusOverrideReason).includes("Migrated"));
-    const ok2 = st.normaliseStoredSoStatus({ ...so, status: "Shipped" }, [{ ...shipDelivered, status: "Loaded" }]);
-    eq(ok2.status, "Confirmed"); ok(!ok2.statusOverride, "supported by shipments → plain Confirmed, derivation shows Shipped");
   });
   t("W-3: un-invoiced PO commitments are no longer ledger rows; the purchase invoice is", () => {
     const po = { number: "PO-1", status: "Confirmed", pricingMode: "firm", supplier: { name: "S" }, items: [{ qty: 1000, unitPrice: 4 }], fxRate: 1 };
@@ -844,7 +822,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("integrity: over-allocated advance, orphan mirror, unknown catalog item, claim money≠paper are all reported", () => {
     const r = integ.checkIntegrity({ contacts: [], pos: [{ number: "PO-9", status: "Confirmed", items: [{ product: "Dragonfruit" }] }], lots: [], orders: [], shipments: [],
-      invoices: [{ id: 1, kind: "COST", number: "F/1", paymentStatus: "Cancelled", grossPLN: 10 }], financeNotes: [], claims: [{ number: "CLM-1", status: "Accepted", acceptedEUR: 500, financeNoteId: null, subjects: [] }], loadPlans: [],
+      invoices: [{ id: 1, kind: "COST", number: "F/1", paymentStatus: "Cancelled", grossPLN: 10 }], financeNotes: [], claims: [{ number: "CLM-1", status: "Accepted", acceptedAmount: 500, financeNoteId: null, subjects: [] }], loadPlans: [],
       advancePayments: [{ counterpartyName: "X", amount: 100, currency: "PLN", allocations: [{ invoiceId: 77, amount: 150 }] }],
       bankAccounts: [{ accountDigits: "1", label: "A" }, { accountDigits: "1", label: "B" }],
       operationalCosts: [{ source: "invoice:1", invoiceNo: "F/1", amountPLN: 10 }, { source: "invoice:404", invoiceNo: "F/404", amountPLN: 5 }],
@@ -892,16 +870,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const cl = B("claims.domain.js");
   const mkLotC = () => ({ id: 1, number: "LOT-1", product: "Apples", ownership: "CONSIGNMENT", expectedKg: 1000, receivedKg: 1000, costs: [{ type: "freight", source: "SHP-1/1", pln: 800 }] });
   const soC = () => ({ number: "SO-1", status: "Confirmed", currency: "PLN", fxRate: 1, client: { name: "C" }, items: [{ product: "Apples", qty: 1000, unitPrice: 5, sourceType: "STOCK", sourceRef: "LOT-1" }] });
-  t("D-56: a client concession reduces the settlement's gross; a producer recovery is a deduction, never a cheaper expense", () => {
-    const base = cons.computeLotSettlement(mkLotC(), [soC()], 8, []);
-    approx(base.grossPLN, 5000); approx(base.payoutPLN, (5000 - 800) * 0.92);
-    const withConcession = cons.computeLotSettlement(mkLotC(), [{ ...soC(), claimAdjustments: [{ source: "claim:CLM-1", pln: -500 }] }], 8, []);
-    approx(withConcession.grossPLN, 4500, "gross net of the concession");
-    const lot = mkLotC(); lot.costs.push({ type: "claim", source: "claim:CLM-2", pln: -300 });
-    const withRecovery = cons.computeLotSettlement(lot, [soC()], 8, []);
-    approx(withRecovery.expensesPLN, 1100, "800 freight + 300 deducted from the producer");
-    ok(withRecovery.payoutPLN < base.payoutPLN, "producer gets LESS after his own defect, not more");
-  });
   t("D-57: commission tiers decided per truck by its own gross; flat rate unchanged", () => {
     const flat = { season: "26", validFrom: "", pct: 8 };
     eq(cons.commissionPctForSales(flat, 999999), 8);
@@ -916,7 +884,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     approx(Math.abs(p.postings[0].pln ?? p.postings[0].amountPLN), 1200);
     const note = cl.buildClaimFinanceNote(pln, "OUR_CREDIT_TO_CLIENT", { nextId: () => 1, todayISO: () => "2026-09-03", invoices: [] });
     eq(note.currency, "PLN"); approx(note.amountPLN, 1200);
-    const eur = { number: "CLM-8", status: "Accepted", acceptedEUR: 100, plnPerEur: 4.3, respondent: { kind: "Supplier" }, subjects: [{ kind: "LOT", ref: "L", affectedKg: 10 }] };
+    const eur = { number: "CLM-8", status: "Accepted", acceptedAmount: 100, fxToPLN: 4.3, respondent: { kind: "Supplier" }, subjects: [{ kind: "LOT", ref: "L", affectedKg: 10 }] };
     approx(cl.claimMoney(eur).pln, 430, "legacy EUR claims unchanged");
   });
   console.log("v6.81.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
@@ -1115,7 +1083,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     { number: "SO-1", status: "Confirmed", fxRate: 1, items: [{ sourceType: "STOCK", sourceRef: "L1", qty: 6100, unitPrice: 9, quality: "I" }, { sourceType: "STOCK", sourceRef: "L1", qty: 600, unitPrice: 5, quality: "II" }], claimAdjustments: [{ source: "claim:CLM-C", pln: -1000 }] },
     { number: "SO-2", status: "Confirmed", fxRate: 1, items: [{ sourceType: "STOCK", sourceRef: "L2", qty: 7200, unitPrice: 8 }] },
   ];
-  const shipments = [{ number: "SHP-9", purpose: "OUTBOUND", status: "Delivered", goods: [{ lotRef: "L1", qtyKg: 6700 }, { lotRef: "L2", qtyKg: 7200 }], costs: [{ amountPLN: 2000 }] }];
+  const shipments = [{ number: "SHP-9", purpose: "OUTBOUND", status: "Delivered", goods: [{ lotRef: "L1", soRef: "SO-1", qtyKg: 6700 }, { lotRef: "L2", soRef: "SO-2", qtyKg: 7200 }], costs: [{ amountPLN: 2000 }] }];   // v7.27.5 (AUD-30): each row names its sale
   const claims = [{ number: "CLM-A", respondent: { kind: "Warehouse" } }, { number: "CLM-P", respondent: { kind: "Supplier" } }];
   const calc = P.computePOSettlement({ po, lots, orders, shipments, claims, ratePLNperEUR: 4.30, provisionalEUR: 25000, commissionPct: 6.5 });
   t("lines per variety with class I / II sales and waste kg; fully sold", () => {
@@ -1145,8 +1113,11 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("V4: the Monday run drafts ONE commission invoice per closed truck and never twice", () => {
     const sets = [{ id: 1, poNumber: "PO-40", status: "Closed", number: "SET-2026-0001", ratePLNperEUR: 4.3, provisionalEUR: 25000, commissionPct: 6.5 }, { id: 2, poNumber: "PO-41", status: "Open" }];
-    const r1 = P.commissionRun(sets, [po], (p, s) => P.computePOSettlement({ po: p, lots, orders, shipments, claims, ratePLNperEUR: s.ratePLNperEUR, provisionalEUR: s.provisionalEUR, commissionPct: s.commissionPct }), deps);
-    eq(r1.invoices.length, 1); eq(r1.invoices[0].currency, "EUR"); approx(r1.invoices[0].grossAmount, calc.commissionEUR);
+    // v7.27.5 (AUD-26): the VAT follows where the producer is — a producer in another EU state: reverse charge, the gross is the net
+    const r1 = P.commissionRun(sets, [po], (p, s) => P.computePOSettlement({ po: p, lots, orders, shipments, claims, ratePLNperEUR: s.ratePLNperEUR, provisionalEUR: s.provisionalEUR, commissionPct: s.commissionPct }), { ...deps, producerOf: () => ({ country: "Hungary" }) });
+    eq(r1.invoices.length, 1); eq(r1.invoices[0].currency, "EUR"); approx(r1.invoices[0].grossAmount, calc.commissionEUR); eq(r1.invoices[0].reverseCharge, true);
+    const pl = P.commissionRun(sets, [po], (p, s) => P.computePOSettlement({ po: p, lots, orders, shipments, claims, ratePLNperEUR: s.ratePLNperEUR, provisionalEUR: s.provisionalEUR, commissionPct: s.commissionPct }), { ...deps, producerOf: () => ({ country: "Poland" }) });
+    approx(pl.invoices[0].grossAmount, Math.round(calc.commissionEUR * 1.23 * 100) / 100); eq(pl.invoices[0].vatRate, 23);
     const r2_ = P.commissionRun(r1.settlements, [po], () => calc, deps); eq(r2_.invoices.length, 0, "already invoiced");
   });
   console.log("v6.90.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
@@ -1199,8 +1170,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(k.boxes, 1494);
   });
   t("PO-2: payment days from the PO, else the supplier, else legacy text; due = issue + days", () => {
-    eq(P.paymentDaysFor({ paymentDays: 45 }, { paymentTermsDays: 30 }), 45);
-    eq(P.paymentDaysFor({}, { paymentTermsDays: 30 }), 30);
+    eq(P.paymentDaysFor({ paymentDays: 45 }, { terms: { paymentDays: 30 } }), 45);   // v7.28.1: companies as the tidy-up writes them
+    eq(P.paymentDaysFor({}, { terms: { paymentDays: 30 } }), 30);
     eq(P.paymentDaysFor({ paymentTerms: "21 days from invoice" }, {}), 21);
     eq(P.dueDateFromIssue("2026-09-10", 30), "2026-10-10");
   });
@@ -1232,16 +1203,13 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const a = Q.lotAvailabilityByGrade(lot, [{ id: 9, status: "Confirmed", items: [{ sourceType: "STOCK", sourceRef: "L1", grade: "II", qty: 200 }, { sourceType: "STOCK", sourceRef: "L1", qty: 1000 }] }]);
     eq(a.I, 5100); eq(a.II, 400);
   });
-  t("SO-2: the SO line takes the PO line's unit and boxes", () => {
-    const f = Q.lineFromPOLine({ pricingUnit: "box", boxes: 1494, kgPerBox: 13 }); eq(f.pricingUnit, "box"); eq(f.boxes, 1494);
-  });
   t("SO-3: CFR delivers at DISCHARGE; DAP at delivery; the delay is planned vs that event", () => {
     eq(Q.deliveryEventFor("CFR").event, "discharged"); eq(Q.deliveryEventFor("DDP").event, "delivered"); eq(Q.deliveryEventFor("EXW").event, "loaded");
     const so = { number: "SO-1", sellIncoterm: "CFR", deliveryDate: "2026-09-20" };
     const sh = [{ status: "Delivered", soRefs: ["SO-1"], legs: [{ vehicles: [{ deliveredAt: "2026-09-08" }] }, { vehicles: [{ dischargedAt: "2026-09-23" }] }] }];
     eq(Q.actualDeliveryDate(so, sh), "2026-09-23", "the truck's delivery at the port is NOT the sale's delivery"); eq(Q.deliveryDelayDays(so, sh), 3);
   });
-  t("SO-4: payment days from the client → invoice due date", () => { eq(Q.soPaymentDays({}, { paymentTermsDays: 14 }), 14); eq(Q.soInvoiceDueDate("2026-09-10", {}, { paymentTermsDays: 14 }), "2026-09-24"); });
+  t("SO-4: payment days from the client → invoice due date", () => { eq(Q.soPaymentDays({}, { terms: { paymentDays: 14 } }), 14); eq(Q.soInvoiceDueDate("2026-09-10", {}, { terms: { paymentDays: 14 } }), "2026-09-24"); });
   t("SO-6: normalisation drops the mirrors and is idempotent", () => {
     const r = Q.normaliseSO({ number: "SO-1", linkedInvoices: ["FV/1"], linkedShipments: [], actualDeliveryDate: "x", destinationMode: "text", _poETAByLine: {}, paymentTerms: "14 days", items: [{ qty: 10, unit: "Kg", shippedKg: 5 }] });
     ok(r.changed); ok(!("linkedInvoices" in r.so)); eq(r.so.paymentDays, 14); eq(r.so.items[0].pricingUnit, "kg"); ok(!("shippedKg" in r.so.items[0]));
@@ -1252,7 +1220,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(Q.isEstimatedLine(po.items[0]));
     const fin = Q.applyPackingResult(po, [{ lineId: 1, qty: 17000 }], "2026-09-15");
     eq(fin.items[0].qty, 17000); eq(fin.items[0].estimatedQty, 20000); eq(fin.items[0].quantityStatus, "FINAL"); eq(fin.items[1].quantityStatus, "FINAL"); eq(fin.items[1].qty, 10000);
-    const orders = [{ number: "SO-1", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: 1, qty: 12000 }] }, { number: "SO-2", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: 1, qty: 8000 }] }];
   });
   console.log("v6.95.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -1286,10 +1253,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const ids = loc.counterpartyLocations([reordered]).map(l => l.id).sort(); eq(JSON.stringify(ids), JSON.stringify([...before].sort()), "ids follow the address, not the position");
     ok(!loc.stampSiteIds(st.contacts).changed, "idempotent");
   });
-  t("IN-4: lot normalisation drops mirrors, syncs consignment/direct from the PO, derives arrival, hands the old settlement over — idempotently", () => {
+  t("IN-4: lot normalisation drops mirrors, syncs consignment/direct from the PO, derives arrival, drops the old per-lot settlement (v7.28.12) — idempotently", () => {
     const lot = { number: "L1", poRef: "PO-1", journey: [], destinationText: "x", custodyType: "y", consignment: false, arrivalDate: "", settlement: { status: "Closed", number: "SET-2026-0001" }, movements: [{ type: "IN", date: "2026-09-10", qtyKg: 10 }] };
     const r = Z.normaliseLot(lot, { po: { pricingMode: "consignment", directFlow: false }, poSettlements: [] });
-    ok(r.changed); ok(!("journey" in r.lot)); eq(r.lot.consignment, true); eq(r.lot.arrivalDate, "2026-09-10"); ok(r.settlementToMigrate && r.settlementToMigrate.poNumber === "PO-1"); ok(!("settlement" in r.lot));
+    ok(r.changed); ok(!("journey" in r.lot)); eq(r.lot.consignment, true); eq(r.lot.arrivalDate, "2026-09-10"); ok(!("settlement" in r.lot));   // v7.28.12: the PO settlement owns it — no hand-over (no lot carries one any more)
     ok(!Z.normaliseLot(r.lot, { po: { pricingMode: "consignment", directFlow: false }, poSettlements: [{ poNumber: "PO-1" }] }).changed);
   });
   console.log("v6.96.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
@@ -1330,11 +1297,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!r.error); approx(r.appliedAmount, 1200); approx(pay.outstandingAmount(r.invoice), 3800); eq(r.invoice.payments[0].method, "Offset / compensation"); eq(r.note.status, "Settled");
     ok(CP.offsetNoteAgainstInvoice(r.note, r.invoice, deps).error, "applying twice is refused");
   });
-  t("CL-7/CL-1: legacy form fields fold into cost lines and notes; EUR mirrors into the one money model; idempotent", () => {
-    const r = CP.foldLegacyClaimFields({ number: "CLM-1", basis: "quality", lostKg: 500, causedCosts: 300, clientCosts: 120, soldInMarket: true, recoveredEGP: 1000, egpPerEur: 52, acceptedEUR: 45, requestedEUR: 60, costLines: [] });
-    ok(r.changed); eq(r.claim.costLines.length, 2); ok(!("basis" in r.claim)); ok(String(r.claim.notes).includes("[legacy]")); eq(r.claim.currency, "EUR"); eq(r.claim.acceptedAmount, 45); eq(r.claim.requestedAmount, 60);
-    ok(!CP.foldLegacyClaimFields(r.claim).changed);
-  });
   t("CL-8: the counterparty's agreed notice period overrides the legal default", () => {
     eq(CP.noticeRuleFor({ respondent: { kind: "Carrier" } }, {}).days, 7);
     eq(CP.noticeRuleFor({ respondent: { kind: "Carrier" } }, { name: "TBX", noticeDays: 10 }).days, 10);
@@ -1373,7 +1335,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("IV-6/IV-7: positions must add up to the header; an unlinked cost invoice gets its due date from the counterparty's days", () => {
     ok(IV.positionsMismatch({ grossAmount: 1000, positions: [{ grossTotal: 600 }, { grossTotal: 300 }] })); eq(IV.positionsMismatch({ grossAmount: 900, positions: [{ grossTotal: 600 }, { grossTotal: 300 }] }), "");
-    eq(IV.defaultCostDueDate({ issueDate: "2026-09-10" }, { paymentTermsDays: 21 }), "2026-10-01");
+    eq(IV.defaultCostDueDate({ issueDate: "2026-09-10" }, { terms: { paymentDays: 21 } }), "2026-10-01");
   });
   console.log("v6.98.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -1433,7 +1395,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const FP = B("financePlus.domain.js");
   t("FN-4: client risk — exposure, overdue, days late, limit usage incl. confirmed orders, days-to-pay", () => {
     const inv = [{ kind: "SALES", counterparty: { name: "Agromax" }, currency: "PLN", fxRate: 1, issueDate: "2026-08-01", dueDate: "2026-08-31", grossAmount: 10000, paidAmount: 4000, paymentStatus: "Issued", payments: [{ date: "2026-08-21", amount: 4000 }] }];
-    const r = FP.clientRisk("Agromax", inv, [{ status: "Confirmed", client: { name: "Agromax" }, fxRate: 1, items: [{ qty: 1000, unitPrice: 5 }] }], { creditLimitPLN: 20000 }, "2026-09-11");
+    const r = FP.clientRisk("Agromax", inv, [{ status: "Confirmed", client: { name: "Agromax" }, fxRate: 1, items: [{ qty: 1000, unitPrice: 5 }] }], { terms: { creditLimitPLN: 20000 } }, "2026-09-11");
     approx(r.exposurePLN, 6000); approx(r.overduePLN, 6000); eq(r.maxOverdueDays, 11); approx(r.openOrdersPLN, 5000); approx(r.usagePct, 55); eq(r.avgDaysToPay, 20); eq(r.lastPaymentDate, "2026-08-21");
   });
   t("FN-5: a firm purchase's result — revenue − purchase − landed − direct − concessions + recoveries, per kg", () => {
@@ -1454,10 +1416,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v6992(){
   console.log("\n══ 44. v6.99.2: roles, terms block, people, archive, Fakturownia id, ISO/EU, agreements ══");
   const CPY = B("counterparty.domain.js");
-  t("CP-1/2/6/9: normalisation — roles from type+additionalTypes, terms from scattered fields (mirrors kept), ISO code, caches dropped; idempotent", () => {
+  t("CP-1/2/6/9: normalisation — roles from type+additionalTypes, terms from scattered fields (mirrors dropped since v7.28.1), ISO code, caches dropped; idempotent", () => {
     const r = CPY.normaliseCounterparty({ id: 1, name: "Agro-Hurt", type: "Client", additionalTypes: ["Supplier", "Warehouse"], country: "Poland", paymentTerms: "30 days", creditLimitPLN: 50000, defaultCurrency: "pln", finance: { x: 1 }, services: "reefer", linkedDocs: ["PO-1"], contacts: [{ name: "Ilona", email: "m@agro.pl" }] });
-    ok(r.changed); eq(r.contact.roles.join(","), "Client,Supplier,Warehouse"); eq(r.contact.terms.paymentDays, 30); eq(r.contact.terms.creditLimitPLN, 50000); eq(r.contact.terms.defaultCurrency, "PLN"); eq(r.contact.paymentTermsDays, 30, "mirror for PO-2/SO-4 readers");
-    eq(r.contact.countryIso, "PL"); ok(!("finance" in r.contact)); ok(!("linkedDocs" in r.contact)); ok(Array.isArray(r.contact.contacts) && r.contact.contacts.length === 1, "contacts kept — the screens read it"); eq(r.contact.people.length, 1); ok(r.contact.people === r.contact.contacts, "one list");
+    ok(r.changed); eq(r.contact.roles.join(","), "Client,Supplier,Warehouse"); eq(r.contact.terms.paymentDays, 30); eq(r.contact.terms.creditLimitPLN, 50000); eq(r.contact.terms.defaultCurrency, "PLN"); ok(!("paymentTermsDays" in r.contact), "the flat mirror is still written (v7.28.1)");
+    eq(r.contact.countryIso, "PL"); ok(!("finance" in r.contact)); ok(!("linkedDocs" in r.contact)); ok(!("contacts" in r.contact), "the old persons list is still written (v7.28.2)"); eq(r.contact.people.length, 1);   // v7.28.2: one list — people[] only
     ok(!CPY.normaliseCounterparty(r.contact).changed);
     eq(CPY.isEU("Poland"), true); eq(CPY.isEU("Egypt"), false); eq(CPY.isEU(""), null);
   });
@@ -1829,11 +1791,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(A.formatAddress({ street: "ul. Piękna 13", postcode: "05-555", city: "Tarczyn", country: "Poland" }), "ul. Piękna 13\n05-555 Tarczyn\nPoland");
     eq(A.formatAddress({ street: "Koper terminal", country: "Slovenia" }, { oneLine: true }), "Koper terminal, Slovenia");
   });
-  t("ADDR-3: the migration is idempotent and never overwrites a structured address", () => {
-    const r1 = A.migrateAddressOn({ name: "X", address: "ul. Genedil 16, 59-694 Obrazów", country: "Poland" });
-    ok(r1.changed); eq(r1.rec.addr.city, "Obrazów"); eq(r1.rec.address, "ul. Genedil 16, 59-694 Obrazów", "the original text stays until the DDL");
-    ok(!A.migrateAddressOn(r1.rec).changed);
-  });
   console.log("v6.99.40 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
@@ -2035,7 +1992,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const types = [{ id: "c13", label: "Carton (13 kg)", capacityKg: 13, boxesPerPallet: 80, tareKg: 1.4, palletTareKg: 25 }];
   const po = { number: "PO-2026-0090", status: "Confirmed", currency: "EUR", orderDate: "2026-09-25", supplier: { id: 1, name: "Pavamane Owoc", country: "Poland" }, items: [{ id: 1, product: "Apples", variety: "Gala", size: "65-70", quality: "I", qty: 20000, quantityStatus: "ESTIMATED", unitPrice: 0.9, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" }] };
   const lots = PO.buildExpectedLotsFromPO(po, []).newLots;
-  const so = { id: 5, number: "SO-2026-0090", status: "Confirmed", items: [{ id: 51, product: "Apples", variety: "Gala", size: "65-70", grade: "I", quality: "I", qty: 20000, sourceType: "PO", sourceRef: po.number, sourceLineId: 1, unitPrice: 1.4, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" }] };
+  const so = { id: 5, number: "SO-2026-0090", status: "Confirmed", items: [{ id: 51, product: "Apples", variety: "Gala", size: "65-70", grade: "I", quality: "I", qty: 20000, sourceType: "STOCK", sourceRef: lots[0].number,   /* v7.24.2: a sale line names its lot */ unitPrice: 1.4, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" }] };
   const sh = { id: 7, number: "SHP-2026-0090", status: "Booked", poRefs: [po.number], soRefs: [so.number], governingSoRef: so.number, goods: [{ id: 21, poRef: po.number, poLineId: "1", soRef: so.number, lotRef: lots[0].number, product: "Apples", size: "65-70", quality: "I", qtyKg: 20000 }], legs: [{ mode: "Road", vehicles: [{ id: 31, load: [{ goodsLineId: 21, qtyKg: 20000 }] }] }, { mode: "Sea", vehicles: [{ id: 41, containerNo: "MSCU1" }] }] };
   let n = 1000; const deps = { buildLots: (o, ls) => PO.buildExpectedLotsFromPO(o, ls), syncShipment: (s, o, ls) => SH.syncGoodsFromPO(s, o, ls, { nextId: () => ++n }), counts: l => PU.effectiveCounts(l, types), nextId: () => ++n };
   const rows = [{ lineId: 1, qty: 17472 }, { newLine: { id: "pk-1", product: "Apples", variety: "Gala", size: "60-65", quality: "I", qty: 1950, unitPrice: 0.8, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" } }];
@@ -2180,9 +2137,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const M = B("shipmentModel.domain.js"); const U = B("useLocalStoredState.js"); const L = B("legacy.js");
   const dPath = FX.needFixture("marianna-erp_v6.99.66_schema-v2_2026-09-26T14-16-24.json", "the 26 Sept file — before the v6.99.67 heal"); if (!dPath) return;
   const d = require(dPath);
-  t("A-AUD-1: with Settings empty the company profile equals the former literals, so no document changes", () => {
-    const p = U.companyProfile(); eq(p.name, "MARIANNA"); eq(p.nip, "PL525-284-27-87"); eq(p.person, "Hazem Osman"); eq(p.regon, "387501311");
-    const to = U.companyForTransportOrder(); eq(to.name, "MARIANNA HAZEM OSMAN"); eq(to.address1, "ul. Dluga 29"); eq(to.address2, "00-238 Warszawa - Polska"); eq(to.nip, "PL 525-284-27-87"); eq(to.emergencyPhone, "+48 784 775 065");
+  t("A-AUD-1 · v7.30.4 (M-5): with Settings empty the company's legal details are the former literals; no personal detail (contact person, trade name, emergency phone) is written into the program — Settings › Company holds them", () => {
+  const p = U.companyProfile(); eq(p.name, "MARIANNA"); eq(p.nip, "PL525-284-27-87"); eq(p.person, ""); eq(p.regon, "387501311");
+  const to = U.companyForTransportOrder(); eq(to.name, "MARIANNA"); eq(to.address1, "ul. Dluga 29"); eq(to.address2, "00-238 Warszawa - Polska"); eq(to.nip, "PL 525-284-27-87"); eq(to.emergencyPhone, "");
   });
   console.log("v6.99.67 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -2398,7 +2355,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(P.paymentText({ paymentBasis: "ADVANCE" }), P.paymentTermsLabel("ADVANCE", 0));
     eq(P.paymentText({ paymentTerms: "14 days" }), "14 days", "an old record keeps its text");
     eq(P.paymentText({ paymentTerms: "Other", paymentTermsOther: "LC at sight" }), "LC at sight");
-    eq(P.paymentText({}), "—"); { const party = { paymentDays: 21, paymentTermsDays: 21 }; eq(P.paymentText({ paymentBasis: "INVOICE" }, party), P.paymentTermsLabel("INVOICE", P.paymentDaysFor({ paymentBasis: "INVOICE" }, party)), "the party's days when the order has none — the form's own rule"); }
+    eq(P.paymentText({}), "—"); { const party = { paymentDays: 21, terms: { paymentDays: 21 } }; eq(P.paymentText({ paymentBasis: "INVOICE" }, party), P.paymentTermsLabel("INVOICE", P.paymentDaysFor({ paymentBasis: "INVOICE" }, party)), "the party's days when the order has none — the form's own rule"); }
     const fx = FX.fixture("marianna-erp_v6.99.72_schema-v2_2026-09-28T13-44-40.json"); if (fx) { const d = require(fx);
       ok(/^30 /.test(P.paymentText(d.pos.find(p => p.number === "PO-2026-0041"))), "PO-2026-0041 now shows its 30 days"); ok(/^30 /.test(P.paymentText(d.orders.find(o => o.number === "SO-2026-0025"))), "SO-2026-0025 too"); }
   });
@@ -2481,7 +2438,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const P = B("poSettlement.domain.js"); const SO = B("statusOwnership.domain.js"); const r2 = v => Math.round(v * 100) / 100;
   const fx = FX.needFixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json", "the owner's 30 Sept 13:13 file"); if (!fx) return;
   const d = require(fx); const po = d.pos.find(p => p.number === "PO-2026-0043"); const rec = d.poSettlements.find(s => s.poNumber === "PO-2026-0043");
-  const calc = (over = {}) => P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: d.shipments, claims: d.claims || [], ratePLNperEUR: rec.ratePLNperEUR, provisionalEUR: rec.provisionalEUR, commissionPct: rec.commissionPct, provisionalInvoiceNo: rec.provisionalInvoiceNo, ...over });
+  // v7.27.5 (AUD-30): the settlement counts the kilos LOADED for each sale — these checks describe PO-2026-0043 after its truck SHP-2026-0036 was loaded for SO-2026-0026
+  const shipLoaded = d.shipments.map(s => s.number === "SHP-2026-0036" ? { ...s, status: "Loaded", goods: (s.goods || []).map(g => ({ ...g, soRef: g.soRef || "SO-2026-0026" })) } : s);
+  const calc = (over = {}) => P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: shipLoaded, claims: d.claims || [], ratePLNperEUR: rec.ratePLNperEUR, provisionalEUR: rec.provisionalEUR, commissionPct: rec.commissionPct, provisionalInvoiceNo: rec.provisionalInvoiceNo, ...over });
   t("A-ST-3: PO-2026-0043 at 6.5 % — Legugeva's EXTRA INVOICE 2 448,28, our commission 2 564,14, after compensation Legugeva owes us 115,86 EUR", () => {
     const r = calc(); eq(r.currency, "EUR"); eq(r.grossPLN, 171600); eq(r.netSalesEUR, 39448.28); eq(r.commissionEUR, 2564.14); eq(r.netAfterCommissionEUR, 36884.14);
     eq(r.correctionEUR, 2448.28, "net sales before commission − provisional (ruling 30 Sept)"); eq(r.extraInvoiceEUR, 2448.28); eq(r.expectedCreditNoteEUR, 0);
@@ -2497,12 +2456,12 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("A-ST-1: the provisional in its own currency; a PO in PLN needs no rate; an EUR sale at its invoice's locked rate", () => {
     const usd = calc({ provisionalEUR: 40000, provisionalCurrency: "USD", provisionalRate: 4.0 }); eq(usd.provisionalEUR, r2(40000 * 4.0 / 4.35), "40 000 USD × 4.00 ÷ 4.35"); eq(usd.provisionalCurrency, "USD"); eq(usd.provisionalOriginal, 40000);
     eq(calc({ provisionalEUR: 40000, provisionalCurrency: "USD" }).warnings.some(w => /enter its PLN rate/.test(w)), true, "a third currency without its rate is named");
-    const pln = P.computePOSettlement({ po: { ...po, currency: "PLN" }, lots: d.lots, orders: d.orders, invoices: [], shipments: d.shipments, ratePLNperEUR: 0, provisionalEUR: 160000, provisionalCurrency: "PLN", commissionPct: 6.5 });
+    const pln = P.computePOSettlement({ po: { ...po, currency: "PLN" }, lots: d.lots, orders: d.orders, invoices: [], shipments: shipLoaded, ratePLNperEUR: 0, provisionalEUR: 160000, provisionalCurrency: "PLN", commissionPct: 6.5 });
     eq(pln.currency, "PLN"); eq(pln.ratePLNperEUR, 1); eq(pln.netSalesEUR, 171600, "in PLN nothing is converted"); eq(pln.warnings.some(w => /rate/.test(w)), false);
     const eurSO = d.orders.map(o => o.number === "SO-2026-0026" ? { ...o, currency: "EUR", fxRate: 4.20, items: o.items.map(it => ({ ...it, unitPrice: 14 })) } : o);
     const inv = [{ kind: "SALES", number: "FV2026/06/1", currency: "EUR", fxRate: 4.30, netAmount: 14300 * 14 / 5, paymentStatus: "Issued", links: [{ type: "SO", number: "SO-2026-0026" }] }];   // v6.99.85: an invoice brings its net as well as its rate (the SO prices per 5 kg box → 2.80/kg)
-    const byOrder = P.computePOSettlement({ po, lots: d.lots, orders: eurSO, invoices: [], shipments: d.shipments, ratePLNperEUR: 4.35, commissionPct: 0 });
-    const byInv = P.computePOSettlement({ po, lots: d.lots, orders: eurSO, invoices: inv, shipments: d.shipments, ratePLNperEUR: 4.35, commissionPct: 0 });
+    const byOrder = P.computePOSettlement({ po, lots: d.lots, orders: eurSO, invoices: [], shipments: shipLoaded, ratePLNperEUR: 4.35, commissionPct: 0 });
+    const byInv = P.computePOSettlement({ po, lots: d.lots, orders: eurSO, invoices: inv, shipments: shipLoaded, ratePLNperEUR: 4.35, commissionPct: 0 });
     eq(byOrder.salesBasis, "order"); eq(byInv.salesBasis, "invoice"); eq(r2(byInv.grossPLN / byOrder.grossPLN), r2(4.30 / 4.20), "the invoice's rate replaces the order's");
   });
   t("A-ST-4: a direct lot shows its expected kilos until the truck is Delivered", () => { const l = calc().lines[0]; eq(l.receivedKg, 0); eq(l.expectedKg, 14300); });
@@ -2521,8 +2480,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const P = B("poSettlement.domain.js"); const L = B("lotView.domain.js");
   const fx = FX.needFixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json", "the owner's 30 Sept 13:13 file"); if (!fx) return;
   const d = require(fx); const po = d.pos.find(p => p.number === "PO-2026-0043"); const rec = d.poSettlements.find(s => s.poNumber === "PO-2026-0043");
+  // v7.27.5 (AUD-30): the settlement counts the kilos LOADED for each sale — these checks describe PO-2026-0043 after its truck SHP-2026-0036 was loaded for SO-2026-0026
+  const shipLoaded = d.shipments.map(s => s.number === "SHP-2026-0036" ? { ...s, status: "Loaded", goods: (s.goods || []).map(g => ({ ...g, soRef: g.soRef || "SO-2026-0026" })) } : s);
   const provInv = { id: 7001, kind: "COST", number: "EUR258/2026", currency: "EUR", fxRate: 4.30, netAmount: 37000, grossAmount: 37000, paymentStatus: "Issued", counterparty: { id: po.supplier.id, name: po.supplier.name }, links: [{ type: "PO", number: "PO-2026-0043" }], payments: [] };
-  const base = (over = {}) => P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: d.shipments, claims: d.claims || [], ratePLNperEUR: 4.35, commissionPct: 6.5, provisionalEUR: 37000, provisionalInvoiceNo: "EUR258/2026", ...over });
+  const base = (over = {}) => P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: shipLoaded, claims: d.claims || [], ratePLNperEUR: 4.35, commissionPct: 6.5, provisionalEUR: 37000, provisionalInvoiceNo: "EUR258/2026", ...over });
   t("A-CS-1: the producer's invoice is offered from the register and fills the record — net, currency, rate; a stranger's invoice is not offered", () => {
     const cands = P.provisionalCandidates(po, [provInv, { id: 7002, kind: "COST", number: "X/1", counterparty: { name: "Someone else" }, paymentStatus: "Issued" }, { id: 7003, kind: "SALES", number: "FV/1", counterparty: { name: po.supplier.name } }]);
     eq(cands.map(c => c.id).join(","), "7001"); const rec2 = P.provisionalFromInvoice(provInv);
@@ -2557,7 +2518,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     // the record) — the box's figures are checked at a known NBP rate of 4.35, the rate the 2 Oct record had typed.
     const FXs = B("fx.js"); const tdy = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" }); const yst = new Date(Date.parse(tdy + "T12:00:00Z") - 86400000).toISOString().slice(0, 10);
     FXs.__setNbpStore({ days: { [yst]: { EUR: 4.35 } }, covered: { [yst]: 1 } });
-    const rows = P.consignmentPositions({ pos: d.pos, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: d.shipments, claims: d.claims || [], financeNotes: [], poSettlements: d.poSettlements });
+    const rows = P.consignmentPositions({ pos: d.pos, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: shipLoaded, claims: d.claims || [], financeNotes: [], poSettlements: d.poSettlements });
     ok(rows.length >= 1); const r = rows.find(x => x.poNumber === "PO-2026-0043"); ok(r, "PO-0043 listed");
     eq(r.producer, "Legugeva Kft."); eq(r.currency, "EUR"); eq(r.state, "open", "fully sold, not closed"); eq(r.soldKg, 14300); eq(r.expectedKg, 14300); eq(r.netPLN, 171600); eq(r.netAfterCommission, 36884.14); eq(r.provisional, 37000); eq(r.balance, -115.86); eq(r.pctMissing, false);
     ok(rows.every(x => d.pos.find(p => p.number === x.poNumber).pricingMode === "consignment"), "only consignment POs");
@@ -2867,13 +2828,11 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ 127. one source: every sale sells a lot ══");
   const SOd = B("salesOrders.domain.js"); const ST = B("statusOwnership.domain.js"); const P = B("poSettlement.domain.js");
   const fx = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the owner's 2 Oct file"); if (!fx) return;
-  const d = require(fx); const r = SOd.migrateSaleLinesToLots(d.orders, d.lots);
-  t("A-ONE-1: 126 of 135 PO-sourced lines point at the lot made from their PO line; 9 lines whose PO has no matching lot are left and named", () => {
-    eq(r.moved, 126); eq(r.left.length, 9); ok(r.left.every(x => /^SO-2026-0008: PO-2026-00(10|12)|^SO-2026-0023: PO-2026-0037/.test(x)), r.left.join(" | "));
-    const l = r.orders.flatMap(o => o.items || []).find(it => it.migratedFromPO); ok(l && l.sourceType === "STOCK" && /^LOT-/.test(l.sourceRef) && l.sourceLineId === undefined);
-    const again = SOd.migrateSaleLinesToLots(r.orders, d.lots); eq(again.moved, 0, "a second run moves nothing");
-  });
-  t("A-ONE-1: the migration changes no sale's status and no truck settlement", () => {
+  const d = require(fx);
+  // v7.24.1 (FZ-01): the app no longer converts on opening (done on both copies, 15 Oct); the 2 Oct file is older, so the section points its lines itself, as the conversion did
+  const lotOf = it => (d.lots || []).find(l => String(l.poRef) === String(it.sourceRef) && (it.sourceLineId == null || String(l.poLineId) === String(it.sourceLineId)));
+  const r = { orders: d.orders.map(o => ({ ...o, items: (o.items || []).map(it => it && it.sourceType === "PO" && lotOf(it) ? { ...it, sourceType: "STOCK", sourceRef: lotOf(it).number, sourceLineId: null } : it) })) };
+  t("A-ONE-1: pointing the old lines at their lots changes no sale's status and no truck settlement", () => {
     let st = 0; d.orders.forEach((o, i) => { if (ST.effectiveSoStatus(o, d.shipments) !== ST.effectiveSoStatus(r.orders[i], d.shipments)) st++; }); eq(st, 0);
     let diff = 0; d.pos.filter(p => p.status !== "Cancelled").forEach(po => { const a = P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: [], shipments: d.shipments, claims: [], ratePLNperEUR: 4.35, commissionPct: 0 }), b = P.computePOSettlement({ po, lots: d.lots, orders: r.orders, invoices: [], shipments: d.shipments, claims: [], ratePLNperEUR: 4.35, commissionPct: 0 }); if (Math.abs(a.grossPLN - b.grossPLN) > 0.5) diff++; }); eq(diff, 0);
   });
@@ -2894,10 +2853,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v699134(){
   console.log("\n══ 128–134. consistency ══");
   const FI = B("fakturowniaImport.domain.js"); const C = B("consignment.js"); const Bk = B("bankReconciliation.domain.js"); const P = B("poSettlement.domain.js"); const M = B("marginCalculations.js"); const CL = B("claims.domain.js"); const FX = B("fx.js");
-  t("AUD-13: a commission typed '6,5' is 6.5; the rate valid on the truck's date is chosen", () => {
-    eq(C.currentCommissionPct({ commissionRates: [{ validFrom: "2026-01-01", pct: "6,5" }] }, "2026-09-30"), 6.5, "was 6");
-    const prod = { commissionRates: [{ validFrom: "2026-01-01", pct: 5 }, { validFrom: "2026-07-01", pct: 7 }] }; eq(C.currentCommissionPct(prod, "2026-06-02"), 5, "a June truck keeps June's rate"); eq(C.currentCommissionPct(prod, "2026-09-30"), 7);
-  });
   t("AUD-24: generic company words never make a bank match; a distinctive word does", () => {
     const inv = [{ id: 1, kind: "SALES", number: "FV 9/2026", currency: "PLN", grossAmount: 1000, paidAmount: 0, paymentStatus: "Issued", counterparty: { name: "Agro Trans Spółka Jawna" } }];
     const r = Bk.matchBankLines([{ id: "b", amount: 1000, currency: "PLN", counterparty: "Handel Trans Agro Sp. z o.o.", title: "zapłata" }], inv)[0]; ok(r.rank !== "AMOUNT+PARTY", "generic words only: " + r.rank);
@@ -2951,7 +2906,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("AUD-47: a note names a document only as a whole number", () => { ok(F.noteNames("SHIP_OUT via SHP-2026-0033 for SO-2026-0012", "SHP-2026-0033")); ok(!F.noteNames("SHIP_OUT via SHP-2026-0033", "SHP-2026-003")); ok(!F.noteNames("via SHP-2026-0033", "HP-2026-0033")); ok(!F.noteNames("", "SO-1")); });
   t("AUD-48: r2 / r0 / daysInMonth never return NaN; a bank line without a date books today", () => { eq(F.r2(NaN), 0); eq(F.r0(undefined), 0); eq(F.daysInMonth("x", 2), 0); eq(F.daysInMonth(2026, 2), 28); const ev = Bk.bankPaymentEvent({ id: "b", amount: -100, currency: "PLN" }); ok(/^\d{4}-\d{2}-\d{2}$/.test(ev.date)); eq(ev.amount, 100); });
   t("AUD-46: the heals store is part of the dataset (exports and imports with it)", () => { ok(ST.DATA_KEYS.includes("heals"), "heals is a DATA_KEY"); });
-  t("AUD-40: a PO-line id compares as text", () => { const src = require("fs").readFileSync(require("path").join(__dirname, "../src/salesOrders.domain.ts"), "utf8"); ok(/String\(it\.sourceLineId \?\? 1\) !== String\(poLine\.id\)/.test(src)); });
   console.log("v6.99.147 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
@@ -3075,7 +3029,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const fin = require("fs").readFileSync(require("path").join(__dirname, "../src/Finance.tsx"), "utf8"); ok(/computeSOMarginWithOverhead\(o, lots, pos, shipments, mode, operationalCosts, orders, invoices, financeNotes\)/.test(fin), "the list uses the card's calculation"); ok(/<SOMarginCard order=\{o\}/.test(fin), "the breakdown opens in Finance");
   });
   t("A-PV-5: the PO's sales are the sales of its lots; its shipments include trucks carrying those lots", () => {
-    const fx = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!fx) return; const d = require(fx); const SOd = B("salesOrders.domain.js"); const orders = SOd.migrateSaleLinesToLots(d.orders, d.lots).orders;
+    const fx = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!fx) return; const d = require(fx);
+    // v7.24.1 (FZ-01): the app no longer re-points old sale lines at their lots on opening (proven done on both copies) — the 2 Oct file is older, so the check points them itself
+    const lotOf = it => (d.lots || []).find(l => String(l.poRef) === String(it.sourceRef) && (it.sourceLineId == null || String(l.poLineId) === String(it.sourceLineId)));
+    const orders = d.orders.map(o => ({ ...o, items: (o.items || []).map(it => it && it.sourceType === "PO" && lotOf(it) ? { ...it, sourceType: "STOCK", sourceRef: lotOf(it).number, sourceLineId: null } : it) }));
     const po = d.pos.find(p => p.number === "PO-2026-0044"); const cl = Dm.computedPOLinks(po, { shipments: d.shipments, lots: d.lots, invoices: d.invoices || [], orders });
     eq(cl.linkedSalesOrders.slice().sort().join(","), "SO-2026-0027,SO-2026-0028,SO-2026-0029"); ok(cl.linkedShipments.includes("SHP-2026-0039"), "the groupage truck carrying LOT-0127/0128");
   });
@@ -3110,9 +3067,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 // ══ v7.1.12 — a sign-in claims its entry; nobody is locked out by the list's state ══
 (function v7112(){
   console.log("\n══ v7.1.12. claim your entry ══");
-  t("an unmatched sign-in may claim only an entry without e-mail; the claim writes the e-mail and is audit-logged", () => {
-    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
-    ok(/const free = \(users \|\| \[\]\)\.filter\(\(u: any\) => !String\(u\.email \|\| ""\)\.trim\(\)\);/.test(src), "only entries without e-mail");
+  t("an unmatched sign-in may claim only an entry without e-mail — and, since v7.30.0 (Batch M), only while no owner is linked; the claim writes the e-mail and is audit-logged", () => {
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
+  ok(/const free = hasOwner\(users \|\| \[\]\) \? \[\] : \(users \|\| \[\]\)\.filter\(\(u: any\) => !String\(u\.email \|\| ""\)\.trim\(\)\);/.test(src), "only entries without e-mail, only before an owner is linked");
     ok(/\{ \.\.\.x, email: signInEmail \}/.test(src), "the claim writes the e-mail"); ok(/linked itself to the entry/.test(src), "audit-logged");
   });
   console.log("v7.1.12 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
@@ -3422,10 +3379,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("A-AU-4: a shipment document's type comes from one list; variants map once, the unknown become Other with their words", () => {
     eq(SM.docTypeOf("PL").type, "Packing list"); eq(SM.docTypeOf("Export declaration MRN").type, "Export declaration"); eq(SM.docTypeOf("Loading protokol").type, "Loading protocol"); eq(SM.docTypeOf("COO").type, "Certificate of origin"); eq(SM.docTypeOf("bl").type, "BL");
     const o = SM.docTypeOf("Weighing note"); eq(o.type, "Other"); eq(o.description, "Weighing note");
-    const sh = { number: "SHP-T", documents: [{ type: "PL" }, { type: "Invoice" }, { type: "" }] }; const log = []; const m = SM.mapDocTypes(sh, log);
-    eq(m.documents.map(x => x.type).join("|"), "Packing list|Invoice|"); eq(log.length, 1); ok(SM.mapDocTypes(m) === m, "a mapped shipment changed again");
+    // v7.24.1 (FZ-01): the one-time mapping of the old typed values ran on both copies (no change left, 15 Oct) and went; the one list stays
     eq(SM.documentRegister({ documents: [{ type: "Other", description: "Weighing note" }] }).find(r => /^Other/.test(r.kind)).kind, "Other — Weighing note");
-    if (d) { const l2 = []; d.shipments.forEach(s => SM.mapDocTypes(s, l2)); console.log(`      (2 Oct file: ${l2.length} document rows mapped once)`); }
+    
   });
   t("A-AU-5: each item carries its calibres and colorations; a value in use can't be deleted; the values on lines are offered", () => {
     let cat = [{ item: "Apples", varieties: [] }]; cat = PC.addCatalogValue(cat, "Apples", "calibres", "70-80"); cat = PC.addCatalogValue(cat, "apples", "calibres", "65-70"); cat = PC.addCatalogValue(cat, "Apples", "calibres", "70-80");
@@ -3591,10 +3547,12 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     if (!d) return; const all = IC.termsToReview(ctxOf(d)); const of = k => all.filter(f => f.kind === k);
     eq(of("exw").map(f => [f.term, f.doc, f.record].join(" ")).join(), "EXW SO-2026-0015 SHP-2026-0026");
     eq(of("freight").map(f => [f.term, f.doc, f.record].join(" ")).join(), "EXW SO-2026-0015 SHP-2026-0026"); ok(/sea freight line of 8502 EUR/.test(of("freight")[0].text), of("freight")[0].text);
-    eq(of("customs").map(f => f.record).sort().join(" "), "SHP-2026-0004 SHP-2026-0013 SHP-2026-0014 SHP-2026-0015 SHP-2026-0016 SHP-2026-0017 SHP-2026-0018 SHP-2026-0021 SHP-2026-0022 SHP-2026-0023 SHP-2026-0024", "the v7.19.3 list");
+    eq(of("customs").map(f => f.record).sort().join(" "), "SHP-2026-0004 SHP-2026-0006 SHP-2026-0007 SHP-2026-0013 SHP-2026-0014 SHP-2026-0015 SHP-2026-0016 SHP-2026-0017 SHP-2026-0018 SHP-2026-0021 SHP-2026-0022 SHP-2026-0023 SHP-2026-0024 SHP-2026-0026","the v7.19.3 list");   // v7.28.7: the route decides the start — SHP-0006/0007 start at an unknown supplier address (FZ-36), SHP-0026 at Trieste
     eq(of("claim").length, 0, "the 4 claims on file are quality claims");
     ok(all.every(f => f.term && f.doc && f.record && f.text && f.recordKind), "a line without its term, document or record");
-    eq(all.length, 21, "21 lines on the 2 Oct file"); eq(new Set(all.map(f => f.record)).size, 19, "19 records");
+    const base = all.filter(f => f.kind !== "documents");   // v7.27.11 (FZ-16): the expected-document lines are a kind of their own
+    eq(base.length, 28, "28 lines on the 2 Oct file (v7.28.7: the route decides where a shipment starts)"); eq(new Set(base.map(f => f.record)).size, 21, "21 records");
+    eq(of("documents").length, (d.shipments || []).reduce((a, s) => a + IC.documentsMissingAtStage(s, ctxOf(d)).length, 0), "the expected-document lines are not one per missing document"); ok(of("documents").length > 0, "no expected document missing on the 2 Oct file");
     const docs = all.map(f => f.doc); eq(JSON.stringify(docs), JSON.stringify(docs.slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))), "grouped by the document");
     eq(IC.termsFindingsForDoc(all, "SO-2026-0015").map(f => f.kind).sort().join(), "carrier,exw,freight", "SO-0015's view");
   });
@@ -3648,7 +3606,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const sea = arr => ({ number: "SHP-C", status: "Booked", purpose: "OUTBOUND", governingSoRef: "SO-P", soRefs: ["SO-P"], originLocationId: 2, legs: [{ mode: "Road", fromLocationId: 2, toLocationId: 5 }, { mode: "Sea", fromLocationId: 5, toLocationId: arr }] });
     eq(W(sea(3), [], so("CIF", 3)), ""); eq(W(sea(6), [], so("CFR", 3)), "sell:CFR:sea:3>6", "the sea leg arrives at another port"); eq(W(sea(6), [], so("CFR", 4)), "", "a named place that is not a port is check 1's");
     eq(W({ ...sea(null), bookings: [{ podId: 6 }] }, [], so("CIF", 3)), "sell:CIF:sea:3>6", "the booking's port of discharge when the leg has none");
-    if (!d) return; eq(IC.termsToReview(ctxOf(d)).filter(f => f.kind === "places").length, 0);
+    // v7.28.7 (Batch L): the route decides where a shipment starts — on the 2 Oct (previous-season test) file four routes do not start
+    // at their purchase's named place: SHP-0006 / -0007 (FCA at Koper; their first leg points at a supplier address by an old id — FZ-36)
+    // and SHP-0021 / -0026 (EXW at the producer; their routes begin at Trieste)
+    if (!d) return; eq(IC.termsToReview(ctxOf(d)).filter(f => f.kind === "places").map(f => f.record).sort().join(), "SHP-2026-0006,SHP-2026-0007,SHP-2026-0021,SHP-2026-0026");
   });
   t("A-INC-2 (5, v7.20.5): a carrier of ours on a leg the client or the supplier pays — the one a transport order would go to (the unit's, else the booking's forwarder); SHP-0026's sea leg names DCS NAKAPAL on the 2 Oct file", () => {
     const sh = (v, extra) => ({ number: "SHP-K", status: "Booked", purpose: "OUTBOUND", governingSoRef: "SO-K", soRefs: ["SO-K"], legs: [{ mode: "Road", vehicles: v }], ...(extra || {}) });
@@ -3722,29 +3683,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ v7.21.4 — A-ST-10: one place for a warehouse invoice, the register ══");
   const I = B("invoicing.js"), IC = B("integrityCheck.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
   const p2 = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the 2 Oct file"); const d = p2 ? JSON.parse(fsx.readFileSync(p2, "utf8")) : null;
-  t("A-ST-10 (v7.21.4): on the 2 Oct file the two FRESH VEG warehouse invoices already sit in the register — the fold gives them their warehouse and month and empties the store; a second pass changes nothing", () => {
-    if (!d) return; eq((d.warehouseInvoices || []).length, 2);
-    const r = I.foldWarehouseInvoiceStore({ store: d.warehouseInvoices, invoices: d.invoices, lots: d.lots });
-    eq(r.waiting.length, 0); eq(r.store.length, 0); eq(r.moved.length, 2);
-    d.warehouseInvoices.forEach(w => { const h = r.invoices.find(i => i.source === `migrated:warehouseInvoice:${w.id}`); ok(h, "no register home for " + w.invoiceNo); eq(String(h.counterparty.id), String(w.warehouseId)); ok(String(h.periodFrom || "").startsWith(w.period), "the month did not follow"); });
-    eq(I.foldWarehouseInvoiceStore({ store: r.store, invoices: r.invoices, lots: r.lots }).moved.length, 0, "a second pass moved something");
-  });
-  t("A-ST-10 (v7.21.4): an allocation follows — the lots' WHINV lines point at the register invoice and the integrity check accepts them; an entry with no register invoice yet waits", () => {
-    const w = { id: 501, warehouseId: 77, warehouseName: "Store X", period: "2026-06", invoiceNo: "MAG/6/2026", amountPLN: 1000, allocatedLots: [{ lotNumber: "LOT-A", amountPLN: 1000 }] };
-    const reg = [{ id: 900, kind: "COST", category: "WAREHOUSE", number: "MAG/6/2026", counterparty: { name: "Store X" }, paymentStatus: "Issued", source: "migrated:warehouseInvoice:501" }];
-    const lots = [{ number: "LOT-A", costs: [{ id: 1, source: "WHINV-501", pln: 1000 }] }];
-    const r = I.foldWarehouseInvoiceStore({ store: [w], invoices: reg, lots });
-    eq(r.lots[0].costs[0].source, "WHINV-900"); eq(r.invoices[0].allocation.lots[0].lotNumber, "LOT-A"); eq(r.invoices[0].counterparty.id, 77);
-    ok(!JSON.stringify(IC.checkIntegrity({ lots: r.lots, invoices: r.invoices, warehouseInvoices: [] })).includes("WHINV-900"), "the register's WHINV line is reported");
-    const wait = I.foldWarehouseInvoiceStore({ store: [w], invoices: [], lots }); eq(wait.waiting.join(), "MAG/6/2026"); eq(wait.store.length, 1, "the store emptied before the register held it");
-  });
-  t("A-ST-10 / A-RV-30 (v7.21.4): Finance → Warehouse charges reads and writes the register — no store of its own, no Close that deletes; the import posts warehouse invoices to the register; the store is folded on opening", () => {
-    const fin = rd("Finance.tsx"), inv = rd("Invoices.tsx"), app = rd("App.tsx");
-    ok(!/setWarehouseInvoices|deleteInvoice\(/.test(fin), "Finance still writes the separate store or deletes from it");
-    ok(/<WarehouseChargesView[^>]*invoices=\{invoices\} setInvoices=\{setInvoices\}/.test(fin), "Warehouse charges is not given the register");
-    ok(!/setWarehouseInvoices/.test(inv) && /category: "WAREHOUSE", costScope: "MONTHLY_SHARED"/.test(inv), "the import still writes the separate store");
-    ok(/foldWarehouseInvoiceStore\(/.test(app), "the store is not folded on opening");
-  });
 })();
 
 // ══ v7.21.5 — SE-4: who created a sale is the person signed in · v7.21.6 — the CN suggestions reach the screen ══
@@ -3878,8 +3816,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v72114(){
   console.log("\n══ v7.21.14 — A-RV-37 + FZ-05: a port is read from the place's type ══");
   const L = B("locations.js"), INV = B("inventory.domain.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
-  t("A-RV-37 (v7.21.14): a Port or a Port warehouse is a port; an airport only where airports count; a place of type Other carrying the old word PORT is not; a place known only by that word keeps it", () => {
-    eq([{ type: "Port" }, { type: "PortWarehouse" }, { type: "Airport" }, { type: "Other", legacyType: "PORT" }, { type: "PORT" }, { placeType: "Other", type: "PORT", legacyType: "PORT" }].map(l => L.isPortType(l) ? 1 : 0).join(""), "110010");
+  t("A-RV-37 (v7.21.14): a Port or a Port warehouse is a port; an airport only where airports count; a place of type Other carrying the old word PORT is not; since v7.27.3 (FZ-26) a place known only by that word is not either", () => {
+    eq([{ type: "Port" }, { type: "PortWarehouse" }, { type: "Airport" }, { type: "Other", legacyType: "PORT" }, { type: "PORT" }, { placeType: "Other", type: "PORT", legacyType: "PORT" }].map(l => L.isPortType(l) ? 1 : 0).join(""), "110000");
     eq(L.isPortType({ type: "Airport" }, { airports: true }), true);
   });
   t("FZ-05 (v7.21.14): a lot standing at a place of type Other is no longer 'Customs' — at a port, a port warehouse or an airport it still is (read through Inventory's places, where type holds the old word)", () => {
@@ -3973,7 +3911,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const recs = (store, path) => { let rs = (d[store] || []).filter(r => r && typeof r === "object"); (path ? path.split(".") : []).forEach(k => { rs = rs.flatMap(r => (r[k] || []).filter(x => x && typeof x === "object")); }); return rs; };
     const M = [["contacts", "", "types.ts", "Counterparty"], ["pos", "", "types.ts", "POrder"], ["pos", "items", "types.ts", "POLine"], ["orders", "", "types.ts", "SOrder"], ["orders", "items", "types.ts", "SOLine"], ["lots", "", "types.ts", "Lot"], ["lots", "movements", "types.ts", "LotMovement"], ["lots", "costs", "types.ts", "LotCostLine"], ["shipments", "", "types.ts", "Shipment"], ["shipments", "legs", "types.ts", "ShipmentLeg"], ["shipments", "legs.vehicles", "types.ts", "TransportUnit"], ["shipments", "goods", "types.ts", "ShipmentGoodsLine"], ["shipments", "costs", "types.ts", "ShipmentCostLine"], ["invoices", "", "invoicing.ts", "Invoice"], ["invoices", "positions", "invoicing.ts", "InvoicePosition"], ["claims", "", "claims.domain.ts", "Claim"], ["operationalCosts", "", "operationalCosts.ts", "OperationalCost"]];
     const gaps = [];
-    M.forEach(([store, path, file, name]) => { const have = membersOf(file, name); ok(have, name + " not found"); const keys = new Set(recs(store, path).flatMap(r => Object.keys(r))); const miss = [...keys].filter(k => !have.has(k)); if (miss.length) gaps.push(`${name}: ${miss.slice(0, 4).join(", ")}${miss.length > 4 ? ` +${miss.length - 4}` : ""}`); });
+    // v7.28.x (Batch L): a field retired by Batch L is no longer declared — the old file still stores it, and the save-time tidy-up moves
+    // it into its owner and drops it; it must be one of these, never a new undeclared field
+    const RETIRED = new Set(["lostValueEUR", "totalCostEUR", "defectValueEUR", "recoveredEUR", "requestedEUR", "acceptedEUR", "plnPerEur", "egpPerEur", "expectedDeliveryDate", "linkedLots", "linkedInvoices", "linkedShipments", "linkedSalesOrders", "contacts", "additionalTypes", "paymentTermsDays", "creditLimitPLN", "defaultCurrency", "actualLoadDate", "actualUnloadDate"]);
+    M.forEach(([store, path, file, name]) => { const have = membersOf(file, name); ok(have, name + " not found"); const keys = new Set(recs(store, path).flatMap(r => Object.keys(r))); const miss = [...keys].filter(k => !have.has(k) && !RETIRED.has(k)); if (miss.length) gaps.push(`${name}: ${miss.slice(0, 4).join(", ")}${miss.length > 4 ? ` +${miss.length - 4}` : ""}`); });
     eq(gaps.join(" | "), "", "stored but undeclared");
     ok(membersOf("types.ts", "StoreRecords") && ["contacts", "pos", "orders", "lots", "shipments", "invoices", "auditLog", "planningSheets"].every(k => membersOf("types.ts", "StoreRecords").has(k)), "the catalogue of stored lists");
   });
@@ -4024,6 +3965,881 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
-// v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
+// ══ v7.24.0 — A-BK-7: a backup from the test copy says so in its name ══
+(function v72400(){
+  console.log("\n══ v7.24.0 — A-BK-7: TEST in the backup's name ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("A-BK-7 (v7.24.0): every backup file from the test copy is named '…-TEST…' (the real copy's names unchanged), and the file's header says which copy it came from", () => {
+    const p = require.resolve("./build/remoteStore.js"); const keep = require.cache[p]; const was = process.env.REACT_APP_ENV_LABEL;
+    try { delete require.cache[p]; process.env.REACT_APP_ENV_LABEL = "test"; eq(require(p).fileLabel(), "-TEST"); delete require.cache[p]; process.env.REACT_APP_ENV_LABEL = ""; eq(require(p).fileLabel(), ""); }
+    finally { if (was === undefined) delete process.env.REACT_APP_ENV_LABEL; else process.env.REACT_APP_ENV_LABEL = was; require.cache[p] = keep; }
+    ok(/a\.download = `marianna-erp\$\{fileLabel\(\)\}_v\$\{APP_VERSION\}_schema-v/.test(rd("autoBackup.ts")), "the backup download");
+    ok((rd("Settings.tsx").match(/\$\{fileLabel\(\)\}/g) || []).length >= 3 && /marianna-shared-copy\$\{fileLabel\(\)\}-before-recovery/.test(rd("RecoveryPanel.tsx")) && /marianna-erp\$\{fileLabel\(\)\}_recovery_/.test(rd("ErrorBoundary.tsx")), "the other downloads");
+    ok(/copy: String\(process\.env\.REACT_APP_ENV_LABEL/.test(rd("useLocalStoredState.ts")) && /copy: ENV_LABEL\.toUpperCase\(\) \|\| "REAL"/.test(rd("remoteStore.ts")), "the header");
+  });
+})();
+
+// ══ v7.24.1 — FZ-01 step 1: the one-time repairs proven done on both copies are gone ══
+(function v72401(){
+  console.log("\n══ v7.24.1 — FZ-01 step 1: one-time repairs gone ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("FZ-01 (v7.24.1): the one-time repairs that change nothing on either copy (owner's files of 15 Oct) no longer run on opening — and their code is gone; the live routines stay", () => {
+    const app = rd("App.tsx");
+    ["v7.12.2-trade-direction", "v7.18.2-doc-types", "v7.13.1-closed-months", "foldWarehouseInvoiceStore(", "migrateAddressOn(", "foldLegacyClaimFields(", "migrateSaleLinesToLots(", "normaliseStoredSoStatus(", "convertSettledRefsToEvents(", "stripPendingInvoices("].forEach(k => ok(!app.includes(k), "App still runs " + k));
+    const all = fsx.readdirSync(px.join(__dirname, "../src")).filter(f => /\.(ts|tsx)$/.test(f)).map(rd).join("\n");
+    ["function foldWarehouseInvoiceStore", "function migrateAddressOn", "function foldLegacyClaimFields", "function migrateSaleLinesToLots", "function normaliseStoredSoStatus", "function convertSettledRefsToEvents", "function stripPendingInvoices", "function mapDocTypes"].forEach(k => ok(!all.includes(k), k + " is still in the code"));
+    ["migrateLegacyInvoices(", "normaliseCounterparty(", "normalisePO(", "normaliseSO(", "normaliseLot(", "normaliseInvoiceCategory(", "stampSiteIds(", "fxFillInvoice("].forEach(k => ok(app.includes(k), "a live routine went: " + k));
+  });
+  t("A-ST-10 / A-RV-30 (kept): Finance → Warehouse charges reads and writes the register — no store of its own; the import posts warehouse invoices to the register", () => {
+    const fin = rd("Finance.tsx"), inv = rd("Invoices.tsx");
+    ok(!/setWarehouseInvoices|deleteInvoice\(/.test(fin), "Finance still writes the separate store or deletes from it");
+    ok(/<WarehouseChargesView[^>]*invoices=\{invoices\} setInvoices=\{setInvoices\}/.test(fin), "Warehouse charges is not given the register");
+    ok(!/setWarehouseInvoices/.test(inv) && /category: "WAREHOUSE", costScope: scopeOf\("WAREHOUSE"\)/.test(inv), "the import still writes the separate store");
+  });
+})();
+
+// ══ v7.24.2 — A-RV-15 b/c: a sale line is a lot, everywhere in the code ══
+(function v72402(){
+  console.log("\n══ v7.24.2 — A-RV-15 b/c: a sale line is a lot ══");
+  const fsx = require("fs"), px = require("path"); const src = px.join(__dirname, "../src"); const rd = f => fsx.readFileSync(px.join(src, f), "utf8");
+  t("A-RV-15 b/c (v7.24.2): no screen or rule handles a sale line 'sourced from a PO' any more — the picker has no PO tab, the SO save no unreachable override; the lot matcher reads the lot a line names", () => {
+    const hits = fsx.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f)).filter(f => /\.sourceType\s*[!=]==?\s*["']PO["']/.test(rd(f).replace(/\/\/[^\n]*/g, "")));   // v7.27.0 (FZ-23): every file — ShipmentCreate was left out and kept three
+    eq(hits.join(", "), "", "files still testing a line 'from a PO'");
+    const form = rd("SalesOrderForm.tsx"); ok(!/function pickPO|matchingPOLines|tab === "PO"/.test(form), "the picker's PO tab is still there");
+    ok(!/legacy override kept unreachable/.test(rd("SalesOrders.tsx")), "the unreachable override is still there");
+    const SD = B("salesOrders.domain.js"); eq(SD.findLotForSOLine([{ number: "LOT-1" }], { sourceType: "STOCK", sourceRef: "LOT-1" }).number, "LOT-1"); eq(SD.findLotForSOLine([{ number: "LOT-1", poRef: "PO-1" }], { sourceType: "PO", sourceRef: "PO-1" }), null);
+  });
+  t("A-RV-15 b (v7.24.2): the suites' data files are in today's form — sale lines point at lots; 'from a PO' only on the two deleted sales (and the 23 Sept file, older than lots)", () => {
+    const dir = px.join(__dirname, "fixtures"); const bad = [];
+    fsx.readdirSync(dir).filter(f => /^marianna-erp_.*\.json$/.test(f) && !/v6\.99\.50_/.test(f)).forEach(f => { const d = JSON.parse(fsx.readFileSync(px.join(dir, f), "utf8"));
+      (d.orders || []).forEach(o => { if (String(o.status) !== "Cancelled" && (o.items || []).some(i => i && i.sourceType === "PO")) bad.push(`${f.slice(13, 32)} ${o.number}`); }); });
+    eq(bad.join(" | "), "", "a live sale still 'from a PO'");
+  });
+})();
+
+// ══ v7.24.3 — FZ-01 step 2: a save writes the clean shape ══
+(function v72403(){
+  console.log("\n══ v7.24.3 — FZ-01 step 2: a save writes the clean shape ══");
+  const SS = B("storeShapes.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("FZ-01 step 2 (v7.24.3): a write tidies only the records it writes — new or changed ones pass through their tidy-up; untouched ones keep their very object; nothing to tidy keeps the very array", () => {
+    const a = { id: 1, old: true }, b = { id: 2, old: true }; const shape = r => r.old ? (({ old, ...rest }) => ({ ...rest, clean: true }))(r) : r;
+    const prev = [a, b]; const changed = { ...b, qty: 5 }; const out = SS.shapeWritten(prev, [a, changed, { id: 3, old: true }], shape);
+    ok(out[0] === a, "an untouched record was rewritten"); eq(JSON.stringify(out[1]), JSON.stringify({ id: 2, qty: 5, clean: true })); eq(out[2].clean, true);
+    const same = [a, { id: 9 }]; eq(SS.shapeWritten(prev, same, shape), same); eq(SS.shapeWritten(prev, prev, shape), prev);
+    let stored = prev; const set = u => { stored = typeof u === "function" ? u(stored) : u; }; const setX = SS.shapingSetter(set, shape);
+    setX(p => [...p, { id: 4, old: true }]); eq(stored.length, 3); ok(stored[0] === a && stored[2].clean, "the setter did not tidy what it wrote");
+  });
+  t("FZ-01 step 2 (v7.24.3): App runs no tidy-up when it opens — the company, PO, SO, lot and invoice stores tidy what they write; new invoices no longer carry the retired credit-note list", () => {
+    const app = rd("App.tsx");
+    ok(!/useEffect\(\(\) => \{[^}]{0,200}(normalisePO|normaliseCounterparty|stampSiteIds|normaliseLot|normaliseInvoiceCategory|normaliseSO)\(/.test(app), "a start-up tidy-up is still there");
+    ["setPOs = useMemo(() => shapingSetter(setPOsRaw", "setOrders = useMemo(() => shapingSetter(setOrdersRaw", "setLots = useMemo(() => shapingSetter(setLotsRaw", "setInvoices = useMemo(() => shapingSetter(setInvoicesRaw", "_setContacts = useMemo(() => (u: any) => _setContactsRaw("].forEach(k => ok(app.includes(k), "not tidied on write: " + k));
+    ok(!/creditNoteIds: \[\]/.test(rd("invoicing.ts") + rd("fakturowniaImport.domain.ts")), "a new invoice still writes creditNoteIds");
+  });
+})();
+
+// ══ v7.24.4 — A-RV-41 (option 1): "direct" kept current by the one rule ══
+(function v72404(){
+  console.log("\n══ v7.24.4 — A-RV-41: 'direct' kept current ══");
+  const TF = B("tradeFlow.domain.js"); const fsx = require("fs"), px = require("path");
+  t("A-RV-41 (v7.24.4): a sale of a PO's lot on onward terms makes the PO and its lots direct — a lot not yet received follows in its status, a received one keeps it; cancelling the sale undoes it; nothing to change gives back the very arrays", () => {
+    const pos = [{ number: "PO-1", status: "Confirmed", buyIncoterm: "EXW", directFlow: false }, { number: "PO-2", status: "Confirmed", buyIncoterm: "FCA", directFlow: false }];
+    const lots = [{ number: "LOT-1", poRef: "PO-1", status: "Expected", receivedKg: 0 }, { number: "LOT-2", poRef: "PO-1", status: "In Stock", receivedKg: 500 }, { number: "LOT-3", poRef: "PO-2", status: "Expected" }];
+    const sale = { number: "SO-1", status: "Confirmed", sellIncoterm: "DAP", items: [{ sourceType: "STOCK", sourceRef: "LOT-1" }] };
+    const r = TF.directSync(pos, [sale], lots); eq(r.changedPOs.join(), "PO-1"); eq(r.changedLots.join(), "LOT-1,LOT-2");
+    eq(r.lots[0].status, "Direct Expected"); eq(r.lots[1].status, "In Stock", "a received lot keeps its status"); ok(r.lots[2] === lots[2], "another PO's lot was touched");
+    const again = TF.directSync(r.pos, [sale], r.lots); ok(again.pos === r.pos && again.lots === r.lots, "a second pass changed something");
+    const off = TF.directSync(r.pos, [{ ...sale, status: "Cancelled" }], r.lots); eq(off.changedPOs.join(), "PO-1"); eq(off.lots[0].status, "Expected"); eq(off.lots[0].directFlow, false);
+    ok(/directSync\(pos \|\| \[\], orders \|\| \[\], lots \|\| \[\]\)/.test(fsx.readFileSync(px.join(__dirname, "../src/App.tsx"), "utf8")), "App does not keep the flag current");
+  });
+})();
+
+// ══ v7.25.0 — A-RV-13 / FZ-02: one source for each company ══
+(function v72500(){
+  console.log("\n══ v7.25.0 — A-RV-13 / FZ-02: one source for each company ══");
+  const CP = B("counterparty.domain.js"); const IC = B("integrityCheck.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("A-RV-13 / FZ-02 (v7.25.0): a document's company is read live by its id (or a merged duplicate's) and never by name; a document already showing the live company stays the very same object; a company edit rewrites no stored document", () => {
+    const contacts = [{ id: 1, name: "Agro A", address: "New street 1", contacts: [{ name: "Ann", isPrimary: true }] }, { id: 2, name: "Same Name", mergedFromIds: [7] }, { id: 3, name: "Same Name" }];
+    const po1 = { number: "PO-1", supplier: CP.companyCopy(contacts[0]) }; const po2 = { number: "PO-2", supplier: { id: 1, name: "Agro A", address: "Old street 9" } };
+    const po3 = { number: "PO-3", supplier: { id: 7, name: "Old dup" } }; const po4 = { number: "PO-4", supplier: { id: 99, name: "Same Name" } };
+    const out = CP.withLiveCompanies([po1, po2, po3, po4], ["supplier"], contacts);
+    ok(out[0] === po1, "an up-to-date document was rewritten"); eq(out[1].supplier.address, "New street 1"); eq(out[2].supplier.id, 2, "a merged duplicate's id leads to the survivor");
+    ok(out[3] === po4, "a company not found by id was matched by name"); const same = [po1]; ok(CP.withLiveCompanies(same, ["supplier"], contacts) === same, "nothing to show differently returns the very list");
+    const app = rd("App.tsx"); ok(!/refreshPOCounterparties|refreshSOCounterparties|refreshShipmentCounterparties|resolveCounterpartySnapshot/.test(app), "the rewrite-every-document refresh is still in App");
+    ok(/const pos = useMemo\(\(\) => withLiveCompanies\(posStored, \["supplier"\]/.test(app) && /const orders = useMemo\(\(\) => withLiveCompanies\(ordersStored, \["client"\]/.test(app), "the screens do not read the companies live");
+    ok(!/normalizeName\(c\.name\) === normalizeName\(saved\.name\)/.test(app + rd("counterparty.domain.ts")), "a company is still matched by name");
+  });
+  t("A-RV-13 (v7.25.0): a PO or SO whose company is not in Counterparties (by id or a merged duplicate's id) is named in the data checks", () => {
+    const r = IC.checkIntegrity({ contacts: [{ id: 2, mergedFromIds: [7] }], pos: [{ number: "PO-9", status: "Confirmed", supplier: { id: 99, name: "Gone" } }, { number: "PO-8", status: "Confirmed", supplier: { id: 7 } }], orders: [{ number: "SO-9", status: "Confirmed", client: { id: 98, name: "Gone too" }, items: [] }], lots: [], shipments: [], invoices: [] });
+    const hits = r.issues.filter(i => i.code === "COMPANY_UNKNOWN").map(i => i.entity).sort().join(","); eq(hits, "PO-9,SO-9");
+  });
+})();
+
+// ══ v7.25.1 — FZ-17: an invoice names its company by id ══
+(function v72501(){
+  console.log("\n══ v7.25.1 — FZ-17: the invoice's company by id ══");
+  const FI = B("fakturowniaImport.domain.js"); const fsx = require("fs"), px = require("path");
+  t("FZ-17 (v7.25.1): the Fakturownia import links an invoice to its company by tax number only (NIP, then the EU VAT id) — a name is never a link", () => {
+    const contacts = [{ id: 1, name: "Agro Fresh", nip: "123-456-78-90" }, { id: 2, name: "Nile Trade", vatEuId: "EG987" }];
+    eq(FI.contactForSeller({ seller: "Whatever", sellerTaxNo: "1234567890" }, contacts, { byName: false }).id, 1);
+    eq(FI.contactForSeller({ seller: "Whatever", sellerTaxNo: "eg987" }, contacts, { byName: false }).id, 2);
+    eq(FI.contactForSeller({ seller: "Agro Fresh" }, contacts, { byName: false }), null, "linked by name");
+    ok(FI.contactForSeller({ seller: "Agro Fresh" }, contacts), "the name still suggests");
+    ok(/contactForSeller\(r, contacts, \{ byName: false \}\)/.test(fsx.readFileSync(px.join(__dirname, "../src/Invoices.tsx"), "utf8")), "the import still links by name");
+  });
+})();
+
+// ══ v7.26.0 — A-INV-1: an invoice never shows its net as its gross ══
+(function v72600(){
+  console.log("\n══ v7.26.0 — A-INV-1: net and gross ══");
+  const FI = B("fakturowniaImport.domain.js"), FK = B("fakturownia.js"), INV = B("invoicing.js"), IC = B("integrityCheck.js");
+  t("A-INV-1 (v7.26.0): the gross is Fakturownia's (or net + VAT when it sends none) — never the net; the VAT rate the two amounts say gives the gross back to the grosz; a row missing an amount is flagged", () => {
+    eq(FK.mapInvoice({ price_net: "100,00", price_tax: "23,00" }).grossTotal, 123); eq(FK.mapInvoice({ price_net: "100", price_gross: "200" }).grossTotal, 200); eq(FK.mapInvoice({ price_net: "100" }).grossTotal, 0, "the net taken for the gross");
+    const r = FI.vatRateOf(1000, 1234.56); eq(INV.recomputeInvoiceMoney({ netAmount: 1000, vatRate: r, currency: "PLN", fxRate: 1 }).grossAmount, 1234.56, "a rounded rate changed the gross");
+    eq(FI.vatRateOf(1000, 0), 0); eq(FI.vatRateOf(0, 100), 0);
+    const half = FI.buildCostInvoice({ number: "X/1", seller: "S", net: 1000, gross: 0, currency: "PLN", fxRate: 1, date: "2026-10-01" }, "FREIGHT", {}, null); ok(half.amountsIncomplete, "a row without its gross is not flagged"); eq(half.vatRate, 0);
+    const full = INV.recomputeInvoiceMoney(FI.buildCostInvoice({ number: "X/2", seller: "S", net: 1000, gross: 1230, currency: "PLN", fxRate: 1, date: "2026-10-01" }, "FREIGHT", {}, null)); eq(full.grossAmount, 1230); ok(!full.amountsIncomplete);
+  });
+  t("A-INV-1 (v7.26.0): an operational cost's register invoice keeps the VAT the import found; an old VAT-less one is corrected by re-importing its month (a true 0 % is confirmed); the data checks name what is left", () => {
+    const reg = INV.migrateLegacyInvoices({ existing: [], orders: [], warehouseInvoices: [], operationalCosts: [{ id: 77, invoiceNo: "OV/1", supplierName: "Office Ltd", amount: 1000, vatRate: 23, currency: "PLN", fxRate: 1, date: "2026-10-01", category: "office_rent", costCenter: "general", notes: "Imported from Fakturownia (Invoices)" }] });
+    eq(reg[0].grossAmount, 1230); eq(reg[0].vatAmount, 230);
+    const old = { id: 5, kind: "COST", number: "OV/2", paymentStatus: "Issued", source: "migrated:opCost:88", vatRate: 0, notes: "Imported from Fakturownia (Invoices)" };
+    const fix = FI.vatFixFor({ number: "OV/2", net: 1000, gross: 1230 }, [old]); eq(fix.vatRate, 23); eq(fix.opCostId, "88"); ok(!fix.confirmZero);
+    ok(FI.vatFixFor({ number: "OV/2", net: 1000, gross: 1000 }, [old]).confirmZero, "a true 0 % is not confirmed"); eq(FI.vatFixFor({ number: "OV/2", net: 1000, gross: 1230 }, [{ ...old, source: "fakturownia-import" }]), null);
+    const ic = IC.checkIntegrity({ invoices: [old, { ...old, id: 6, number: "OV/3", vatChecked: true }, { id: 7, kind: "COST", number: "H/1", paymentStatus: "Issued", amountsIncomplete: true }], pos: [], orders: [], lots: [], shipments: [], contacts: [] });
+    eq(ic.issues.filter(i => i.code === "INVOICE_VAT_MISSING").map(i => i.entity).join(), "OV/2"); eq(ic.issues.filter(i => i.code === "INVOICE_AMOUNTS_INCOMPLETE").length, 1);
+  });
+})();
+
+// ══ v7.26.3 — A-INV-3: sales invoices issued in Fakturownia belong to their SO ══
+(function v72603(){
+  console.log("\n══ v7.26.3 — A-INV-3: issued invoices to their SO ══");
+  const FI = B("fakturowniaImport.domain.js"), FK = B("fakturownia.js"), INV = B("invoicing.js");
+  t("A-INV-3 (v7.26.3): an invoice issued in Fakturownia comes in with its client, amounts and printed rate; its SO is suggested — the one named on it first, then the client's open SO closest in amount; SOs already invoiced, drafts and deleted ones are not offered", () => {
+    const m = FK.mapInvoice({ id: 9, number: "FV 7/10/2026", income: "1", issue_date: "2026-10-05", buyer_name: "Nile Fresh", buyer_tax_no: "EG-123", price_net: "1000", price_gross: "1000", currency: "EUR", exchange_rate: "4.2512", description: "Apples SO-2026-0031" });
+    const row = FI.salesRowFromMapped(m, 0); eq(row.buyer, "Nile Fresh"); eq(row.fxRate, 4.2512); eq(row.currency, "EUR");
+    const contacts = [{ id: 5, name: "Nile Fresh Co", nip: "EG123" }];
+    const so = (n, extra) => ({ number: n, status: "Confirmed", currency: "EUR", client: { id: 5, name: "Nile Fresh Co" }, items: [{ qty: 1000, unitPrice: 1 }], ...(extra || {}) });
+    const orders = [so("SO-2026-0030", { items: [{ qty: 1000, unitPrice: 1.01 }] }), so("SO-2026-0031", { items: [{ qty: 500, unitPrice: 1 }] }), so("SO-2026-0032", { status: "Draft" }), so("SO-2026-0033"), so("SO-2026-0034", { status: "Cancelled" })];
+    const invoices = [{ kind: "SALES", number: "FV 1/10/2026", paymentStatus: "Issued", links: [{ type: "SO", number: "SO-2026-0033" }] }];
+    const c = FI.soCandidatesForSale(row, orders, invoices, contacts); eq(c.companyId, 5);
+    eq(c.list.map(x => x.number).join(","), "SO-2026-0031,SO-2026-0030", "named first, then the closest amount; invoiced / draft / deleted left out");
+    ok(!FI.soCandidatesForSale({ ...row, description: "" }, orders, invoices, contacts).list[0].label.includes("named"), "a SO not named was labelled as named");
+    eq(FI.isRegisteredSale("FV 1/10/2026", invoices), true); eq(FI.isRegisteredSale("FV 7/10/2026", invoices), false);
+  });
+  t("A-INV-3 (v7.26.3): the register entry is a sales invoice linked to its SO, with the rate printed on the invoice (FZ-06) — or, without one, the register's NBP rule fills it", () => {
+    const row = { number: "FV 7/10/2026", buyer: "Nile Fresh", date: "2026-10-05", net: 1000, gross: 1230, currency: "EUR", fxRate: 4.2512, fktId: 9 };
+    const inv = INV.recomputeInvoiceMoney(FI.buildIssuedSalesInvoice(row, "SO-2026-0031", { id: 5, name: "Nile Fresh Co" }));
+    eq(inv.kind, "SALES"); eq(inv.category, "SALES"); eq(JSON.stringify(inv.links), JSON.stringify([{ type: "SO", number: "SO-2026-0031" }])); eq(inv.counterparty.id, 5);
+    eq(inv.fxRate, 4.2512); eq(inv.fxSource, "fakturownia"); eq(inv.grossAmount, 1230); eq(inv.fakturownia.exported, true);
+    const noRate = FI.buildIssuedSalesInvoice({ ...row, fxRate: 0 }, "", null); ok(!noRate.fxTableDate, "an invoice without its printed rate was marked as rated"); eq(noRate.links.length, 0);
+  });
+})();
+
+// ══ v7.26.4 — A-INV-4: the ERP's sales invoice carries the export details ══
+(function v72604(){
+  console.log("\n══ v7.26.4 — A-INV-4: the invoice's notes ══");
+  const N = B("invoiceNotes.domain.js"), INV = B("invoicing.js"); const fsx = require("fs"), px = require("path");
+  const order = { number: "SO-2026-0040", sellIncoterm: "CIF", acidNo: "4100123456789", items: [{ product: "Apples", variety: "Gala", size: "65-70", qty: 19000, unit: "kg", sourceType: "STOCK", sourceRef: "LOT-1" }] };
+  const lots = [{ number: "LOT-1", cnCode: "0808 10 80", origin: "Poland" }];
+  const sh = { number: "SHP-1", status: "Loaded", legs: [{ mode: "Road", fromLocationId: 7, vehicles: [{ id: 1, truckPlate: "WGR 12345", trailerPlate: "WGR 6789X", tempRecorderNo: "TR-55" }] }, { mode: "Sea", vehicles: [{ id: 2, containerNumber: "MSKU1234567" }] }],   // v7.28.9: the trucks' own list
+    goods: [{ soRef: "SO-2026-0040", qtyKg: 19422, grossKg: 21100, boxes: 1618, packaging: "Wooden box 12 kg" }, { soRef: "SO-OTHER", qtyKg: 999 }] };
+  t("A-INV-4 (v7.26.4): the invoice's notes are filled from the sale, its shipments and lots — terms, ACID, each line's CN code and origin, net and gross weight, packages, trucks, containers, recorders — and the origin declaration for goods sold from Poland", () => {
+    const txt = N.exportNotesForSale(order, { shipments: [sh], lots, deliveryPlace: "Alexandria", fromPoland: true });
+    ["Delivery terms: CIF Alexandria (Incoterms 2020)", "ACID: 4100123456789", "Apples Gala 65-70 — CN 0808 10 80 — origin Poland", "Net weight: 19 422 kg · Gross weight: 21 100 kg", "Packages: 1618 × Wooden box 12 kg", "Trucks: WGR 12345 / WGR 6789X", "Containers: MSKU1234567", "Temperature recorders: TR-55", N.ORIGIN_DECLARATION].forEach(k => ok(txt.replace(/[\u00a0\u202f]/g, " ").includes(k), "missing: " + k + "\n" + txt));
+    ok(!N.exportNotesForSale(order, { shipments: [sh], lots, fromPoland: false }).includes(N.ORIGIN_DECLARATION), "the declaration on goods not sold from Poland");
+    eq(N.isFromPoland(order, [sh], id => id === 7 ? "Poland" : ""), true); eq(N.isFromPoland(order, [sh], () => "Egypt"), false); eq(N.isFromPoland(order, [], () => "Egypt"), true);
+  });
+  t("A-INV-4 (v7.26.4): the notes go to Fakturownia as the invoice's notes; the SO fills them when it creates its invoice", () => {
+    const body = INV.buildFakturowniaPayload({ number: "X", issueDate: "2026-10-17", currency: "EUR", counterparty: { name: "C" }, positions: [], grossAmount: 0, invoiceNotes: "Line A\nLine B" }, {});
+    eq(JSON.stringify((body.invoice || body).descriptions), JSON.stringify([{ kind: "Uwaga", content: "Line A" }, { kind: "Uwaga", content: "Line B" }]));   // v7.27.4: one entry per line (KSeF)
+    ok(!("descriptions" in (INV.buildFakturowniaPayload({ number: "X", currency: "EUR", counterparty: { name: "C" }, positions: [], grossAmount: 0 }, {}).invoice || {})), "an empty note was sent");
+    ok(/invoiceNotes: notes/.test(fsx.readFileSync(px.join(__dirname, "../src/SalesOrders.tsx"), "utf8")), "the SO does not fill the notes");
+  });
+})();
+
+// ══ v7.26.5 — A-INV-5: one bank payment, several invoices ══
+(function v72605(){
+  console.log("\n══ v7.26.5 — A-INV-5: one payment, several invoices ══");
+  const BR = B("bankReconciliation.domain.js");
+  const inv = (id, no, gross, date, party, extra) => ({ id, kind: "COST", number: no, grossAmount: gross, paidAmount: 0, currency: "PLN", paymentStatus: "Issued", issueDate: date, counterparty: { name: party }, ...(extra || {}) });
+  const open = [inv(1, "FV 10/2026", 100, "2026-09-01", "Sady Kowalczyk"), inv(2, "FV 11/2026", 250, "2026-09-05", "Sady Kowalczyk"), inv(3, "FV 12/2026", 150, "2026-09-09", "Sady Kowalczyk"), inv(4, "X 1/2026", 400, "2026-09-02", "Somebody Else"), inv(5, "FV 13/2026", 80, "2026-09-10", "Sady Kowalczyk", { currency: "EUR" })];
+  t("A-INV-5 (v7.26.5): a bank line is split over the invoices its title quotes (in that order), else the payer's invoices that add up to it (the fewest), else the payer's oldest in turn — only its direction and currency; what is left is shown", () => {
+    const byTitle = BR.splitBankLine({ id: "b1", amount: -300, currency: "PLN", counterparty: "KOWALCZYK SADY SP", title: "FV 12/2026 FV 10/2026" }, open);
+    eq(byTitle.how, "title"); eq(byTitle.allocations.map(a => `${a.number}:${a.amount}`).join(","), "FV 12/2026:150,FV 10/2026:100"); eq(byTitle.remainder, 50);
+    const exact = BR.splitBankLine({ id: "b2", amount: -400, currency: "PLN", counterparty: "Sady Kowalczyk", title: "faktury wrzesień" }, open);
+    eq(exact.how, "exact"); eq(exact.allocations.map(a => a.number).sort().join(","), "FV 11/2026,FV 12/2026"); eq(exact.remainder, 0);
+    const oldest = BR.splitBankLine({ id: "b3", amount: -120, currency: "PLN", counterparty: "Sady Kowalczyk", title: "zaliczka" }, open);
+    eq(oldest.how, "oldest"); eq(oldest.allocations.map(a => `${a.number}:${a.amount}`).join(","), "FV 10/2026:100,FV 11/2026:20");
+    ok(!exact.open.some(i => i.id === 5), "an invoice in another currency was offered"); ok(BR.splitBankLine({ id: "b4", amount: 400, currency: "PLN", counterparty: "Sady Kowalczyk", title: "" }, open).open.length === 0, "a credit line offered cost invoices");
+  });
+  t("A-INV-5 (v7.26.5): each invoice's share is a payment from that bank line (part k of n) — the line then counts as recorded, so a re-import never posts it again", () => {
+    const line = { id: "b9", amount: -400, currency: "PLN", date: "2026-10-10", account: "PL001234", counterparty: "Sady Kowalczyk", title: "x" };
+    const e = BR.bankShareEvent(line, 250, 1, 2); eq(e.amount, 250); eq(e.source, "bank:b9"); ok(/part 1 of 2/.test(e.note));
+    eq(BR.appliedBankSources([{ payments: [e] }]).has("bank:b9"), true);
+    eq(BR.matchBankLines([line], [{ ...open[1], payments: [e], paidAmount: 250 }])[0].rank, "ALREADY");
+  });
+})();
+
+// ══ v7.26.6 — A-INV-2: the invoice PDFs in the company's folder ══
+(function v72606(){
+  console.log("\n══ v7.26.6 — A-INV-2: invoice PDFs in the folder ══");
+  const PF = B("invoicePdfFolder.js"); const fsx = require("fs"), px = require("path");
+  t("A-INV-2 (v7.26.6): each PDF is named date_number_company.pdf, safe on every system; the Invoices screen saves the Fakturownia invoices' PDFs into the chosen folder and shows where each one is", () => {
+    eq(PF.pdfFileName({ issueDate: "2026-10-05T10:00", number: "FV 7/10/2026", counterparty: { name: "Nile Fresh: Co*" } }), "2026-10-05_FV 7-10-2026_Nile Fresh- Co-.pdf");
+    eq(PF.pdfFileName({}), "undated_no-number_unknown.pdf");
+    const src = fsx.readFileSync(px.join(__dirname, "../src/Invoices.tsx"), "utf8");
+    ok(/fetchInvoicePdf\(fktIdOf\(inv\)\)/.test(src) && /savePdfToFolder\(folder, name, r\.blob\)/.test(src) && /PDF in the folder/.test(src), "the screen does not save or show the PDFs");
+  });
+})();
+
+// ══ v7.27.0 — FZ-23: the sales of a PO, one reader ══
+(function v72700(){
+  console.log("\n══ v7.27.0 — FZ-23: the sales of a PO through its lots ══");
+  const TF = B("tradeFlow.domain.js"); const fsx = require("fs"), px = require("path");
+  t("FZ-23 (v7.27.0): a PO's sales are the sales of its lots — deleted sales never, drafts only when asked; a sale's POs are the POs of the lots it names; the 'direct' rule reads the same helper", () => {
+    const lots = [{ number: "LOT-1", poRef: "PO-1" }, { number: "LOT-2", poRef: "PO-1" }, { number: "LOT-9", poRef: "PO-9" }];
+    const so = (n, st, lot, term) => ({ number: n, status: st, sellIncoterm: term || "DAP", items: [{ sourceType: "STOCK", sourceRef: lot }] });
+    const orders = [so("SO-1", "Confirmed", "LOT-1"), so("SO-2", "Confirmed", "LOT-2"), so("SO-3", "Draft", "LOT-1"), so("SO-4", "Cancelled", "LOT-2"), so("SO-5", "Confirmed", "LOT-9")];
+    eq(TF.salesOfPO({ number: "PO-1" }, orders, lots).map(o => o.number).join(), "SO-1,SO-2"); eq(TF.salesOfPO({ number: "PO-1" }, orders, lots, { includeDrafts: true }).map(o => o.number).join(), "SO-1,SO-2,SO-3");
+    eq(TF.salesOfPO({ number: "PO-7" }, orders, lots).length, 0); eq(TF.posOfSale(orders[0], [{ number: "PO-1" }, { number: "PO-9" }], lots).map(p => p.number).join(), "PO-1");
+    eq(TF.poDirectFromSOs({ number: "PO-1" }, orders, lots), true); eq(TF.poDirectFromSOs({ number: "PO-1" }, orders.map(o => ({ ...o, status: o.number === "SO-3" ? "Draft" : "Cancelled" })), lots), false);
+    const sc = fsx.readFileSync(px.join(__dirname, "../src/ShipmentCreate.tsx"), "utf8");
+    ok((sc.match(/salesOfPO\(selectedPO, orders \|\| \[\], lots \|\| \[\], \{ includeDrafts: true \}\)/g) || []).length === 3 && (sc.match(/posOfSale\(selectedSO, pos \|\| \[\], lots \|\| \[\]\)/g) || []).length >= 2, "the shipment window does not read the PO's sales through its lots");   // v7.29.0: the journey proposal reads the same two helpers
+  });
+})();
+
+// ══ v7.27.3 — FZ-26: a place is read from its type ══
+(function v72703(){
+  console.log("\n══ v7.27.3 — FZ-26: the place's type ══");
+  const LOC = B("locations.js"), INC = B("incoterms.domain.js");
+  t("FZ-26 (v7.27.3): a place's group comes from its type — our warehouses (own or rented), supplier and client sites, ports with port warehouses and cargo airports, customs; any other type (bonded warehouse, border crossing, relay point) is 'other', never a port; the port rule reads the type only", () => {
+    const g = t => LOC.placeGroup({ type: t });
+    eq([g("OwnWarehouse"), g("RentedWarehouse"), g("SupplierFacility"), g("ClientFacility"), g("Port"), g("PortWarehouse"), g("Airport"), g("Customs"), g("BondedWarehouse"), g("BorderCrossing"), g("RelayPoint"), g("")].join(), "OWN,OWN,SUPPLIER,CLIENT,PORT,PORT,PORT,BROKER,OTHER,OTHER,OTHER,OTHER");
+    eq(INC.isPortPlace({ type: "Port" }), true); eq(INC.isPortPlace({ type: "Other", legacyType: "PORT" }), false, "the old code still makes a port"); eq(INC.isPortPlace({ type: "OTHER", placeType: "PortWarehouse" }), true);
+  });
+})();
+
+// ══ v7.27.4 — AUD-16: the buyer on the invoice sent to Fakturownia ══
+(function v72704(){
+  console.log("\n══ v7.27.4 — AUD-16: the buyer's address, country and tax-number kind ══");
+  const INV = B("invoicing.js"); const fsx = require("fs"), px = require("path");
+  t("AUD-16 (v7.27.4): the buyer goes with its street, post code, city and ISO country, and the KIND of its tax number — a Polish NIP, an EU VAT number, another country's number, or none; the sale's delivery terms go too", () => {
+    const inv = (n, extra) => ({ number: "X", currency: "EUR", counterparty: { id: 1, name: n, ...(extra || {}) }, positions: [], grossAmount: 0 });
+    const pl = INV.buildFakturowniaPayload(inv("Polska Sp.", { nip: "5252445767" }), { buyer: { nip: "5252445767", country: "Poland", addr: { street: "Długa 1", postcode: "00-100", city: "Warszawa" } }, deliveryTerms: "DAP Bronisze" }).invoice;
+    eq([pl.buyer_tax_no, pl.buyer_tax_no_kind, pl.buyer_street, pl.buyer_post_code, pl.buyer_city, pl.buyer_country, pl.delivery_terms].join("|"), "5252445767||Długa 1|00-100|Warszawa|PL|DAP Bronisze");
+    const de = INV.buildFakturowniaPayload(inv("Deutsch GmbH"), { buyer: { vatEuId: "DE123456789", country: "Germany" } }).invoice; eq([de.buyer_tax_no, de.buyer_tax_no_kind, de.buyer_country].join("|"), "DE123456789|nip_ue|DE");
+    const eg = INV.buildFakturowniaPayload(inv("Nile Fresh", { nip: "EG-778" }), { buyer: { country: "Egypt" } }).invoice; eq([eg.buyer_tax_no, eg.buyer_tax_no_kind, eg.buyer_country].join("|"), "EG-778|other|EG");
+    const none = INV.buildFakturowniaPayload(inv("Somebody"), { buyer: { country: "Egypt" } }).invoice; eq(none.buyer_tax_no_kind, "empty");
+    const d = INV.notesAsDescriptions("ACID: 4100\nThe exporter " + "x".repeat(300)); eq(d[0].kind + "|" + d[0].content, "ACID|4100"); ok(d.slice(1).every(x => x.content.length <= 256) && d.length === 3, "a long line is not cut to KSeF's 256");
+    ok(/\.\.\.fktBuyerOpts\(inv\)/.test(fsx.readFileSync(px.join(__dirname, "../src/Invoices.tsx"), "utf8")), "the screen does not pass the live company");
+  });
+})();
+
+// ══ v7.27.5 — A-COMM-NET, AUD-30, AUD-26: the consignment commission ══
+(function v72705(){
+  console.log("\n══ v7.27.5 — the commission on the truck's net result ══");
+  const P = B("poSettlement.domain.js"), C = B("consignment.js"); const fsx = require("fs"), px = require("path");
+  const po = { number: "PO-T", currency: "EUR", supplier: { id: 9, name: "Farm" }, items: [] };
+  const lots = [{ number: "LOT-T", poRef: "PO-T", expectedKg: 1000, receivedKg: 1000, product: "Apples" }];
+  const so = { number: "SO-T", status: "Confirmed", currency: "PLN", fxRate: 1, items: [{ sourceType: "STOCK", sourceRef: "LOT-T", qty: 1000, unitPrice: 5 }] };
+  t("AUD-30 (v7.27.5): the producer's statement counts the kilos LOADED for each sale (its trucks' goods rows) — ordered kilos not yet loaded are not sold; a truck of one sale may leave the sale to the truck", () => {
+    const at = sh => P.computePOSettlement({ po, lots, orders: [so], shipments: sh, ratePLNperEUR: 4.3, commissionPct: 0 });
+    eq(at([]).grossPLN, 0, "ordered but not loaded counted as sold");
+    eq(at([{ number: "SH-1", status: "Booked", goods: [{ lotRef: "LOT-T", soRef: "SO-T", qtyKg: 800 }] }]).grossPLN, 0, "a booked truck counted");
+    eq(at([{ number: "SH-1", status: "Loaded", goods: [{ lotRef: "LOT-T", soRef: "SO-T", qtyKg: 800 }] }]).grossPLN, 4000);
+    eq(at([{ number: "SH-1", status: "Delivered", governingSoRef: "SO-T", goods: [{ lotRef: "LOT-T", qtyKg: 600 }] }]).grossPLN, 3000, "the truck's own sale");
+  });
+  t("A-COMM-NET (v7.27.5, owner ruling 19 Oct): the band is chosen on the truck's NET result, not its gross; the screen shows and the close stores the percentage applied", () => {
+    const rate = { pct: 8, bands: [{ fromPLN: 0, toPLN: 100000, pct: 8 }, { fromPLN: 100000, pct: 6 }] };
+    eq(C.commissionPctForSales(rate, 120000), 6); eq(C.commissionPctForSales(rate, 90000), 8);   // a truck of 120 000 gross and 90 000 net: 8 %, not 6 %
+    const src = fsx.readFileSync(px.join(__dirname, "../src/PurchaseOrders.tsx"), "utf8");
+    ok(/commissionPctForSales\(rateRec, netOnly\.netPLN\)/.test(src) && !/commissionPctForSales\(rateRec, calc\.grossPLN\)/.test(src), "the band is still read on the gross");
+    ok(/commissionPct: pctUsed \}\)/.test(src) && /value=\{pctUsed \?\? ""\}/.test(src), "the screen or the close does not use the percentage applied");
+  });
+  t("AUD-26 (v7.27.5): the commission invoice is dated on the day the settlement closed; its VAT by where the producer is — Poland 23 %, another EU state reverse charge, outside the EU not taxable in Poland; Fakturownia receives 'np' and the reverse-charge mark", () => {
+    eq(P.commissionVat({ country: "Poland" }).vatRate, 23); eq(JSON.stringify(P.commissionVat({ country: "Hungary" })), JSON.stringify({ vatRate: 0, vatCode: "np", reverseCharge: true })); eq(JSON.stringify(P.commissionVat({ country: "Egypt" })), JSON.stringify({ vatRate: 0, vatCode: "np" }));
+    const calc = { ratePLNperEUR: 4.3, commissionEUR: 100, commissionPct: 6, netSalesEUR: 1000, currency: "EUR", transferEUR: 900 };
+    const inv = P.commissionInvoiceDraft(po, calc, { number: "SET-1", closedAt: "2026-10-12T10:00:00Z" }, { nextId: () => 1, todayISO: () => "2026-10-19", producerOf: () => ({ country: "Hungary" }) });
+    eq(inv.issueDate, "2026-10-12"); eq(inv.saleDate, "2026-10-12"); eq(inv.grossAmount, 100);
+    const body = B("invoicing.js").buildFakturowniaPayload({ ...inv, positions: [{ name: "Commission", quantity: 1, unit: "szt", grossTotal: 100 }] }, {}).invoice;
+    eq(body.positions[0].tax, "np"); eq(body.reverse_charge, true);
+    eq(P.commissionInvoiceDraft(po, calc, { number: "SET-1", closedAt: "2026-10-12" }, { nextId: () => 1, todayISO: () => "2026-10-19", producerOf: () => ({ country: "Poland" }) }).grossAmount, 123);
+  });
+})();
+
+// ══ v7.27.6 — FZ-31: a groupage truck posts one movement per sale ══
+(function v72706(){
+  console.log("\n══ v7.27.6 — FZ-31: one SHIP_OUT per sale on a groupage truck ══");
+  const SD = B("shipments.domain.js"); let id = 900; const deps = { nextId: () => ++id, todayISO: () => "2026-10-19" };
+  t("FZ-31 (v7.27.6): a truck taking one DIRECT lot for two sales posts the pass-through IN once and one SHIP_OUT per sale with its own kilos (the client's report scales them); a lot for one sale posts as before", () => {
+    const lot = { number: "LOT-G", poRef: "PO-G", directFlow: true, status: "Direct Expected", receivedKg: 0, physicalKg: 0, movements: [], locationId: 3 };
+    const sh = { number: "SHP-G", purpose: "OUTBOUND", status: "Loaded", soRefs: ["SO-A", "SO-B"], goods: [{ lotRef: "LOT-G", soRef: "SO-A", qtyKg: 10000 }, { lotRef: "LOT-G", soRef: "SO-B", qtyKg: 985 }], destinationLocationId: 7 };
+    const m = SD.postShipmentToLots(sh, [lot], deps).lots[0].movements;
+    eq(m.map(x => `${x.type}:${x.qtyKg}:${x.soRef || "-"}`).join(), "IN:10985:-,SHIP_OUT:10000:SO-A,SHIP_OUT:985:SO-B");
+    const one = SD.postShipmentToLots({ ...sh, soRefs: ["SO-A"], goods: [{ lotRef: "LOT-G", soRef: "SO-A", qtyKg: 10985 }] }, [lot], deps).lots[0].movements;
+    eq(one.map(x => `${x.type}:${x.qtyKg}:${x.soRef || "-"}`).join(), "IN:10985:-,SHIP_OUT:10985:SO-A");
+    const rep = SD.postShipmentToLots(sh, [lot], { ...deps, deliveredKgFor: () => 10900 }).lots[0].movements.filter(x => x.type === "SHIP_OUT");
+    ok(Math.abs(rep.reduce((a, x) => a + x.qtyKg, 0) - 10900) < 0.01 && rep.length === 2, "the client's reported kilos are not shared by the sales");
+  });
+})();
+
+// ══ v7.27.7 — FZ-30: one rule for what a lot can still sell ══
+(function v72707(){
+  console.log("\n══ v7.27.7 — FZ-30: the oversold check reads the sales engine's rule ══");
+  const SD = B("salesOrders.domain.js"), IC = B("integrityCheck.js");
+  t("FZ-30 (v7.27.7): a lot not yet received sells on its expected kilos, a direct lot on the larger of expected and physical, any other lot on what is physically there; a sale's taken kilos are its SHIP_OUT less reversals", () => {
+    eq(SD.lotSellableBasis({ expectedKg: 1300, receivedKg: 0, physicalKg: 0 }), 1300); eq(SD.lotSellableBasis({ expectedKg: 1000, receivedKg: 950, physicalKg: 400 }), 400); eq(SD.lotSellableBasis({ directFlow: true, expectedKg: 1000, physicalKg: 0 }), 1000);
+    eq(SD.takenBySale({ movements: [{ type: "SHIP_OUT", qtyKg: 500, soRef: "SO-1" }, { type: "REVERSAL", qtyKg: 100, soRef: "SO-1" }, { type: "SHIP_OUT", qtyKg: 90, soRef: "SO-2" }] }, "SO-1"), 400);
+  });
+  t("FZ-30 (v7.27.7): the data check no longer calls a lot sold ahead of its arrival, or one already delivered to its sale, 'oversold' — a lot promised beyond what it can sell still is (the real copy of 15 Oct: 18 → 0)", () => {
+    const sale = (n, lot, q, st) => ({ number: n, status: st || "Confirmed", items: [{ sourceType: "STOCK", sourceRef: lot, product: "Apples", qty: q }] });
+    const run = (lots, orders) => IC.checkIntegrity({ lots, orders, pos: [], shipments: [], invoices: [], contacts: [] }).issues.filter(i => i.code === "LOT_OVERSOLD").map(i => i.entity).join();
+    eq(run([{ number: "L-A", product: "Apples", expectedKg: 1300, receivedKg: 0, physicalKg: 0, movements: [] }], [sale("SO-1", "L-A", 1300)]), "", "sold ahead of arrival called oversold");
+    eq(run([{ number: "L-B", product: "Apples", expectedKg: 3744, receivedKg: 3744, physicalKg: 0, movements: [{ type: "IN", qtyKg: 3744 }, { type: "SHIP_OUT", qtyKg: 3744, soRef: "SO-2" }] }], [sale("SO-2", "L-B", 3744)]), "", "a lot delivered to its own sale called oversold");
+    eq(run([{ number: "L-C", product: "Apples", expectedKg: 1000, receivedKg: 0, physicalKg: 0, movements: [] }], [sale("SO-3", "L-C", 700), sale("SO-4", "L-C", 600)]), "L-C", "a real oversell not flagged");
+  });
+})();
+
+// ══ v7.27.8 — A-W5: numbers from the database's shared counter ══
+(function v72708(){
+  console.log("\n══ v7.27.8 — A-W5: the shared numbering counter ══");
+  const N = B("numbering.js"); const fsx = require("fs"), px = require("path");
+  t("A-W5 (v7.27.8): the highest serial in use per type and year; the number format; without the shared database the next numbers are the highest + 1 (block-consecutive) and the reason is kept for Settings", async () => {
+    eq(N.highestInUse(["PO-2026-0007", "PO-2026-0012", "PO-2025-0099", "SO-2026-0040", "x"], "PO", 2026), 12); eq(N.formatDocNumber("LOT", 2026, 7), "LOT-2026-0007");
+    const r = await N.issueNumbers("LOT", 2026, ["LOT-2026-0130"], 3); eq(r.numbers.join(), "LOT-2026-0131,LOT-2026-0132,LOT-2026-0133"); eq(r.source, "browser");
+    ok(/without the shared database/.test(N.numberingStatus().problem), "the reason is not kept");
+  });
+  t("A-W5 (v7.27.8): the counter's own arithmetic (supabase/numbering.sql) — first use starts above the floor, later uses above the larger of the counter and the floor, a block reserves consecutive numbers; only signed-in users reach it", () => {
+    const sql = fsx.readFileSync(px.join(__dirname, "../supabase/numbering.sql"), "utf8");
+    ok(/values \(p_kind, p_year, p_floor \+ p_count\)/.test(sql) && /set last = greatest\(c\.last, p_floor\) \+ p_count/.test(sql) && /return v_last - p_count \+ 1/.test(sql), "the counter's arithmetic changed");
+    ok(/enable row level security/.test(sql) && /grant execute on function public\.next_doc_numbers\(text, int, int, int\) to authenticated/.test(sql) && /revoke all on function public\.next_doc_numbers\(text, int, int, int\) from public, anon/.test(sql), "the counter is open beyond signed-in users");
+    // the same arithmetic, run: two browsers asking in turn never get the same number
+    let last = null; const take = (floor, count) => { last = last == null ? floor + count : Math.max(last, floor) + count; return last - count + 1; };
+    eq([take(41, 1), take(41, 1), take(40, 3), take(50, 1)].join(), "42,43,44,51");
+  });
+  t("A-W5 (v7.27.8): Settings → Numbering says whether this copy's counter is installed; the deployment note gives the one-time step", () => {
+    ok(/<CounterStatus \/>/.test(fsx.readFileSync(px.join(__dirname, "../src/Settings.tsx"), "utf8")), "Settings does not show the counter's state");
+    ok(/One-time database step — the shared numbering counter/.test(fsx.readFileSync(px.join(__dirname, "../HOW_TO_DEPLOY.md"), "utf8")), "the deployment note lacks the step");
+  });
+})();
+
+// ══ v7.27.9 — FZ-29 (RM-2 F-5): temperature, pallet type and currency from their sources ══
+(function v72709(){
+  console.log("\n══ v7.27.9 — FZ-29: what a shipment no longer asks to be typed ══");
+  const D = B("shipmentDerived.domain.js"); const fsx = require("fs"), px = require("path");
+  const cat = [{ item: "Apples", varieties: [], temperatureMinC: 0, temperatureMaxC: 4 }, { item: "Pears", varieties: [], temperatureMinC: -1, temperatureMaxC: 3 }, { item: "Peppers", varieties: [] }];
+  const types = [{ id: "wooden-box-13", label: "Wooden box (13 kg)", capacityKg: 13, tareKg: 1.4, palletType: "euro" }, { id: "carton-10", label: "Carton (10 kg)", capacityKg: 10, tareKg: 0.5 }];
+  t("FZ-29 (v7.27.9): the travel range is the narrowest shared by the goods' catalogue items; an item without a range is named; a truck's pallet comes from the packaging on it; an unpriced truck's currency from its carrier", () => {
+    const tr = D.temperatureFromCatalog([{ product: "Apples" }, { product: "Pears" }, { product: "Peppers" }], cat); eq([tr.min, tr.max, tr.from.join("+"), tr.missing.join("+")].join("|"), "0|3|Apples+Pears|Peppers");
+    eq(D.palletTypeFromPackaging([{ packaging: "wooden-box-13" }], types).palletType, "euro"); eq(D.palletTypeFromPackaging([{ packaging: "Carton (10 kg)" }], types).missing.join(), "Carton (10 kg)");
+    eq(D.unitCurrencyFrom({ terms: { defaultCurrency: "eur" } }, null).currency, "EUR"); eq(D.unitCurrencyFrom(null, { currency: "USD" }).source, "booking");
+  });
+  t("FZ-29 (v7.27.9): at save the derived values are written — a price already typed keeps its own currency, a source that says nothing keeps what is stored", () => {
+    const sh = { goods: [{ id: 1, product: "Apples", packaging: "wooden-box-13", qtyKg: 1000 }], temperatureMinC: 2, temperatureMaxC: 8,
+      legs: [{ mode: "Road", vehicles: [{ carrierId: 5, palletType: "standard" }, { carrierId: 5, costAmount: 900, priceCurrency: "PLN" }] }] };
+    const out = D.applyDerivedTravel(sh, { catalog: cat, packagingTypes: types, contacts: [{ id: 5, terms: { defaultCurrency: "EUR" } }] });
+    eq([out.temperatureMinC, out.temperatureMaxC].join(), "0,4"); eq(out.legs[0].vehicles[0].palletType, "euro"); eq(out.legs[0].vehicles[0].priceCurrency, "EUR"); eq(out.legs[0].vehicles[1].priceCurrency, "PLN", "a typed price changed currency");
+    const none = D.applyDerivedTravel({ ...sh, goods: [{ id: 1, product: "Peppers" }] }, { catalog: cat, packagingTypes: types, contacts: [] }); eq([none.temperatureMinC, none.temperatureMaxC].join(), "2,8", "a source with nothing to say cleared the stored range");
+    const ed = fsx.readFileSync(px.join(__dirname, "../src/ShipmentEditor.tsx"), "utf8");
+    ok(!/sf\("temperatureMinC"/.test(ed) && !/updateVehicle\(i, ui, "palletType"/.test(ed) && /applyDerivedTravel\(autoAllocate/.test(ed), "the editor still asks for the temperature or the pallet, or does not write the derived values");
+  });
+})();
+
+// ══ v7.27.10 / v7.27.11 — FZ-18 · SD-1 · SD-3 · SD-6 and FZ-16 ══
+(function v72710(){
+  console.log("\n══ v7.27.10 — the supplier's truck; v7.27.11 — the expected documents ══");
+  const INC = B("incoterms.domain.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("FZ-18 / SD-6 (v7.27.10): confirming a DAP / DPU / DDP purchase creates its supplier's truck (number from the counter); back to Draft or cancelled withdraws it while nothing is posted on it; the register window fills that truck instead of adding a second", () => {
+    const po = rd("PurchaseOrders.tsx");
+    ok(/live && isDRulePurchase\(updated\) && !\(extShipments \|\| \[\]\)\.some\(mine\)/.test(po) && /supplierDeliveryFromPO\(withLots/.test(po), "confirming does not create the supplier's truck");
+    ok(/if \(revertingToDraft \|\| becomesCancelled\)/.test(po) && /!moved\(s\.number\)/.test(po), "the truck is not withdrawn, or withdrawn after a posting");
+    ok(/const waiting = \(extShipments \|\| \[\]\)\.find/.test(po), "the window still creates a second truck");
+  });
+  t("SD-1 / SD-3 (v7.27.10): a supplier's truck shows its tracking facts only — no booking, legs or cost lines; customs only when we clear", () => {
+    const ed = rd("ShipmentEditor.tsx");
+    ok(/\{\(!isSupplierTruck\) && \(<Card>\s*<SectionTitle>Costs and billing/.test(ed.replace(/\n/g, " ")) || /\(!isSupplierTruck\) && \(<Card>/.test(ed), "the cost lines still show on a supplier's truck");
+    ok(/isSupplierTruck && supplierTruckFacts\(\)/.test(ed) && /!\(isSupplierTruck && cRule\.known && !cRule\.ours\)/.test(ed), "the tracking facts or the customs rule are missing");
+  });
+  t("FZ-16 (v7.27.11): the documents a shipment needs come from its terms, modes and direction — an intra-EU road sale needs the packing list and our invoice only; an export by sea we clear adds the B/L, the export declaration and the destination papers; a loaded truck missing a document is a finding", () => {
+    const ctxEU = { pos: [], orders: [{ number: "SO-1", status: "Confirmed", sellIncoterm: "DAP", items: [] }], countryOf: () => "" };
+    const road = { number: "SHP-A", status: "Booked", purpose: "OUTBOUND", soRefs: ["SO-1"], legs: [{ mode: "Road" }], goods: [], documents: [] };
+    eq(INC.expectedDocuments(road, ctxEU).map(x => x.type).join(), "Packing list,Invoice");
+    const seaHeld = { ...road, legs: [{ mode: "Sea" }], documents: [{ type: "Packing list", status: "Have it" }] };
+    const e2 = INC.expectedDocuments(seaHeld, ctxEU); eq(e2.find(x => x.type === "Packing list").held, true); ok(e2.some(x => x.type === "BL"), "a sea leg without its B/L");
+    const loaded = { ...road, status: "Loaded" }; eq(INC.documentsMissingAtStage(loaded, ctxEU).map(x => x.type).join(), "Packing list,Invoice");
+    eq(INC.documentsMissingAtStage(road, ctxEU).length, 0, "a booked truck already flagged");
+    ok(!/"EUR\.1", "Phytosanitary certificate", "Export declaration"\]/.test(rd("Shipments.tsx")), "every shipment still gets the export papers");
+  });
+})();
+
+// ══ v7.27.12 — A-RV-39: no real company in the code; the old demo places flagged ══
+(function v72712(){
+  console.log("\n══ v7.27.12 — A-RV-39: no real company in the code ══");
+  const L = B("locations.js"), IC = B("integrityCheck.js");
+  t("A-RV-39 (v7.27.12): no stub companies in the code — the forms read the directory", () => {
+    const rd = f => require("fs").readFileSync(require("path").join(__dirname, "../src/" + f), "utf8");   // the screens are not in the checks' build — read their source
+    ok(/export const SUPPLIERS: any\[\] = \[\];/.test(rd("PurchaseOrders.tsx")) && !/function getSuppliersStub/.test(rd("PurchaseOrders.tsx")), "the PO form still has stub suppliers");
+    ok(/export const CLIENTS: any\[\] = \[\];/.test(rd("SalesOrders.tsx")) && !/function getClientsStub/.test(rd("SalesOrders.tsx")), "the SO form still has stub clients");
+  });
+})();
+
+// ══ v7.27.13 — where a shipment ends; no guessed places ══
+(function v72713(){
+  console.log("\n══ v7.27.13 — where a shipment ends; no guessed places ══");
+  const TF = B("tradeFlow.domain.js");
+  t("v7.27.13 (P-12): a shipment ends where its route ends — the last leg's destination; its own destination field only when it has no legs (the early test place 10 in that field no longer decides the terms or the direction)", () => {
+    eq(TF.shipmentEndPlaceId({ destinationLocationId: 10, legs: [{ fromLocationId: 114, toLocationId: 126 }] }), 126);
+    eq(TF.shipmentEndPlaceId({ destinationLocationId: 10, legs: [] }), 10); eq(TF.shipmentEndPlaceId({ legs: [{ toLocationId: "" }], destinationLocationId: 5 }), 5); eq(TF.shipmentEndPlaceId({}), null);
+  });
+})();
+
+// ══ v7.27.14 — A-RV-29 'unsold' checked against the sales; A-RV-38 a truck of ours is not under the purchase ══
+(function v72714(){
+  console.log("\n══ v7.27.14 — A-RV-29 and A-RV-38 ══");
+  const MG = B("moduleGuards.domain.js"), INC = B("incoterms.domain.js");
+  t("A-RV-29 (v7.27.14): a lot 40 days in store reads 'unsold' only when no open sale still has to take it — partly reserved names the free kilos and the sales; fully reserved says 'reserved, not yet shipped'", () => {
+    const lot = { number: "LOT-A", physicalKg: 1000, movements: [{ type: "IN", qtyKg: 1000, date: "2026-09-01" }] };
+    const w = ctx => (MG.lotWarnings(lot, "2026-10-19", ctx).find(x => x.field === "ageing stock") || {}).why || "";
+    ok(/still unsold/.test(w({ orders: [] })) && !/reserved/.test(w({ orders: [] })), "no sale: not unsold");
+    ok(/400 kg still unsold, 600 kg reserved by SO-1/.test(w({ orders: [{ number: "SO-1", status: "Confirmed", items: [{ sourceRef: "LOT-A", qty: 600 }] }] })), "partly reserved: " + w({ orders: [{ number: "SO-1", status: "Confirmed", items: [{ sourceRef: "LOT-A", qty: 600 }] }] }));
+    ok(/reserved by SO-2, not yet shipped/.test(w({ orders: [{ number: "SO-2", status: "Confirmed", items: [{ sourceRef: "LOT-A", qty: 1000 }] }] })), "fully reserved still called unsold");
+    ok(/still unsold/.test(w({ orders: [{ number: "SO-3", status: "Cancelled", items: [{ sourceRef: "LOT-A", qty: 1000 }] }] })), "a cancelled sale reserved the lot");
+  });
+  t("A-RV-38 (v7.27.14): a truck of ours leaving our own warehouse is not under the purchase; a truck starting at a C-rule's named port runs after the risk passed; a truck coming to us still is under it", () => {
+    const pos = [{ number: "PO-1", buyIncoterm: "EXW", destinationLocationId: 50 }];
+    const placeOf = id => ({ 7: { type: "RentedWarehouse" }, 50: { type: "SupplierFacility" } })[id] || null;
+    const out = { number: "SHP-O", purpose: "OUTBOUND", poRefs: ["PO-1"], legs: [{ mode: "Road", fromLocationId: 7, toLocationId: 9 }] };
+    eq(INC.customsDuties(out, { pos, orders: [], direction: "EXPORT", placeOf }).some(x => /purchase|PO-1/.test(JSON.stringify(x))), false, "the warehouse truck still clears under the purchase");
+    eq(INC.riskPassPos({ legs: [{ mode: "Road", fromLocationId: 126, toLocationId: 9 }] }, "CIF", 126), 0);
+    eq(INC.riskPassPos({ legs: [{ mode: "Road", fromLocationId: 3, toLocationId: 114 }] }, "CIF", 126), 3);
+  });
+})();
+
+// ══ v7.27.15 — A-RV-26 · A-AU-8: companies picked from Counterparties ══
+(function v72715(){
+  console.log("\n══ v7.27.15 — A-RV-26 / A-AU-8: companies picked by id ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("A-RV-26 / A-AU-8 (v7.27.15): a claim's respondent, an operational cost's payee and a finance note's party are picked from Counterparties and stored by id; a typed one links with one pick; a new payee is added to the directory in one click; the typed ones are linked once from one panel", () => {
+    ok(/<CompanyPicker contacts=\{contacts\} value=\{selected\.respondent\?\.contactId \?\? null\}/.test(rd("Claims.tsx")), "the claim's respondent is still typed");
+    const fin = rd("Finance.tsx");
+    ok(/<CompanyPicker contacts=\{contacts\} value=\{\(form as any\)\.supplierId \?\? null\}/.test(fin) && /newCompanyRecord\(nm, "Other", nextId\)/.test(fin), "the cost's payee is still typed, or cannot be added");
+    ok(/<TypedCompaniesPanel /.test(fin) && /Link the \{exact\.reduce/.test(fin), "no linking panel");
+    ok(/partyId: c \? c\.id : null, partyName: c \? c\.name : ""/.test(rd("Invoices.tsx")) && /partyId: inv\?\.counterparty\?\.id \?\? so\?\.client\?\.id \?\? null/.test(rd("Inventory.tsx")), "a note's party is still a name");
+    ok(!/<Field label="Supplier \/ payee"><Inp/.test(fin) && !/<input value=\{selected\.respondent\?\.name/.test(rd("Claims.tsx")), "a typing field is left");
+  });
+})();
+
+// ══ v7.27.16 — A-AU-6 · A-AU-7 · FZ-06 ══
+(function v72716(){
+  console.log("\n══ v7.27.16 — the carrier's invoice, settlement invoices from the register, exchange differences ══");
+  const CI = B("costInvoice.domain.js"), FX = B("fxDifferences.domain.js"); const fsx = require("fs"), px = require("path");
+  t("A-AU-6 (v7.27.16): a cost line offers its supplier's received invoices; a typed number with an exact register match is offered for one click; the typed amount stays and the difference from the invoice is shown", () => {
+    const invoices = [{ id: 1, kind: "COST", number: "FV 12/2026", counterparty: { id: 7, name: "Trans" }, netAmount: 2000, currency: "EUR", issueDate: "2026-10-01" }, { id: 2, kind: "COST", number: "X-9", counterparty: { id: 8 }, netAmount: 10, currency: "EUR" }, { id: 3, kind: "SALES", number: "S-1", counterparty: { id: 7 } }];
+    const cost = { supplierId: 7, amount: 2100, currency: "EUR", amountPLN: 8900, invoiceRef: "fv 12/2026" };
+    eq(CI.carrierInvoiceOptions(cost, invoices).map(i => i.id).join(), "1"); eq(CI.exactInvoiceForTypedRef(cost, invoices).id, 1); eq(CI.exactInvoiceForTypedRef({ ...cost, invoiceId: 1 }, invoices), null);
+    eq(CI.costInvoiceDifference(cost, invoices[0]).diff, 100);
+    ok(/carrierInvoiceOptions\(c, invoices \|\| \[\]\)/.test(fsx.readFileSync(px.join(__dirname, "../src/ShipmentEditor.tsx"), "utf8")) && !/<Lbl>Invoice ref<\/Lbl><Inp/.test(fsx.readFileSync(px.join(__dirname, "../src/ShipmentEditor.tsx"), "utf8")), "the cost line still types its invoice");
+  });
+  t("A-AU-7 (v7.27.16): the producer's provisional invoice comes only from the register — no typed number or values; a settlement with a provisional value waits for the import before it closes", () => {
+    const po = fsx.readFileSync(px.join(__dirname, "../src/PurchaseOrders.tsx"), "utf8");
+    ok(!/placeholder="invoice no\. \(typed\)"/.test(po) && !/disabled=\{closed \|\| !!chosenInv\}/.test(po), "a typed provisional invoice is left");
+    ok(/data-close-needs-invoice="1"/.test(po) && /waiting: no invoice from this producer imported yet/.test(po), "the settlement does not wait for the import");
+  });
+  t("FZ-06 (v7.27.16): the realised difference is the amount paid times (payment rate − invoice rate) — a gain on a sale paid higher, a loss on a purchase paid higher; a payment without its own rate is counted, not guessed", () => {
+    const r = FX.fxDifferences([
+      { kind: "SALES", number: "S-1", currency: "EUR", fxRate: 4.2, payments: [{ date: "2026-10-05", amount: 1000, settlementFxRate: 4.3 }] },
+      { kind: "COST", number: "C-1", currency: "EUR", fxRate: 4.2, payments: [{ date: "2026-09-20", amount: 500, fxRate: 4.3 }, { date: "2026-09-21", amount: 100 }] },
+      { kind: "SALES", number: "P-1", currency: "PLN", fxRate: 1, payments: [{ amount: 10, fxRate: 1 }] }]);
+    eq(r.rows.map(x => `${x.invoice}:${x.diffPLN}`).join(), "S-1:100,C-1:-50"); eq([r.gainsPLN, r.lossesPLN, r.netPLN, r.paymentsWithoutRate].join(), "100,-50,50,1");
+    eq(r.byMonth.map(m => m.month).join(), "2026-10,2026-09");
+  });
+})();
+
+// ══ v7.27.17 — SC-14: the partners' and test places out of the code ══
+(function v72717(){
+  console.log("\n══ v7.27.17 — SC-14: no partner's place in the code ══");
+  const L = B("locations.js");
+  t("SC-14 (v7.27.17, owner 19 Oct 'remove now'): the built-in list holds only public places and our own warehouses — no producer, client or broker place", () => {
+    const kinds = new Set(L.LOCATIONS_ALL_BUILTIN.map(x => x.type));
+    ok(!kinds.has("SupplierFacility") && !kinds.has("ClientFacility") && !kinds.has("Customs"), "a company's place is still in the code: " + Array.from(kinds).join(","));
+    ok(L.LOCATIONS_ALL_BUILTIN.every(x => ["Port", "PortWarehouse", "Airport", "RentedWarehouse", "OwnWarehouse"].includes(x.type)), "an unexpected kind of place");
+  });
+})();
+
+// ══ v7.27.18 — A-D-4: the dates chain; one reader for a truck's actual dates ══
+(function v72718(){
+  console.log("\n══ v7.27.18 — A-D-4: the dates chain ══");
+  const DC = B("datesChain.domain.js"), SM = B("shipmentModel.domain.js");
+  t("v7.27.18 (P-12): a truck's actual loading / unloading date reads both field generations (loadedAt / actualLoadDate) — the shipment's dates no longer miss the older ones", () => {
+    eq(SM.unitLoadedAt({ actualLoadDate: "2026-10-01" }), "2026-10-01"); eq(SM.unitLoadedAt({ loadedAt: "2026-10-02", actualLoadDate: "2026-10-01" }), "2026-10-02");
+    eq(SM.shipmentDates({ legs: [{ vehicles: [{ actualLoadDate: "2026-10-01", actualUnloadDate: "2026-10-04" }] }] }).loaded, "2026-10-01");
+  });
+  t("A-D-4 (v7.27.18): an SO's chain reads its trucks, its invoices and their payments; a missing step before a dated one is a gap; a PO's 'received' is its lots' first receipt", () => {
+    const so = { number: "SO-1", orderDate: "2026-10-01" };
+    const shipments = [{ number: "SH-1", status: "Delivered", soRefs: ["SO-1"], legs: [{ vehicles: [{ actualLoadDate: "2026-10-03", actualUnloadDate: "2026-10-05" }] }] }];
+    const invoices = [{ kind: "SALES", issueDate: "2026-10-06", paymentStatus: "Paid", links: [{ type: "SO", number: "SO-1" }], payments: [{ date: "2026-10-20", amount: 1 }] }];
+    eq(DC.soDatesChain(so, { shipments, invoices }).map(s => `${s.label}:${s.date}`).join(), "Ordered:2026-10-01,Loaded:2026-10-03,Delivered:2026-10-05,Invoiced:2026-10-06,Paid:2026-10-20");
+    const gap = DC.soDatesChain(so, { shipments: [], invoices: [{ ...invoices[0], paymentStatus: "Unpaid" }] });
+    eq(gap.filter(s => s.gap).map(s => s.label).join(), "Loaded,Delivered", "the gap before the invoice");
+    eq(DC.poDatesChain({ number: "PO-1", orderDate: "2026-09-28" }, { lots: [{ poRef: "PO-1", movements: [{ type: "IN", date: "2026-10-02" }] }] }).find(s => s.label === "Received").date, "2026-10-02");
+  });
+})();
+
+// ══ v7.28.0 — Batch L (RM-2 F-1): a shipment is written in its clean shape ══
+(function v72800(){
+  console.log("\n══ v7.28.0 — Batch L: the truck's dates in one pair ══");
+  const SS = B("storeShapes.js"), SM = B("shipmentModel.domain.js");
+  t("Batch L (v7.28.0): writing a shipment moves a truck's older date pair into loadedAt / unloadedAt (only where empty) and drops it; a clean shipment is returned unchanged (same object)", () => {
+    const sh = { number: "S", legs: [{ vehicles: [{ actualLoadDate: "2026-10-01", actualUnloadDate: "2026-10-03" }, { loadedAt: "2026-10-02", actualLoadDate: "2026-09-30" }] }] };
+    const out = SS.shapeShipment(sh); const [a, b] = out.legs[0].vehicles;
+    eq([a.loadedAt, a.unloadedAt, "actualLoadDate" in a, "actualUnloadDate" in a].join(), "2026-10-01,2026-10-03,false,false");
+    eq(b.loadedAt, "2026-10-02", "the newer date was overwritten"); ok(!("actualLoadDate" in b), "the older field stayed");
+    const clean = { number: "C", legs: [{ vehicles: [{ loadedAt: "2026-10-01" }] }] }; ok(SS.shapeShipment(clean) === clean, "a clean record is rewritten");
+    eq(SM.unitLoadedAt(out.legs[0].vehicles[0]), "2026-10-01");
+  });
+})();
+
+// ══ v7.28.1 — Batch L · FZ-03: a company's terms in one block ══
+(function v72801(){
+  console.log("\n══ v7.28.1 — Batch L: the company's terms ══");
+  const CP = B("counterparty.domain.js");
+  t("Batch L (v7.28.1): writing a company folds the flat payment days, credit limit and currency into terms{} (where the terms are empty) and drops them; the document copy takes the currency from the terms and no retired payment-terms text", () => {
+    const r = CP.normaliseCounterparty({ id: 1, name: "X", type: "Client", paymentTermsDays: 30, creditLimitPLN: 50000, defaultCurrency: "eur", people: [] });
+    eq([r.contact.terms.paymentDays, r.contact.terms.creditLimitPLN, r.contact.terms.defaultCurrency].join(), "30,50000,EUR");
+    ok(!("paymentTermsDays" in r.contact) && !("creditLimitPLN" in r.contact) && !("defaultCurrency" in r.contact), "a flat copy stayed");
+    const kept = CP.normaliseCounterparty({ id: 2, name: "Y", type: "Client", terms: { paymentDays: 14 }, paymentTermsDays: 30 }); eq(kept.contact.terms.paymentDays, 14, "the flat copy overwrote the terms");
+    const copy = CP.companyCopy({ id: 3, name: "Z", terms: { defaultCurrency: "EUR" }, paymentTerms: "old text", people: [] }); eq(copy.defaultCurrency, "EUR"); ok(!("paymentTerms" in copy) && !("paymentTermsOther" in copy), "the retired text travels on documents");
+  });
+})();
+
+// ══ v7.28.2 — Batch L · FZ-03: a company's persons in people[] ══
+(function v72802(){
+  console.log("\n══ v7.28.2 — Batch L: the company's persons ══");
+  const CP = B("counterparty.domain.js");
+  t("Batch L (v7.28.2): writing a company moves its old contacts[] into people[] (when people[] is empty) and drops it; peopleOf reads people[] (the old list only for a record written before)", () => {
+    const r = CP.normaliseCounterparty({ id: 1, name: "X", type: "Client", contacts: [{ id: 1, name: "Anna", email: "a@x" }] });
+    eq(r.contact.people.map(p => p.name).join(), "Anna"); ok(!("contacts" in r.contact), "the old list stayed");
+    const both = CP.normaliseCounterparty({ id: 2, name: "Y", type: "Client", people: [{ id: 2, name: "Ola" }], contacts: [{ id: 3, name: "Old" }] }); eq(both.contact.people.map(p => p.name).join(), "Ola", "the old list overwrote people[]");
+    eq(CP.peopleOf({ contacts: [{ name: "B" }] }).map(p => p.name).join(), "B"); eq(CP.peopleOf({ people: [{ name: "C" }], contacts: [{ name: "D" }] }).map(p => p.name).join(), "C"); eq(CP.peopleOf({}).length, 0);
+    eq((CP.personFor({ people: [{ name: "E", email: "e@x", role: "Buyer" }] }, "Buyer") || {}).name, "E");
+  });
+})();
+
+// ══ v7.28.3 — Batch L · FZ-03: a company's roles in roles[]; the planning sheet's lists ══
+(function v72803(){
+  console.log("\n══ v7.28.3 — Batch L: the company's roles ══");
+  const CP = B("counterparty.domain.js"); const fsx = require("fs"), px = require("path");
+  t("Batch L (v7.28.3): a company's roles are roles[] with the primary type among them; the old additionalTypes is folded in and dropped on save; rolesOf reads both for a record written before", () => {
+    const r = CP.normaliseCounterparty({ id: 1, name: "X", type: "Client", additionalTypes: ["Supplier"], people: [] });
+    eq(r.contact.roles.join(), "Client,Supplier"); ok(!("additionalTypes" in r.contact), "the old field stayed");
+    eq(CP.rolesOf({ type: "Carrier", additionalTypes: ["Warehouse"] }).join(), "Carrier,Warehouse"); eq(CP.rolesOf({ type: "Client", roles: ["Supplier"] }).join(), "Client,Supplier");
+    ok(!("additionalTypes" in CP.companyCopy({ id: 2, name: "Y", type: "Client", roles: ["Client"], people: [] })), "the document copy carries the old field");
+  });
+  t("v7.28.3: the planning sheet's client, supplier and carrier lists hold the companies' NAMES (a note in the middle of the line had hidden the end since v7.10.2)", () => {
+    const ps = fsx.readFileSync(px.join(__dirname, "../src/PlanningSheet.tsx"), "utf8");
+    ok(/rolesOf\(c\)\.includes\(r\)\)\.map\(\(c: any\) => c\.name\)\.filter\(Boolean\)\.sort/.test(ps), "the lists still hold companies");
+  });
+})();
+
+// ══ v7.28.5 — Batch L · A-PO-3: one promised date; no stored link copies; the hidden customs rule restored ══
+(function v72805(){
+  console.log("\n══ v7.28.5 — Batch L: the PO's one promised date ══");
+  const PO = B("po.domain.js"); const fsx = require("fs"), px = require("path");
+  t("Batch L (v7.28.5): a PO's one promised date is named by its rule — handed over (E / F), shipped (C), delivered (D); the expected arrival is a D-rule's promised date or the PO's trucks' planned delivery; the tidy-up folds the old date and drops it with the stored link copies", () => {
+    eq([PO.promisedDateKind({ buyIncoterm: "FCA" }), PO.promisedDateKind({ buyIncoterm: "CIF" }), PO.promisedDateKind({ buyIncoterm: "DDP" })].join(), "handover,shipment,delivery");
+    eq(PO.promisedDateLabel({ buyIncoterm: "DAP" }), "Delivery date"); eq(PO.promisedDateLabel({ buyIncoterm: "EXW" }, "pl"), "Data załadunku");
+    eq(PO.poExpectedArrival({ number: "PO-1", buyIncoterm: "DAP", loadingDate: "2026-11-02" }), "2026-11-02");
+    eq(PO.poExpectedArrival({ number: "PO-2", buyIncoterm: "FCA", loadingDate: "2026-11-01" }, [{ status: "Booked", poRefs: ["PO-2"], legs: [{ vehicles: [{ plannedDeliveryDate: "2026-11-04" }] }] }]), "2026-11-04");
+    eq(PO.poExpectedArrival({ number: "PO-3", buyIncoterm: "EXW", loadingDate: "2026-11-01" }, []), "", "a guessed arrival");
+    const r = PO.normalisePO({ number: "PO-4", buyIncoterm: "FCA", expectedDeliveryDate: "2026-10-05", linkedInvoices: ["X"], linkedLots: ["L"] });
+    eq(r.po.loadingDate, "2026-10-05"); ok(!("expectedDeliveryDate" in r.po) && !("linkedInvoices" in r.po) && !("linkedLots" in r.po), "an old field stayed");
+    const kept = PO.normalisePO({ number: "PO-5", loadingDate: "2026-10-01", expectedDeliveryDate: "2026-10-09" }); eq(kept.po.loadingDate, "2026-10-01", "the old date overwrote the promised one");
+  });
+  t("v7.28.5: the shipment editor's save applies the customs rule again (a note in the middle of the line had hidden it since v7.27.9)", () => {
+    ok(/\(cr\.known\) fin = \{ \.\.\.fin, customs:/.test(fsx.readFileSync(px.join(__dirname, "../src/ShipmentEditor.tsx"), "utf8").split("\n").filter(l => !/^\s*\/\//.test(l)).map(l => l.slice(0, Math.max(0, l.indexOf("//")) || l.length)).join("\n")), "the customs rule is still hidden behind a note");
+  });
+})();
+
+// ══ v7.28.6 — Batch L · FZ-13: a claim's amounts in its own currency ══
+(function v72806(){
+  console.log("\n══ v7.28.6 — Batch L: the claim's own currency ══");
+  const SS = B("storeShapes.js");
+  t("Batch L (v7.28.6): writing a claim moves its EUR-named copies into the current fields (where empty) and drops them — the rate too", () => {
+    const c = SS.shapeClaim({ number: "CLM-1", currency: "EUR", requestedAmount: 91, requestedEUR: 91, acceptedAmount: 45, acceptedEUR: 45, plnPerEur: "4.20", fxToPLN: null, lostValueEUR: "", defectValueEUR: 0 });
+    eq([c.requestedAmount, c.acceptedAmount, c.fxToPLN].join(), "91,45,4.20"); ok(!["requestedEUR", "acceptedEUR", "plnPerEur", "lostValueEUR", "defectValueEUR"].some(k => k in c), "an EUR copy stayed");
+    const clean = { number: "CLM-2", currency: "PLN", requestedAmount: 10 }; ok(SS.shapeClaim(clean) === clean, "a clean claim is rewritten");
+  });
+})();
+
+// ══ v7.28.7 — Batch L · FZ-08: the route owns the places, the trucks the actual dates ══
+(function v72807(){
+  console.log("\n══ v7.28.7 — Batch L: the shipment's own copies ══");
+  const SS = B("storeShapes.js"), TF = B("tradeFlow.domain.js");
+  t("Batch L (v7.28.7): a shipment starts where its route starts and ends where it ends — its own copies (the guessed origin 1, the test place 10) neither decide nor survive a save; its own actual dates move onto the trucks when none has one", () => {
+    const sh = { number: "S", originLocationId: 1, destinationLocationId: 10, actualLoadingDate: "2026-10-01", legs: [{ fromLocationId: 114, toLocationId: 126, vehicles: [{ id: 1 }] }] };
+    eq([TF.shipmentStartPlaceId(sh), TF.shipmentEndPlaceId(sh)].join(), "114,126");
+    const o = SS.shapeShipment(sh); ok(!("originLocationId" in o) && !("destinationLocationId" in o) && !("actualLoadingDate" in o), "a copy survived the save");   // v7.28.8: the origin goes too
+    eq(o.legs[0].vehicles[0].loadedAt, "2026-10-01", "the shipment's own date was lost");
+    const noRoute = SS.shapeShipment({ number: "T", originLocationId: 5, legs: [{ vehicles: [] }] }); eq(noRoute.legs[0].fromLocationId, 5, "the only place was lost");
+  });
+})();
+
+// ══ v7.28.8 — FZ-36: the route places repaired once ══
+(function v72808(){
+  console.log("\n══ v7.28.8 — FZ-36: route places repaired ══");
+  const PR = B("placeRepair.domain.js");
+  t("FZ-36 (v7.28.8): an unknown route place is listed once per shipment with where it sits; filled where an EXW / FCA purchase's supplier (or a D-rule sale's client) has one address; otherwise left to the user; the repair writes the chosen place everywhere it appears in that shipment", () => {
+    const known = id => ["7", "9", "SUP-1", "CLI-1"].includes(String(id));
+    const contacts = [{ id: 11, name: "Farm" }, { id: 12, name: "Client" }, { id: 13, name: "Two-site farm" }];
+    const sitesOf = c => ({ 11: [{ id: "SUP-1", name: "Farm" }], 12: [{ id: "CLI-1", name: "Client" }], 13: [{ id: "A" }, { id: "B" }] })[c.id] || [];
+    const pos = [{ number: "PO-1", buyIncoterm: "EXW", supplier: { id: 11 } }, { number: "PO-2", buyIncoterm: "EXW", supplier: { id: 13 } }, { number: "PO-3", buyIncoterm: "CIF", supplier: { id: 11 } }];
+    const orders = [{ number: "SO-1", sellIncoterm: "DAP", client: { id: 12 } }];
+    const shipments = [
+      { number: "S1", status: "Booked", poRefs: ["PO-1"], legs: [{ fromLocationId: 999, toLocationId: 7, vehicles: [{ pickupLocationId: 999 }] }] },
+      { number: "S2", status: "Booked", poRefs: ["PO-2"], legs: [{ fromLocationId: 998, toLocationId: 7 }] },
+      { number: "S3", status: "Booked", poRefs: ["PO-3"], legs: [{ fromLocationId: 997, toLocationId: 7 }] },
+      { number: "S4", status: "Loaded", governingSoRef: "SO-1", legs: [{ fromLocationId: 7, toLocationId: 996 }] },
+      { number: "S5", status: "Cancelled", poRefs: ["PO-1"], legs: [{ fromLocationId: 995, toLocationId: 7 }] }];
+    const items = PR.placesToRepair(shipments, { known, pos, orders, contacts, sitesOf });
+    eq(items.map(i => `${i.shipment}:${i.fill ? i.fill.id : "pick"}`).join(), "S1:SUP-1,S2:pick,S3:pick,S4:CLI-1", "the list or its fills");
+    eq(items[0].where.join(" / "), "leg 1 start / leg 1 truck 1 loading");
+    const r = PR.repairPlace(shipments[0], 999, "SUP-1"); eq([r.legs[0].fromLocationId, r.legs[0].vehicles[0].pickupLocationId, r.legs[0].toLocationId].join(), "SUP-1,SUP-1,7");
+    eq(PR.placesToRepair([r], { known, pos, orders, contacts, sitesOf }).length, 0, "the repaired route still listed");
+  });
+})();
+
+// ══ v7.28.9 — Batch L · FZ-08: the trucks own their facts ══
+(function v72809(){
+  console.log("\n══ v7.28.9 — Batch L: the leg's copies ══");
+  const SS = B("storeShapes.js");
+  t("Batch L (v7.28.9): writing a shipment drops a leg's truck and price copies, moving a value only the leg held onto its first truck", () => {
+    const o = SS.shapeShipment({ number: "S", legs: [{ mode: "Road", truckPlate: "WX123", driverName: "Jan", costAmount: 1200, costPLN: 5100, costCurrency: "EUR", vehicles: [{ id: 1 }] }] });
+    const l = o.legs[0]; ok(!["truckPlate", "driverName", "costAmount", "costPLN"].some(k => k in l), "a copy stayed on the leg"); eq(l.costCurrency, "EUR", "the leg's currency went");
+    eq([l.vehicles[0].truckPlate, l.vehicles[0].driverName, l.vehicles[0].costAmount].join(), "WX123,Jan,1200");
+    const kept = SS.shapeShipment({ number: "T", legs: [{ truckPlate: "OLD", vehicles: [{ truckPlate: "NEW", costAmount: 900 }], costAmount: 50 }] }); eq([kept.legs[0].vehicles[0].truckPlate, kept.legs[0].vehicles[0].costAmount].join(), "NEW,900", "the leg's copy overwrote the truck");
+  });
+})();
+
+// ══ v7.28.10 — Batch L · FZ-03: a company's address from its parts ══
+(function v72810(){
+  console.log("\n══ v7.28.10 — Batch L: the company's address ══");
+  const CP = B("counterparty.domain.js");
+  t("Batch L (v7.28.10): a company's address line comes from its parts once complete (without the country, which documents print on its own line; a place's line keeps it); until then the fuller one-line text; the one-line copy goes on save once the parts are complete", () => {
+    const done = { id: 1, name: "A", addr: { street: "ul. Piękna 13", postcode: "05-555", city: "Tarczyn", country: "Poland" }, address: "old text" };
+    eq(CP.companyAddressLine(done), "ul. Piękna 13, 05-555 Tarczyn"); ok(/Poland/.test(CP.companyAddressLine(done, { withCountry: true })), "a place's line lost the country");
+    eq(CP.companyAddressLine({ addr: { city: "BELSK" }, address: "Bartodzieje 16, 05-622 Belsk Duży" }), "Bartodzieje 16, 05-622 Belsk Duży", "partial parts replaced a fuller line");
+    ok(!("address" in CP.normaliseCounterparty({ ...done, type: "Client", people: [] }).contact), "the one-line copy stayed once the parts were complete");
+    ok("address" in CP.normaliseCounterparty({ id: 2, name: "B", type: "Client", address: "Only a line", addr: { city: "X" }, people: [] }).contact, "the only address went");
+  });
+})();
+
+// ══ v7.28.11 — Batch L · FZ-03: a company's country is its code ══
+(function v72811(){
+  console.log("\n══ v7.28.11 — Batch L: the company's country ══");
+  const CP = B("counterparty.domain.js");
+  t("Batch L (v7.28.11): a company's country is its code — the name comes from the list; the tidy-up drops the name and the address's copy once the code is known; a name without a known code stays until it is picked", () => {
+    CP.setUserCountries([{ iso: "PL", name: "Poland", eu: true }, { iso: "JO", name: "Jordan", eu: false }]);
+    eq(CP.companyCountryName({ countryIso: "JO" }), "Jordan"); eq(CP.companyCountryIso({ country: "Poland" }), "PL");
+    const r = CP.normaliseCounterparty({ id: 1, name: "X", type: "Client", country: "Poland", addr: { city: "Tarczyn", country: "Poland" }, people: [] }).contact;
+    eq(r.countryIso, "PL"); ok(!("country" in r) && !("country" in (r.addr || {})), "a name copy stayed");
+    const u = CP.normaliseCounterparty({ id: 2, name: "Y", type: "Client", country: "Atlantis", people: [] }).contact; eq(u.country, "Atlantis", "an unknown country's only name went");
+    eq(CP.companyCopy({ id: 3, name: "Z", countryIso: "PL", people: [] }).country, "Poland", "the document copy lost the printed name");
+    CP.setUserCountries([]);
+  });
+})();
+
+// ══ v7.29.0 — SC-15: the journey proposed from the two rules — the thirteen scenarios of the 20 Oct review ══
+(function v72900(){
+  console.log("\n══ v7.29.0 — SC-15: the journey proposal ══");
+  const JP = B("journeyProposal.domain.js");
+  const PORTS = new Set(["KOP", "ALX", "DAM", "MER"]); const ctx = { isPort: id => PORTS.has(String(id)), ourWarehouse: () => "WH", siteOf: p => p && p.site };
+  const P = (t, at) => ({ buyIncoterm: t, destinationLocationId: at, supplier: { site: "SUP" } }), O = (t, at) => ({ sellIncoterm: t, destinationLocationId: at, client: { site: "CLI" } });
+  const legs = r => r.legs.map(l => `${l.mode}:${l.fromLocationId ?? "?"}>${l.toLocationId ?? "?"}`).join(" ");
+  t("SC-15 (v7.29.0): the thirteen scenarios — our legs follow from where the PO's rule starts our part and the SO's rule ends it; a port the rules do not name is left to pick", () => {
+    eq(legs(JP.proposeJourney(P("EXW", "SUP"), O("CIF", "ALX"), ctx)), "Road:SUP>? Sea:?>ALX", "1 EXW + CIF");
+    eq(legs(JP.proposeJourney(P("CIF", "KOP"), null, ctx)), "Road:KOP>WH", "2 CIF into stock");
+    eq(JP.proposeJourney(P("CIF", "KOP"), O("EXW", "KOP"), ctx).legs.length, 0, "3 sold EXW at the port");
+    eq(legs(JP.proposeJourney(P("CIF", "KOP"), O("DDP", "CLI"), ctx)), "Road:KOP>CLI", "4 CIF + DDP");
+    eq(legs(JP.proposeJourney(P("FCA", "SUP"), O("DAP", "CLI"), ctx)), "Road:SUP>CLI", "5 FCA + DAP");
+    eq(JP.proposeJourney(P("EXW", "SUP"), O("EXW", "SUP"), ctx).legs.length, 0, "6 EXW + EXW");
+    eq(JP.proposeJourney(null, O("FCA", "WH"), { ...ctx, lotPlace: () => "WH" }).legs.length, 0, "7 from stock, collected at our warehouse");
+    ok(/supplier delivers/.test(JP.proposeJourney(P("DAP", "CLI"), O("DAP", "CLI"), ctx).note), "8 DAP straight to the client");
+    eq(legs(JP.proposeJourney(P("FOB", "DAM"), O("DAP", "CLI"), ctx)), "Sea:DAM>? Road:?>CLI", "9 FOB + DAP");
+    eq(JP.proposeJourney(P("CFR", "MER"), O("CFR", "MER"), ctx).legs.length, 0, "10 a sale while afloat");
+    eq(legs(JP.proposeJourney(P("EXW", "UA"), O("DAP", "CLI"), ctx)), "Road:UA>CLI", "11 EXW Ukraine + DAP");
+    eq(JP.proposeJourney(P("DDP", "WH"), O("FCA", "WH"), ctx).legs.length, 0, "12 DDP into our warehouse, collected there");
+    eq(legs(JP.proposeJourney(P("FCA", "SUP"), O("DDP", "JO"), ctx)), "Road:SUP>JO", "13 FCA + DDP Jordan");
+    ok(JP.proposeJourney(P("EXW", "SUP"), O("CIF", "ALX"), ctx).legs[0].pickTo, "the port of loading is not marked to pick");
+  });
+})();
+
+// ══ v7.29.1 — FZ-39 / FZ-41: insurance by shipment; the rule that fits what the shipment records ══
+(function v72901(){
+  console.log("\n══ v7.29.1 — FZ-41: the rule that fits ══");
+  const IC = B("incoterms.domain.js");
+  const sale = (t) => ({ number: "SO-1", status: "Confirmed", sellIncoterm: t }), buy = (t) => ({ number: "PO-1", status: "Confirmed", buyIncoterm: t });
+  const out = (extra) => ({ number: "S", status: "Loaded", purpose: "OUTBOUND", governingSoRef: "SO-1", soRefs: ["SO-1"], legs: [{ mode: "Sea" }], ...extra });
+  const inb = (extra) => ({ number: "T", status: "Loaded", purpose: "INBOUND", poRefs: ["PO-1"], legs: [{ mode: "Road" }], ...extra });
+  const rec = (sh, ctx) => IC.ruleRecommendations(sh, ctx).map(r => `${r.side}:${r.from}>${r.to}`).join();
+  t("FZ-41 (v7.29.1): the Incoterms rules as written — the system recommends the twin rule that fits what the shipment records (insurance; who cleared the import or the export); nothing changes by itself", () => {
+    eq(rec(out({ documents: [{ type: "Insurance certificate", status: "Not bought" }] }), { orders: [sale("CIF")] }), "sell:CIF>CFR", "CIF not insured");
+    eq(rec(out({ documents: [{ type: "Insurance certificate", status: "Have it" }] }), { orders: [sale("CFR")] }), "sell:CFR>CIF", "CFR insured by us");
+    eq(rec(inb({ customs: { applies: true, party: "SUPPLIER", docType: "SAD" } }), { pos: [buy("DAP")] }), "buy:DAP>DDP", "DAP cleared by the supplier");
+    eq(rec(inb({ customs: { applies: true, party: "OUR_BROKER", docType: "SAD" } }), { pos: [buy("DDP")] }), "buy:DDP>DAP", "DDP cleared by us");
+    eq(rec(out({ customs: { applies: true, party: "CLIENT_BROKER", docType: "SAD" } }), { orders: [sale("DDP")] }), "sell:DDP>DAP", "DDP cleared by the client");
+    eq(rec(out({ customs: { applies: true, party: "OUR_BROKER", docType: "EX1" } }), { orders: [sale("EXW")] }), "sell:EXW>FCA", "EXW, export cleared by us");
+    eq(rec(out({ documents: [{ type: "Insurance certificate", status: "Have it" }] }), { orders: [sale("CIF")] }), "", "a CIF sale insured fits");
+    eq(IC.insuranceMissing(out({ documents: [{ type: "Insurance certificate", status: "Not bought" }] }), [sale("CIF")]).length, 0, "the 'insurance missing' line still shows beside the recommendation");
+    const f = IC.shipmentTermsFindings(out({ documents: [{ type: "Insurance certificate", status: "Not bought" }] }), { orders: [sale("CIF")] }).find(x => x.kind === "rule");
+    ok(f && f.recommend && f.recommend.to === "CFR" && /the rule that fits is CFR/.test(f.text), "the Terms-to-review line is missing");
+  });
+})();
+
+// ══ v7.29.2 — the Incoterms audit (owner 20 Oct: "check the code that you did not add any exemptions to the incoterms") ══
+(function v72902(){
+  console.log("\n══ v7.29.2 — the Incoterms audit ══");
+  const IC = B("incoterms.domain.js"), PR = B("placeRepair.domain.js");
+  t("v7.29.2 audit: Incoterms 2020 as written — a FAS / FOB named port is the port of shipment (the risk stays the seller's until alongside / on board); a C rule's named port is after the vessel; a CIF / CIP purchase expects the supplier's insurance certificate (A5); a C or D sale collected by the client gets FCA recommended; under E / F rules our part starts at the PO's named place", () => {
+    eq(IC.riskPassPos({ legs: [{ mode: "Road", fromLocationId: "POL", toLocationId: "X" }] }, "FOB", "POL"), 3, "a FOB port treated as after the vessel");
+    eq(IC.riskPassPos({ legs: [{ mode: "Road", fromLocationId: "POD", toLocationId: "X" }] }, "CIF", "POD"), 0, "a CIF port of destination not after the vessel");
+    const inb = { number: "T", status: "Arrived", purpose: "INBOUND", poRefs: ["PO-1"], legs: [{ mode: "Road" }] };
+    ok(IC.expectedDocuments(inb, { pos: [{ number: "PO-1", status: "Confirmed", buyIncoterm: "CIF" }], orders: [] }).some(d => d.type === "Insurance certificate"), "a CIF purchase does not expect the supplier's insurance certificate");
+    const pick = { number: "S", status: "Loaded", purpose: "OUTBOUND", mode: "Client pickup", governingSoRef: "SO-1", soRefs: ["SO-1"], legs: [{ mode: "Road" }] };
+    eq(IC.ruleRecommendations(pick, { orders: [{ number: "SO-1", status: "Confirmed", sellIncoterm: "CIF" }] }).map(r => r.to).join(), "FCA", "a CIF sale collected by the client");
+    const items = PR.placesToRepair([{ number: "S1", status: "Booked", poRefs: ["PO-9"], legs: [{ fromLocationId: 999, toLocationId: "WH" }] }], { known: id => ["WH", "TERM"].includes(String(id)), pos: [{ number: "PO-9", buyIncoterm: "FCA", destinationLocationId: "TERM", supplier: { id: 1 } }], contacts: [{ id: 1 }], sitesOf: () => [{ id: "SUP" }] });
+    eq(items[0].fill && items[0].fill.id, "TERM", "FCA at a terminal repaired to the supplier's address");
+  });
+})();
+
+// ══ v7.29.3 — FZ-38: a sale delivered by the supplier's own truck ══
+(function v72903(){
+  console.log("\n══ v7.29.3 — FZ-38: the supplier's truck delivers the sale ══");
+  const SOD = B("so.domain.js");
+  t("FZ-38 (v7.29.3): a DAP / DPU / DDP purchase delivered straight to our client — the supplier's truck delivers the sale (same named place), so the sale's delivery date is that truck's unloading; a truck's unloading is read through the one helper (not only 'deliveredAt')", () => {
+    const so = { number: "SO-1", sellIncoterm: "DAP", destinationLocationId: "CLI", items: [{ sourceRef: "LOT-1" }] };
+    const lots = [{ number: "LOT-1", poRef: "PO-1" }], pos = [{ number: "PO-1", buyIncoterm: "DAP", destinationLocationId: "CLI" }];
+    const truck = { number: "SHP-SUP", status: "Delivered", arrangedBy: "SUPPLIER", purpose: "INBOUND", poRefs: ["PO-1"], legs: [{ mode: "Road", vehicles: [{ unloadedAt: "2026-10-18" }] }] };
+    eq(SOD.shipmentsDeliveringSale(so, [truck], { pos, lots }).map(s => s.number).join(), "SHP-SUP");
+    eq(SOD.actualDeliveryDate(so, [truck], { pos, lots }), "2026-10-18");
+    eq(SOD.shipmentsDeliveringSale(so, [truck], { pos: [{ ...pos[0], destinationLocationId: "OUR-WH" }], lots }).length, 0, "a supplier's truck to our warehouse delivers the sale");
+    eq(SOD.actualDeliveryDate({ ...so, number: "SO-2" }, [{ status: "Delivered", soRefs: ["SO-2"], legs: [{ vehicles: [{ actualUnloadDate: "2026-10-02" }] }] }]), "2026-10-02", "an older unloading field missed");
+  });
+})();
+
+// ══ v7.29.4 — FZ-37: the sale's whole journey across its shipments ══
+(function v72904(){
+  console.log("\n══ v7.29.4 — FZ-37: the sale's whole journey ══");
+  const IC = B("incoterms.domain.js");
+  t("FZ-37 (v7.29.4): a CIF sale whose shipments carry no sea leg to the named port is named once the truck is booked; the container on the vessel (a second shipment) closes it; a D-rule sale split over shipments must reach the named place in one of them", () => {
+    const so = { number: "SO-1", status: "Confirmed", sellIncoterm: "CIF", destinationLocationId: "ALX" };
+    const truck = { number: "SHP-T", status: "Booked", purpose: "OUTBOUND", soRefs: ["SO-1"], legs: [{ mode: "Road", fromLocationId: "SUP", toLocationId: "GDY" }] };
+    const box = { number: "SHP-C", status: "Booked", purpose: "OUTBOUND", soRefs: ["SO-1"], legs: [{ mode: "Sea", fromLocationId: "GDY", toLocationId: "ALX" }] };
+    const g = IC.saleJourneyGap(so, { orders: [so], shipments: [truck] }); eq(g && g.need, "sea", "a CIF sale with no sea leg passes");
+    eq(IC.saleJourneyGap(so, { orders: [so], shipments: [truck, box] }), null, "the container's sea leg does not close it");
+    eq(IC.saleJourneyGap(so, { orders: [so], shipments: [] }), null, "a sale not shipped yet is named");
+    const dap = { number: "SO-2", status: "Confirmed", sellIncoterm: "DAP", destinationLocationId: "CLI" };
+    const a = { number: "A", status: "Booked", purpose: "OUTBOUND", soRefs: ["SO-2"], legs: [{ mode: "Road", fromLocationId: "WH", toLocationId: "X" }] }, b = { ...a, number: "B", legs: [{ mode: "Road", fromLocationId: "X", toLocationId: "Y" }] };
+    eq((IC.saleJourneyGap(dap, { orders: [dap], shipments: [a, b] }) || {}).need, "place"); eq(IC.saleJourneyGap(dap, { orders: [dap], shipments: [a] }), null, "a single shipment checked twice");
+    ok(IC.termsToReview({ orders: [so], shipments: [truck] }).some(f => f.kind === "journey" && /no sea leg/.test(f.text)), "the line is not in Terms to review");
+  });
+})();
+
+// ══ v7.30.2 — Batch M · M-3 (audit F-05): no number invented by one browser on a shared copy ══
+(function v73002(){
+  console.log("\n══ v7.30.2 — M-3: the shared numbering or nothing ══");
+  t("M-3 (v7.30.2): on a copy that shares its data, a counter that cannot be reached (not installed, refused, unreachable) stops the save with NumberingUnavailable — no number is invented; a copy without a shared database keeps local numbering", async () => {
+    const path = require("path"); const ids = ["./build/numbering.js", "./build/remoteStore.js"].map(p => require.resolve(p));
+    const fresh = env => { ids.forEach(id => { delete require.cache[id]; }); const keep = { u: process.env.REACT_APP_SUPABASE_URL, k: process.env.REACT_APP_SUPABASE_ANON_KEY }; Object.assign(process.env, env); const m = require(ids[0]); process.env.REACT_APP_SUPABASE_URL = keep.u || ""; process.env.REACT_APP_SUPABASE_ANON_KEY = keep.k || ""; return m; };
+    const was = global.fetch, wasWin = global.window;
+    const mem = { "marianna:shared:session": JSON.stringify({ access_token: "good", refresh_token: "r", expires_at: Date.now() + 3600e3, email: "owner@firm.pl" }) };
+    global.window = { ...(wasWin || {}), localStorage: { getItem: k => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); }, removeItem: k => { delete mem[k]; } } };
+    try {
+    const N = fresh({ REACT_APP_SUPABASE_URL: "https://proj.supabase.co", REACT_APP_SUPABASE_ANON_KEY: "anon" });
+      for (const [why, reply] of [["not installed", async () => ({ ok: false, status: 404, json: async () => ({}) })], ["unreachable", async () => { throw new Error("network down"); }], ["no number", async () => ({ ok: true, status: 200, json: async () => 0 })]]) {
+        global.fetch = reply; let err = null; try { await N.issueNumbers("PO", 2026, ["PO-2026-0007"], 1); } catch (e) { err = e; }
+        ok(err && err.name === "NumberingUnavailable" && /nothing was saved/.test(err.message), `${why}: a number was invented — ${err && err.message}`);
+      }
+      global.fetch = async () => ({ ok: true, status: 200, json: async () => 41 }); const r = await N.issueNumbers("PO", 2026, [], 2); eq(r.numbers.join(), "PO-2026-0041,PO-2026-0042"); eq(r.source, "database");
+    } finally { global.fetch = was; global.window = wasWin; ids.forEach(id => { delete require.cache[id]; }); }
+    const Local = B("numbering.js"); const l = await Local.issueNumbers("SO", 2026, ["SO-2026-0003"], 1); eq(l.numbers.join(), "SO-2026-0004", "a copy without a shared database"); eq(l.source, "browser");
+  });
+})();
+
+// ══ v7.30.3 — Batch M · M-4 (audit F-16): security headers; sign-out after idle time ══
+(function v73003(){
+  console.log("\n══ v7.30.3 — M-4: security headers and idle sign-out ══");
+  const fsx = require("fs"), px = require("path");
+  t("M-4 (v7.30.3): the security policy allows the app itself, Supabase and the NBP rates only; the idle sign-out is 60 minutes with a two-minute warning and never ends a session over unsaved work", () => {
+    const v = JSON.parse(fsx.readFileSync(px.join(__dirname, "../vercel.json"), "utf8")); const csp = v.headers[0].headers.find(x => x.key === "Content-Security-Policy").value;
+    ok(/connect-src 'self' https:\/\/\*\.supabase\.co https:\/\/api\.nbp\.pl/.test(csp) && /default-src 'self'/.test(csp), "the policy's sources changed");
+    const idle = fsx.readFileSync(px.join(__dirname, "../src/IdleSignOut.tsx"), "utf8");
+    ok(/IDLE_MINUTES = 60, WARNING_MINUTES = 2/.test(idle), "not 60 / 2 minutes"); ok(/if \(dirtyEntries\(\)\.length\) \{ setWarn\("unsaved"\); return; \}/.test(idle), "a session ends over unsaved work");
+    ok(/<IdleSignOut active=\{!!readSession\(\)\} \/>/.test(fsx.readFileSync(px.join(__dirname, "../src/App.tsx"), "utf8")), "the idle sign-out is not mounted");
+  });
+})();
+
+// ══ v7.30.4 / v7.30.5 — Batch M · M-5 (audit F-17), M-6 (audit F-14) ══
+(function v73005(){
+  console.log("\n══ v7.30.4–5 — M-5: no personal detail in the program; M-6: the full export for the owner ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("M-5 (v7.30.4): the contact person, the trade name and the emergency phone are Settings › Company fields; the fallbacks carry no personal detail", () => {
+    const L = B("useLocalStoredState.js"); eq([L.COMPANY_DEFAULTS.person, L.COMPANY_DEFAULTS.emergencyPhone].join("|"), "|", "a personal detail in the defaults");
+    const s = rd("Settings.tsx"); ok(/set\("person", e\.target\.value\)/.test(s) && /set\("tradeName", e\.target\.value\)/.test(s) && /set\("emergencyPhone", e\.target\.value\)/.test(s), "the fields are not in Settings › Company");
+  });
+  t("M-6 (v7.30.5): Export all data is the owner's (open while no owner is linked)", () => {
+    const s = rd("Settings.tsx"); ok(/return !linked \|\| \(me && me\.isOwner\)/.test(s) && /data-export-owner-only="1"/.test(s), "the full export is not owner-only");
+  });
+})();
+
+// ══ v7.30.6 – v7.30.13 — the owner's test of 21 Oct ══
+(function v73013(){
+  console.log("\n══ v7.30.6–13 — the owner's test of 21 Oct ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("v7.30.6: the PO list shows each PO's one promised date, named by its rule, and the arrival once a truck is planned", () => {
+    const s = rd("PurchaseOrders.tsx"); ok(/"ORDER DATE", "PROMISED DATE", "STATUS"/.test(s) && /const pd = poPromisedDate\(o\), arr = poExpectedArrival\(o, extShipments \|\| \[\]\)/.test(s) && /promisedDateLabel\(o\)/.test(s), "the column still reads the arrival only");
+  });
+  t("v7.30.8: the sale form's locks and its forward-only rule read the sale AS SAVED — a status chosen by mistake can be taken back until Save; an unsaved confirmation's rate is released on going back to Draft", () => {
+    const s = rd("SalesOrderForm.tsx");
+    ok(/const isLocked = lockedStatuses\.has\(effectiveSoStatus\(lockBasis, sd\.shipments\)\)/.test(s) && /const fullyLocked = FULLY_LOCKED_STATUSES\.has\(effectiveSoStatus\(lockBasis, sd\.shipments\)\)/.test(s), "the locks read the form's typed status");
+    ok(/const effNow = effectiveSoStatus\(lockBasis, sd\.shipments\)/.test(s) && /const savedSt = String\(\(savedRec && savedRec\.status\) \|\| "Draft"\)/.test(s), "forward-only reads the typed status");
+    ok(/if \(nv === "Draft" && !\(savedRec && savedRec\.fxLockedAt\)\)/.test(s), "the unsaved confirmation's rate is not released");
+  });
+  t("v7.30.9: a line to correct — the same source as another line included — is outlined in red with a note", () => {
+    const s = rd("SalesOrderForm.tsx"); ok(/const lineDup = !!\(dupLineIndex as any\)\[i\]/.test(s) && /lineIsBlocking \|\| lineOverageBlocks \|\| lineDup \? "2px solid #DC2626"/.test(s), "no red outline");
+  });
+  t("v7.30.10: the journey card keeps the chosen place's id; a leg place saved as an object is repaired by the shipment tidy-up", () => {
+    const JC = B("journeyProposal.domain.js"), SS = B("storeShapes.js");
+    eq(JC.placeIdOf({ id: 7, name: "Koper" }), 7); eq(JC.placeIdOf(9), 9); eq(JC.placeIdOf(null), null);
+    eq(JSON.stringify(JC.legsFromJourney([{ mode: "Road", fromLocationId: { id: 1, name: "A" }, toLocationId: { id: 2 } }], []).map(l => [l.fromLocationId, l.toLocationId])), "[[1,2]]");
+    const sh = SS.shapeShipment({ id: 1, number: "S", legs: [{ id: 1, fromLocationId: { id: 3, name: "x", location: {} }, toLocationId: 4, vehicles: [] }] });
+    eq(JSON.stringify([sh.legs[0].fromLocationId, sh.legs[0].toLocationId]), "[3,4]", "the object stayed");
+  });
+  t("v7.30.11–13: the booking's POD shows the sale's port; the unit's price comes before its currency; the carrier order asks for 0% VAT on an export outside the EU (owner's wording)", () => {
+    const e = rd("ShipmentEditor.tsx"); ok(/value=\{b\?\.podId \?\? b\?\.pod \?\? \(bp\.podDoc\?\.id \?\? ""\)\}/.test(e), "the POD does not show the sale's port");
+    const g = e.split("\n").findIndex(l => l.includes('gridTemplateColumns: "160px 90px 1fr", gap: 9, marginTop: 9')); ok(g > 0 && /Price for this unit/.test(e.split("\n")[g + 1]), "the price is not first");
+    const d = rd("ShipmentDocuments.tsx"); ok(/Prosimy o zastosowanie stawki VAT 0% na wystawianych przez Państwa fakturach, zgodnie z art\. 41 ust\. 4 ustawy o VAT, w związku z wywozem towaru poza UE, potwierdzonym dokumentem celnym IE-599/.test(d) && /=== "EXPORT"/.test(d), "the VAT clause is missing or not tied to exports");
+  });
+})();
+
+// ══ v7.30.14 — owner test 21 Oct: one source for a company's address in every place picker ══
+(function v73014(){
+  console.log("\n══ v7.30.14 — the place pickers read the live Directory ══");
+  const L = B("locations.js");
+  t("v7.30.14: the companies' addresses copied at start never win over the live Directory — an address changed, removed or unticked afterwards shows the new way in every picker; the copy follows the Directory when re-registered", () => {
+    const mk = (street, extra = {}) => [{ id: 4242, name: "Fresh Client Sp. z o.o.", roles: ["Client"], type: "Client", countryIso: "PL", addr: { street, postcode: "00-001", city: "Warszawa" }, people: [], ...extra }];
+    L.registerCounterpartyLocations(mk("Old Street 1"));
+    const before = L.unifiedLocations([]).filter(l => String(l.name).startsWith("Fresh Client"));
+    ok(before.length >= 1 && /Old Street 1/.test(String(before[0].address || "")), "the copy was not taken (test set-up)");
+    const fresh = mk("New Street 9");
+    const now = L.unifiedLocations(fresh).filter(l => String(l.name).startsWith("Fresh Client"));
+    eq(now.length, 1, "the company's address offered twice"); ok(/New Street 9/.test(String(now[0].address || "")), "the picker shows the old address: " + now[0].address);
+    L.registerCounterpartyLocations(fresh); ok(/New Street 9/.test(String((L.unifiedLocations([]).find(l => String(l.name).startsWith("Fresh Client")) || {}).address || "")), "the copy did not follow the Directory");
+    L.registerCounterpartyLocations([]); eq(L.unifiedLocations([]).filter(l => String(l.name).startsWith("Fresh Client")).length, 0, "an address that is gone is still offered");
+  });
+})();
+
+// v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
+Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
+});

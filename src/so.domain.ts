@@ -7,6 +7,7 @@ import { paymentDaysOf } from "./legacy";
 import { paymentBasisOf, dueDateFor } from "./po.domain";
 import { S, r0 } from "./format";
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { unitLoadedAt, unitUnloadedAt } from "./shipmentModel.domain";   // v7.29.3 (P-12): the trucks' dates, one reader
 import { carriagePaidToDestination, deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
@@ -31,15 +32,6 @@ export function lotAvailabilityByGrade(lot: any, orders: any[], excludeOrderId?:
   return { I, II, unsorted: Math.max(0, r0(num(lot?.physicalKg) - num(g.I) - num(g.II))) };
 }
 
-// ── SO-2: unit follows the PO line ────────────────────────────────────────────
-export function lineFromPOLine(poLine: any): { pricingUnit: string; boxes: any; kgPerBox: any; unit: string; coloration?: any; cnCode?: any; packaging?: any } {
-  const unit = String(poLine?.pricingUnit || "kg").toLowerCase() === "box" ? "box" : "kg";
-  return {
-    coloration: poLine?.coloration ?? "",   // v6.99.26 (owner): the sale inherits what was bought
-    cnCode: poLine?.cnCode ?? "",
-    packaging: poLine?.packaging ?? "", pricingUnit: unit, boxes: poLine?.boxes ?? null, kgPerBox: poLine?.kgPerBox ?? null, unit: unit === "box" ? "box" : "kg" };
-}
-
 // ── SO-3: the delivery EVENT depends on the sell incoterm ─────────────────────
 export type DeliveryEvent = "discharged" | "delivered" | "loaded";
 export function deliveryEventFor(sellIncoterm: any): { event: DeliveryEvent; where: string } {
@@ -49,23 +41,30 @@ export function deliveryEventFor(sellIncoterm: any): { event: DeliveryEvent; whe
   return { event: "loaded", where: "handover at loading (EXW / FCA / FOB)" };   // EXW FCA FOB FAS
 }
 const FIELD: Record<DeliveryEvent, string> = { discharged: "dischargedAt", delivered: "deliveredAt", loaded: "loadedAt" };
-/** Actual delivery = the LAST unit event of the incoterm's kind on the shipments carrying this order. */
-export function actualDeliveryDate(so: any, shipments: any[]): string {
-  const soNo = S(so?.number); const f = FIELD[deliveryEventFor(so?.sellIncoterm).event];
-  const dates: string[] = [];
-  (shipments || []).forEach(sh => {
-    if (!sh || String(sh.status) === "Cancelled") return;
-    const carries = (sh.soRefs || []).map(String).includes(soNo) || (sh.goods || []).some((g: any) => String(g.soRef) === soNo);
-    if (!carries) return;
-    (sh.legs || []).forEach((l: any) => (l.vehicles || []).forEach((u: any) => { if (S(u[f])) dates.push(S(u[f])); }));
-    // header mirrors as fallback (pre-v6.85 data)
-    if (f === "deliveredAt" && S(sh.actualDeliveryDate)) dates.push(S(sh.actualDeliveryDate));
-    if (f === "loadedAt" && S(sh.actualLoadingDate)) dates.push(S(sh.actualLoadingDate));
-  });
+/** v7.29.3 (FZ-38, P-12): THE SHIPMENTS THAT DELIVER A SALE — those carrying it, and the supplier's own truck of one of its purchases
+ *  when that purchase's named place is the sale's named place (a DAP / DPU / DDP purchase delivered straight to our client: the supplier's
+ *  truck is created from the PO alone, yet it is the truck that delivers the sale). */
+export function shipmentsDeliveringSale(so: any, shipments: any[], ctx: { pos?: any[]; lots?: any[] } = {}): any[] {
+  const soNo = S(so?.number); const place = S(so?.destinationLocationId);
+  const lotNos = new Set((so?.items || []).map((it: any) => S(it?.sourceRef)).filter(Boolean));
+  const poNos = new Set((ctx.lots || []).filter((l: any) => l && lotNos.has(S(l.number))).map((l: any) => S(l.poRef)).filter(Boolean));
+  const carries = (sh: any) => (sh.soRefs || []).map(String).includes(soNo) || S(sh.governingSoRef) === soNo || (sh.goods || []).some((g: any) => String(g.soRef) === soNo);
+  const suppliersTruck = (sh: any) => !!place && S(sh.arrangedBy).toUpperCase() === "SUPPLIER" && (sh.poRefs || []).some((no: any) => poNos.has(S(no)) && S(((ctx.pos || []).find((p: any) => S(p?.number) === S(no)) || {}).destinationLocationId) === place);
+  return (shipments || []).filter((sh: any) => sh && String(sh.status) !== "Cancelled" && (carries(sh) || suppliersTruck(sh)));
+}
+/** Actual delivery = the LAST truck event of the incoterm's kind on the shipments delivering this order (v7.29.3: the trucks' own dates,
+ *  read through the one helper, and the supplier's truck that delivers it). */
+export function actualDeliveryDate(so: any, shipments: any[], ctx: { pos?: any[]; lots?: any[] } = {}): string {
+  const ev = deliveryEventFor(so?.sellIncoterm).event; const dates: string[] = [];
+  shipmentsDeliveringSale(so, shipments, ctx).forEach((sh: any) => (sh.legs || []).forEach((l: any) => (l.vehicles || []).forEach((u: any) => {
+    if (!u) return;
+    const d = ev === "loaded" ? unitLoadedAt(u) : ev === "delivered" ? (S(u[FIELD.delivered]) || unitUnloadedAt(u)) : (S(u[FIELD.discharged]) || (S(l?.mode) === "Sea" ? unitUnloadedAt(u) : ""));
+    if (S(d)) dates.push(S(d).slice(0, 10));
+  })));
   return dates.sort().slice(-1)[0] || "";
 }
-export function deliveryDelayDays(so: any, shipments: any[]): number | null {
-  const planned = S(so?.deliveryDate).slice(0, 10), actual = actualDeliveryDate(so, shipments).slice(0, 10);
+export function deliveryDelayDays(so: any, shipments: any[], ctx: { pos?: any[]; lots?: any[] } = {}): number | null {
+const planned = S(so?.deliveryDate).slice(0, 10), actual = actualDeliveryDate(so, shipments, ctx).slice(0, 10);
   if (!planned || !actual) return null;
   return Math.round((new Date(actual + "T00:00:00").getTime() - new Date(planned + "T00:00:00").getTime()) / 86400000);
 }
@@ -169,8 +168,7 @@ export function planPackingResult(
   const byLine = new Map<string, Array<{ o: any; idx: number }>>();
   orders.forEach((o: any) => { if (!o || String(o.status) === "Cancelled") return; (o.items || []).forEach((it: any, idx: number) => {
     let pl = "";
-    if (it.sourceType === "PO" && String(it.sourceRef) === String(po.number)) pl = it.sourceLineId != null ? String(it.sourceLineId) : byFacts(it);
-    else if (it.sourceType === "STOCK" && poLots.has(String(it.sourceRef))) { const l = poLots.get(String(it.sourceRef)); pl = l?.poLineId != null ? String(l.poLineId) : byFacts(it); }
+    if (it.sourceType === "STOCK" && poLots.has(String(it.sourceRef))) { const l = poLots.get(String(it.sourceRef)); pl = l?.poLineId != null ? String(l.poLineId) : byFacts(it); }
     if (!pl) return; if (!byLine.has(pl)) byLine.set(pl, []); byLine.get(pl)!.push({ o, idx });
   }); });
   const soChanges: string[] = [], questions: PackingPlan["questions"] = [], unpriced: string[] = [];

@@ -1,5 +1,5 @@
 // ─── v6.44.0 (test-round #7): packaging tare → gross weight ──────────────────
-// Gross weight is driven by the PACKAGING, which differs per product. Hazem's
+// Gross weight is driven by the PACKAGING, which differs per product. the owner's
 // ruling + data: apples ship in wooden boxes that hold 13 kg of fruit (net) and
 // the empty box weighs 1.4 kg. So gross is NOT a flat percentage — it's the net
 // plus the tare of however many boxes are needed:
@@ -32,7 +32,9 @@ export interface PackagingType {
    *  must include it (21 wooden pallets ≈ 525 kg — material for axle limits). */
   palletTareKg?: number;
   appliesTo?: string[];    // product items this is the default for (e.g. ["Apples"])
-}
+  /** v7.27.9 (FZ-29, RM-2 F-5): the pallet the boxes go on — a truck's pallet type is read from its goods' packaging. */
+  palletType?: "standard" | "euro";
+  }
 
 export const PACKAGING_SEED: PackagingType[] = [
   // 13 kg wooden box, 1.4 kg empty, 72 to a pallet — the real figures from the

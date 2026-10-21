@@ -6,15 +6,15 @@ import { FX_RATES } from "./fx";
 import { ItemVarietyPicker, PackagingPicker, CatalogValuePicker } from "./ProductPicker";   // v7.18.0 (A-AU-1) · v7.18.3 (A-AU-5)
 import { PAGE_MAX } from "./ui";
 import { cnCodeForItem } from "./productCatalog";
-import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES, copyPOLine } from "./po.domain";
+import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES, copyPOLine, promisedDateLabel, poPromisedDate, promisedDateKind } from "./po.domain";
 import { documentTotals, totalsLine, effectiveCounts } from "./pricingUnit.domain";
 import { isEstimatedLine } from "./so.domain";
-import { localTodayISO } from "./dates";
+import { localTodayISO , formatDMY } from "./dates";
 import { nextId } from "./ids";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
 import { readCountries } from "./Contacts";
 import { recordAudit } from "./audit";
-import { warehouseAddressLocations, unifiedLocations, locationById, counterpartyLocations } from "./locations";
+import { warehouseAddressLocations, unifiedLocations, locationById, counterpartyLocations, placeGroup } from "./locations";
 import { CURRENCIES, FlowBadge, Inp, PO_STATUSES, QUALITY_GRADES, SUPPLIERS, Sel, StatusBadge, fmtMoney, fmtNum, netTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
 import { nbpRateBefore, orderBufferPct, orderRateFrom } from "./fx";   // v7.13.4 (A-AU-2)
 import { parseNum } from "./numbers";
@@ -41,7 +41,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
   // unlinking every downstream document first, then deleting.
   const poNum = order.number;
   // v6.81.0 (D-54): a DRAFT sale is an intention, not a dependency — it must not lock the PO it draws from (Draft↔Draft deadlock, PO-2026-0031).
-  const hasLinkedSO = (allSOs || []).some((so: any) => so.status !== "Cancelled" && so.status !== "Draft" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+  const hasLinkedSO = false;
   const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
   // v6.35.0: a lot whose linked shipments are ALL cancelled must not keep the PO locked —
   // otherwise cancelling everything to fix the PO leaves it permanently trapped. We treat a
@@ -110,11 +110,11 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
     }
     sf("status", newStatus);
   };
-  const WAREHOUSE_ADDRESS = ((unifiedLocations(contacts || []).find((l: any) => ["WAREHOUSE", "OWN"].includes(String(l.legacyType))) || {}) as any).address || (warehouseAddressLocations(contacts || [])[0] || {}).name || "";
+  const WAREHOUSE_ADDRESS = ((unifiedLocations(contacts || []).find((l: any) => placeGroup(l) === "OWN") || {}) as any).address || (warehouseAddressLocations(contacts || [])[0] || {}).name || "";
   const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const copyItem = (idx) => setOrder(o => ({ ...o, items: copyPOLine(o.items, idx, nextId()) }));   // v6.99.77 (A-POL-1)
-  const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
+  const sSupplier = (id) => sf("supplier", suppliers.find(s => String(s.id) === String(id)) || null);   // v7.27.1 (FZ-24): chosen by id — two companies of one name never swap
 
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
@@ -194,9 +194,9 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
               </div>
               <div>
                 <Lbl>Supplier</Lbl>
-                <Sel disabled={isLocked} value={order.supplier?.name || ""} onChange={e => sSupplier(e.target.value)}>
+                <Sel disabled={isLocked} value={order.supplier?.id != null ? String(order.supplier.id) : ""} onChange={e => sSupplier(e.target.value)}>
                   <option value="">— select —</option>
-                  {suppliers.map(s => <option key={s.id} value={s.name}>{s.name} {s.country ? `· ${s.country}` : ""} {s.nip ? `(NIP ${s.nip})` : ""}</option>)}
+                  {suppliers.map(s => <option key={s.id} value={String(s.id)}>{s.name} {s.country ? `· ${s.country}` : ""} {s.nip ? `(NIP ${s.nip})` : ""}</option>)}
                 </Sel>
               </div>
               <div>
@@ -214,14 +214,9 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                 <Inp disabled={isLocked} value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" noFuture title="The date the PO was created/agreed with the supplier" />
               </div>
               <div>
-                <Lbl>Loading date</Lbl>
-                <Inp disabled={isLocked} value={order.loadingDate} onChange={e => sf("loadingDate", e.target.value)} type="date" title="When the supplier loads our truck / container — goods leave origin" />
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Goods leave origin</div>
-              </div>
-              <div>
-                <Lbl>Expected delivery date</Lbl>
-                <Inp disabled={isLocked} value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed handover point" />
-                {/* FB-14: 'means' dropdown removed — the handover point (derived from the incoterm) already says where. */}
+                <Lbl>{promisedDateLabel(order)}</Lbl>{/* v7.28.5 (Batch L · A-PO-3, P-9): ONE promised date, named by the Incoterms rule — the separate expected delivery date is gone */}
+                <Inp disabled={isLocked} value={poPromisedDate(order)} onChange={e => sf("loadingDate", e.target.value)} type="date" title="The date the supplier promises — handed over at the named place (E / F rules), shipped from origin (C rules) or delivered at the named place (D rules)" />
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{promisedDateKind(order) === "delivery" ? "The supplier's truck arrives at the named place" : promisedDateKind(order) === "shipment" ? "The goods leave origin (the supplier ships)" : "The goods are handed over at the named place (our truck loads)"}</div>
               </div>
               {/* v7.16.9 (BP-9): 'Actual availability' left the form — the real date is the shipment's arrival / the lot's receipt; the old field stays on the record */}
             </div>
@@ -358,7 +353,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                 <Lbl>FX rate to PLN {isLocked && <span style={{ color: "#888", fontWeight: 400 }}>(locked)</span>}</Lbl>
                 <Inp type="number" value={order.fxRate ?? ""} onChange={() => {}} disabled title="NBP of the day before the order date, with the safety buffer — filled automatically (A-AU-2)" />
                 {!isLocked && String(order.currency || "PLN").toUpperCase() !== "PLN" && <div data-fx-order="1" style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{fxNoteO} {order.fxAgreedReason ? <button onClick={() => setOrder((o: any) => ({ ...o, fxAgreedReason: "" }))} style={{ fontSize: 10, border: "none", background: "none", color: "#2563EB", cursor: "pointer" }}>use NBP</button> : <button onClick={agreeRate} style={{ fontSize: 10, border: "none", background: "none", color: "#2563EB", cursor: "pointer" }}>agreed rate…</button>}</div>}
-                {order.fxLockedAt && <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>Locked on {order.fxLockedAt}</div>}
+                {order.fxLockedAt && <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>Locked on {formatDMY(order.fxLockedAt)}</div>}
               </div>
             </div>
           </Card>

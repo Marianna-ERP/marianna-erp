@@ -12,7 +12,7 @@ import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.dom
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
-import { unifiedLocations, locationById , isPortType } from "./locations";
+import { unifiedLocations, locationById, isPortType, placeGroup } from "./locations";
 import { localTodayISO, formatDMY, addDaysISO } from "./dates";
 import { shipmentTradeDirection, shipmentTradeEnds, MOVEMENT_LABELS } from "./tradeFlow.domain";
 import { recordAudit } from "./audit";
@@ -21,7 +21,8 @@ import { useUnsavedGuard } from "./unsaved";
 import { r0 } from "./format";
 import { LotDetail } from "./InventoryLot";
 import { MovementModal } from "./InventoryWindows";
-import { activeParties } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
+import { unitLoadedAt, unitUnloadedAt } from "./shipmentModel.domain";   // v7.28.0 (Batch L)
+import { activeParties , rolesOf } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
 import { ownershipAtPoint } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
@@ -37,7 +38,7 @@ const LOCATION_TYPES: Record<string, any> = {
 };
 
 // Safe lookup: never throws if a location carries a type not in the table above
-// (e.g. a new legacyType added later). Falls back to a neutral default.
+// (a group added later). Falls back to a neutral default.
 const DEFAULT_LOCATION_TYPE = { label: "Location", color: "#6B7280", bg: "#F3F4F6", icon: "📍" };
 export function locType(t: string) {
   return LOCATION_TYPES[t] || DEFAULT_LOCATION_TYPE;
@@ -51,7 +52,7 @@ export function locType(t: string) {
 // pickers see a counterparty added this session without a browser refresh.
 export function mergedLocations(contacts: any[]) {
   // v6.86.0 (owner ruling): ONE source — unifiedLocations() — no module-level merge, no demo seeds.
-  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, placeType: l.type, type: l.legacyType }));   // v7.21.14: the real type kept as placeType
+  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, placeType: l.type, type: placeGroup(l) }));   // v7.27.3 (FZ-26): the screen group worked out from the type; the real type kept as placeType
 }
 
 // Lot status lifecycle — PHYSICAL states only.
@@ -125,7 +126,7 @@ function journeyFromShipments(lot: any, shipments: any[], locResolve: (id: any) 
   };
   const stages: any[] = [];
   legs.forEach((lg: any, i: number) => {
-    // v6.99.16 (A-R12-4): places live on the UNITS — the leg's from/to are legacy defaults (SHP-0035 showed a stale "Biedronka")
+    // v6.99.16 (A-R12-4): places live on the UNITS — the leg's from/to are legacy defaults (SHP-0035 showed a stale demo place)
     const us = (lg.vehicles || []);
     const unitFrom = us.map((u: any) => String(u.pickupText || "").trim()).find(Boolean);
     const unitTo = us.map((u: any) => String(u.deliveryText || "").trim()).find(Boolean);
@@ -157,8 +158,7 @@ export function journeyForLot(lot: any, shipments: any[] = [], orders: any[] = [
   // stored value), sell from the governing SO that draws on this lot/PO.
   const lotBuyIncoterm = lot.buyIncoterm || lot.purchaseIncoterm || "";
   const govSo = (orders || []).find((o: any) => o.status !== "Cancelled" && (o.items || []).some((it: any) =>
-    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) ||
-    (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
+    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))));
   const lotSellIncoterm = govSo?.sellIncoterm || "";
   // Phase C: prefer a stored journey, then one DERIVED FROM REAL SHIPMENTS, and only
   // then fall back to the legacy flow template (for old lots with neither).
@@ -205,15 +205,15 @@ function legsForLot(lot: any, shipments: any[]) {
 function legActualLoad(leg: any) {
   if (!leg) return null;
   // Prefer a per-unit actual load date, else the leg's actual loading date.
-  const units = leg.transportUnits || leg.units || [];
-  const u = units.find((x: any) => x.actualLoadDate);
-  return (u && u.actualLoadDate) || leg.actualLoadingDate || null;
+  const units = leg.vehicles || [];   // v7.28.9 (Batch L): the trucks — the old unit lists are gone (these lines had never read the trucks)
+  const u = units.find((x: any) => unitLoadedAt(x));   // v7.28.0 (Batch L): one reader
+  return (u && unitLoadedAt(u)) || leg.actualLoadingDate || null;
 }
 function legActualDeliver(leg: any) {
   if (!leg) return null;
-  const units = leg.transportUnits || leg.units || [];
-  const u = units.find((x: any) => x.actualUnloadDate);
-  return (u && u.actualUnloadDate) || leg.actualDeliveryDate || null;
+  const units = leg.vehicles || [];   // v7.28.9 (Batch L): the trucks — the old unit lists are gone (these lines had never read the trucks)
+  const u = units.find((x: any) => unitUnloadedAt(x));   // v7.28.0 (Batch L): one reader
+  return (u && unitUnloadedAt(u)) || leg.actualDeliveryDate || null;
 }
 
 // v6.x: drive each journey stage's status + actual date from real data — matching
@@ -356,33 +356,7 @@ export const MOVEMENT_TYPES: Record<string, any> = {
 export const today = localTodayISO();
 
 export function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
-export const countryOfLot = (id: any): string => String((locById(id) || {}).country || "");   // v7.12.1 (A-TD-2): a place's country, for the trade-direction rule
-
-// ─── SO STUB ────────────────────────────────────────────────────────────────
-// Mirrors the 5 seed SOs from SalesOrders.tsx so reservations show up realistically
-// in this standalone module. Replaced with live SO state on integration.
-// Reserving semantics: SO_PRE_DISPATCH_STATUSES in ./types, applied by salesOrders.domain (B0-2 resolved:
-// the old 7-status set here was dead code — availability always used the 3-status pre-dispatch set).
-
-function getSOsStub() {
-  return [
-    { id: 1, number: "SO-2026-0094", status: "Delivered", clientName: "Biedronka",
-      items: [{ product: "Golden Delicious", qty: 8000, sourceType: "STOCK", sourceRef: "LOT-2026-0091" }] },
-    { id: 2, number: "SO-2026-0088", status: "Invoiced", clientName: "Lidl Polska",
-      items: [{ product: "Golden Delicious", qty: 2400, sourceType: "STOCK", sourceRef: "LOT-2026-0091" }] },
-    { id: 3, number: "SO-2026-0091", status: "Shipped", clientName: '"Euro-Papryka" Paweł Myziak',
-      items: [
-        { product: "Papryka Kapia",      qty: 6000, sourceType: "STOCK", sourceRef: "LOT-2026-0086" },
-        { product: "Yellow Bell Pepper", qty: 3600, sourceType: "STOCK", sourceRef: "LOT-2026-0099" },
-        { product: "Red Bell Pepper",    qty: 1200, sourceType: "STOCK", sourceRef: "LOT-2026-0095" },
-      ] },
-    { id: 4, number: "SO-2026-0102", status: "Confirmed", clientName: "Biedronka",
-      items: [{ product: "Red Bell Pepper", qty: 5000, sourceType: "PO", sourceRef: "PO-2026-0121", sourceLineId: 1 }] },
-    { id: 5, number: "SO-2026-0105", status: "Draft", clientName: "Metro Cash & Carry",
-      items: [{ product: "Papryka Kapia", qty: 12000, sourceType: "PO", sourceRef: "PO-2026-0117", sourceLineId: 1 }] },
-  ];
-}
-const SOS = getSOsStub();
+export const countryOfLot = (id: any): string => String((locById(id) || {}).country || "");
 
 const productsMatch = domainProductsMatch; // Batch 1
 const _soClientName = soClientName; // Batch 1
@@ -409,14 +383,14 @@ export function lotReservations(lot, sourceSOs, ctx) {
 // Returns array of SO references this lot has ever been linked to
 // (across all statuses including Shipped+ historical).
 export function soRefsFor(lot, sourceSOs, shipmentsList = []) {
-  const list = sourceSOs ?? SOS;
+  const list = sourceSOs ?? [];   // v7.24.2 (A-RV-15 d): no sample orders written into the code — the live sales only
   const refs = [];
   list.forEach(o => {
     if (o.status === "Cancelled") return;
     if (o.status === "Draft") return;
     (o.items || []).forEach(it => {
       const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
-      const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product);
+      const matchesPOBackedLot = false;
       if (!matchesStock && !matchesPOBackedLot) return;
       if (!productsMatch(it.product, lot.product)) return;
       if (!refs.find(r => r.number === o.number)) {
@@ -523,12 +497,12 @@ export function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], 
   let dir = "";
   // v6.99.81 (A-IN-5, owner): a lot that has not moved yet still has a flow when its PO and its sale are known — derived
   // below from the two documents, exactly as for a moved lot; only a lot with neither shows nothing
-  const hasDocs = !!(pos || []).find((p: any) => String(p.number) === String(lot.poRef)) && (orders || []).some((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
+  const hasDocs = !!(pos || []).find((p: any) => String(p.number) === String(lot.poRef)) && (orders || []).some((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))));
   if (!shs.length && !(lot.movements || []).length && !hasDocs) return null;
   // v7.12.1 (A-TD-2, owner 8 Oct): the LOT'S journey is its first movement — from its producer to where its sale finally takes it
   // (or to us when unsold) — asked of the one rule (tradeFlow.shipmentTradeEnds). No stored direction is read any more.
   const so = (orders || []).find((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) =>
-    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef)))) || null;
+    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)))) || null;
   const ends = shipmentTradeEnds({ poRefs: lot.poRef ? [lot.poRef] : [], governingSoRef: so?.number || "", purpose: "INBOUND" }, { pos, orders, countryOf: countryOfLot });
   dir = ends.direction;
   if (!dir) return null;
@@ -723,10 +697,6 @@ export function printHtmlNodeInv(nodeId, title, notify = null) {
     setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
   }, 150);
 }
-
-
-
-export function normName(v: any) { return String(v || "").trim().toLowerCase(); }
 
 // ─── v6.5: SORTING EVENT MODAL ──────────────────────────────────────────────
 // Logs a warehouse sorting service on the lot (kg sorted on a date). No stock
@@ -984,8 +954,8 @@ export function SortingWindow({ f, setF, lot, inspections = [], contacts = [], o
             {sortablePools(lot).map((x: any) => <option key={x.key} value={x.key}>{x.label} — {x.kg.toLocaleString("pl-PL")} kg available</option>)}
           </Sel>
         </QhField>
-        <QhField label="Follows inspection"><Sel value={f.followsInspection || ""} onChange={(e: any) => set("followsInspection", e.target.value)}><option value="">— none —</option>{inspections.map((x: any) => <option key={String(x.id)} value={String(x.id)}>{x.date} · {x.verdict} · defects {inspectionVerdict(x).totalPct} %</option>)}</Sel></QhField>
-        <QhField label="Sorted by"><NamePicker value={f.by} options={["Our team", ...activeParties(contacts).filter((c: any) => (c.roles || [c.type]).includes("Warehouse") || (c.additionalTypes || []).includes("Warehouse")).map((c: any) => String(c.name).trim())]} onChange={(v: string) => set("by", v)} placeholder="— our team or a warehouse —" /></QhField>
+        <QhField label="Follows inspection"><Sel value={f.followsInspection || ""} onChange={(e: any) => set("followsInspection", e.target.value)}><option value="">— none —</option>{inspections.map((x: any) => <option key={String(x.id)} value={String(x.id)}>{formatDMY(x.date)} · {x.verdict} · defects {inspectionVerdict(x).totalPct} %</option>)}</Sel></QhField>
+        <QhField label="Sorted by"><NamePicker value={f.by} options={["Our team", ...activeParties(contacts).filter((c: any) => rolesOf(c).includes("Warehouse")).map((c: any) => String(c.name).trim())]} onChange={(v: string) => set("by", v)} placeholder="— our team or a warehouse —" /></QhField>
         <QhField label="Hours"><input type="number" value={f.hours ?? ""} onChange={e => set("hours", e.target.value)} style={qhInp} /></QhField>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
@@ -1049,8 +1019,8 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
   const lastIns = ins[0];
   const lotClaims = (claims || []).filter((c: any) => (c.subjects || []).some((s: any) => String(s.ref || s.number) === String(lot.number)) || (c.rootDoc && String(c.rootDoc.number) === String(lot.poRef)));
   const g = gradeSplit(lot);
-  const sales = (orders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
-  const soldKg = sales.reduce((s: number, o: any) => s + (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))).reduce((a: number, it: any) => a + num(it.qty), 0), 0);
+  const sales = (orders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))));
+  const soldKg = sales.reduce((s: number, o: any) => s + (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))).reduce((a: number, it: any) => a + num(it.qty), 0), 0);
   const settlement = (settlements || []).find((s: any) => String(s.poNumber) === String(lot.poRef));
   const supplier = (contacts || []).find((c: any) => (c.type === "Supplier" || (c.roles || []).includes("Supplier")) && S(c.name) && (arrival?.supplierId != null ? String(c.id) === String(arrival.supplierId) : false));
   const reportDays = num(supplier?.reportDays) || num(supplier?.agreement?.qualityReportDays) || 0;
@@ -1078,12 +1048,12 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
       </div>); })()}
       <div style={{ padding: "12px 16px" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
-        {tile("ARRIVAL", arrival ? <>{arrival.number} · {arrival.arrangedBy === "SUPPLIER" ? "supplier's truck" : "our shipment"}<br />{unit?.truckPlate || unit?.announcedPlate || "plates —"}{plateMismatch(unit) ? <b style={{ color: "#DC2626" }}> · plates differ from announced!</b> : ""}<br />{arrivedAt ? `arrived ${arrivedAt}` : (unit?.eta ? `ETA ${unit.eta}` : "not arrived")}</> : <span style={{ color: "#94A3B8" }}>no inbound shipment{lot.poRef ? " — register the supplier's truck on the PO" : ""}</span>)}
+        {tile("ARRIVAL", arrival ? <>{arrival.number} · {arrival.arrangedBy === "SUPPLIER" ? "supplier's truck" : "our shipment"}<br />{unit?.truckPlate || unit?.announcedPlate || "plates —"}{plateMismatch(unit) ? <b style={{ color: "#DC2626" }}> · plates differ from announced!</b> : ""}<br />{arrivedAt ? `arrived ${formatDMY(arrivedAt)}` : (unit?.eta ? `ETA ${formatDMY(unit.eta)}` : "not arrived")}</> : <span style={{ color: "#94A3B8" }}>no inbound shipment{lot.poRef ? " — register the supplier's truck on the PO" : ""}</span>)}
         {/* v6.99.17 (A-R13-7): RECEIPT tile removed — the quantity breakdown already shows expected / received / variance */}
-        {tile("QUALITY", lastIns ? <>{lastIns.stage} {lastIns.date}<br />defects <b>{inspectionTotals(lastIns).totalPct}%</b> · <b style={{ color: lastIns.verdict === "Rejected" ? "#DC2626" : lastIns.verdict === "Sort" ? "#B45309" : "#16A34A" }}>{lastIns.verdict}</b><br />{ins.length} inspection(s){lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</> : <span style={{ color: dueQC ? "#B45309" : "#94A3B8" }}>no inspection{dueQC ? ` — QC report due ${dueQC}` : ""}{lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</span>, lastIns ? "#111" : "#94A3B8")}
+        {tile("QUALITY", lastIns ? <>{lastIns.stage} {formatDMY(lastIns.date)}<br />defects <b>{inspectionTotals(lastIns).totalPct}%</b> · <b style={{ color: lastIns.verdict === "Rejected" ? "#DC2626" : lastIns.verdict === "Sort" ? "#B45309" : "#16A34A" }}>{lastIns.verdict}</b><br />{ins.length} inspection(s){lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</> : <span style={{ color: dueQC ? "#B45309" : "#94A3B8" }}>no inspection{dueQC ? ` — QC report due ${dueQC}` : ""}{lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</span>, lastIns ? "#111" : "#94A3B8")}
         {!lotIsDirect(lot) && tile("STOCK — AVAILABLE NOW", (() => { const a = lotAvailabilityByGrade(lot, orders); return <><div>class I <b>{a.I.toLocaleString("pl-PL")}</b> kg</div><div>class II <b>{a.II.toLocaleString("pl-PL")}</b> kg</div>{a.unsorted > 0 ? <div>unsorted {a.unsorted.toLocaleString("pl-PL")} kg</div> : null}<div style={{ color: "#94A3B8" }}>waste {g.waste.toLocaleString("pl-PL")} kg</div></>; })())}
-        {tile("SALES", <>{sales.length ? sales.map((o: any) => { const kg = (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))).reduce((a: number, it: any) => a + num(it.qty), 0); return <div key={o.number}>{o.number} · <b>{Math.round(kg).toLocaleString("pl-PL")} kg</b>{o.items?.some((it: any) => it.grade === "II") ? " · II" : ""} · {o.status}</div>; }) : <span style={{ color: "#94A3B8" }}>no sales yet</span>}<span style={{ color: num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "#16A34A" : "#B45309" }}>{num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "fully sold" : `${Math.max(0, Math.round(num(lot.receivedKg) - soldKg - g.waste)).toLocaleString("pl-PL")} kg to sell`}</span></>)}
-        {tile("SETTLEMENT (on the PO)", settlement ? <>{settlement.number ? settlement.number + " · " : ""}<b style={{ color: settlement.status === "Closed" ? "#16A34A" : "#B45309" }}>{settlement.status}</b>{settlement.closedAt ? ` · closed ${settlement.closedAt}` : ""}<br />{settlement.commissionInvoiceId ? "commission invoice issued" : settlement.status === "Closed" ? "commission not yet invoiced — waiting for the Monday commission run" : "closes on the PO when the truck is sold"}</> : <span style={{ color: "#94A3B8" }}>{lot.poRef ? `not opened yet — on ${lot.poRef}` : "—"}</span>)}
+        {tile("SALES", <>{sales.length ? sales.map((o: any) => { const kg = (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))).reduce((a: number, it: any) => a + num(it.qty), 0); return <div key={o.number}>{o.number} · <b>{Math.round(kg).toLocaleString("pl-PL")} kg</b>{o.items?.some((it: any) => it.grade === "II") ? " · II" : ""} · {o.status}</div>; }) : <span style={{ color: "#94A3B8" }}>no sales yet</span>}<span style={{ color: num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "#16A34A" : "#B45309" }}>{num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "fully sold" : `${Math.max(0, Math.round(num(lot.receivedKg) - soldKg - g.waste)).toLocaleString("pl-PL")} kg to sell`}</span></>)}
+        {tile("SETTLEMENT (on the PO)", settlement ? <>{settlement.number ? settlement.number + " · " : ""}<b style={{ color: settlement.status === "Closed" ? "#16A34A" : "#B45309" }}>{settlement.status}</b>{settlement.closedAt ? ` · closed ${formatDMY(settlement.closedAt)}` : ""}<br />{settlement.commissionInvoiceId ? "commission invoice issued" : settlement.status === "Closed" ? "commission not yet invoiced — waiting for the Monday commission run" : "closes on the PO when the truck is sold"}</> : <span style={{ color: "#94A3B8" }}>{lot.poRef ? `not opened yet — on ${lot.poRef}` : "—"}</span>)}
       </div>
       <div style={{ marginTop: 8, fontSize: 10, color: "#94A3B8" }}>Actions live below in their owning sections: Receive · Inspect · Sort · Count · Move · Return · Claim; the settlement, its reports and the commission run are on the PO. This strip stores nothing — it reads what each module owns.</div>
       </div>
@@ -1208,7 +1178,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
       const amt = parseNum(claimValue);
       extSetFinanceNotes((prev: any[]) => [...(prev || []), {
         id: nextId(), noteType: "CREDIT", direction: "outgoing",
-        invoiceId: inv?.id ?? null, relatedRef: soRef || selected.number, partyName: party,
+        invoiceId: inv?.id ?? null, relatedRef: soRef || selected.number, partyId: inv?.counterparty?.id ?? so?.client?.id ?? null, partyName: party,   // v7.27.15 (A-RV-26): by id
         category: "Quality", amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
         status: "Draft", reason: `Quality claim — ${qtyKg} kg defective on ${selected.number}${soRef ? ` (${soRef})` : ""}`,
         date: date || today, source: `claim:lot:${selected.id}:${Date.now()}`,
@@ -1238,7 +1208,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
         const costPLN = Math.round(costN * fx * 100) / 100;
         const sh = {
           id: nextId(), number, purpose: "RETURN", status: "Delivered", billingStatus: "Not ready",
-          loadingDate: d.date, expectedDeliveryDate: d.date,
+          loadingDate: d.date,   // v7.28.5 (Batch L): one promised date
           legs: [{ id: 1, mode: "Road", status: "Delivered", fromLocationId: d.fromId || null, toLocationId: d.toId, carrierId: null, plannedPickupDate: d.date, plannedDeliveryDate: d.date, costAmount: costN, costCurrency: d.currency, costFxRate: fx, costPLN, notes: "Return from client" }],
           costs: costN > 0 ? [{ id: 1, type: "return_freight", supplierId: null, amount: costN, currency: d.currency, fxRate: fx, amountPLN: costPLN, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: d.reason || "Return transport" }] : [],
           documents: [], lotRefs: [selected.number], terms: "", customs: { applies: false },
@@ -1296,8 +1266,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
     const dependentSOs = (liveSOs || []).filter((o: any) =>
       o.status !== "Cancelled" &&
       (o.items || []).some((it: any) =>
-        (it.sourceType === "STOCK" && String(it.sourceRef) === String(lotNo)) ||
-        (it.sourceType === "PO" && selected.poRef && String(it.sourceRef) === String(selected.poRef))
+        (it.sourceType === "STOCK" && String(it.sourceRef) === String(lotNo))
       )
     ).map((o: any) => o.number);
 
@@ -1521,9 +1490,9 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                   if (a.kind === "direct") return <><div style={{ fontSize: 11, fontWeight: 700, color: "#7C3AED" }}>Direct</div><div style={{ fontSize: 11, color: "#64748B" }}>{a.loaded ? `loaded ${D(a.loaded)}` : ""}{a.delivered ? ` · delivered ${D(a.delivered)}` : ""}</div></>;
                   if (a.kind === "expected") return <div style={{ fontSize: 11, color: "#B45309", fontWeight: 600 }}>expected {D(a.date)}</div>;
                   return <span style={{ color: "#CCC" }}>—</span>; })()}
-                  {(() => { const w = lotWarningsShown(l, localTodayISO()); return w.length ? <div data-lot-warning="1" title={w.map(x => `${x.field}: ${x.why}`).join("\n")} style={{ fontSize: 10, fontWeight: 700, color: "#B45309", marginTop: 2 }}>⚠ {w.map(x => x.field === "still expected" ? (x.why.match(/expected for (\d+) days/) || [])[1] + " d still expected"
+                  {(() => { const w = lotWarningsShown(l, localTodayISO(), { orders: extOrders || [] }); return w.length ? <div data-lot-warning="1" title={w.map(x => `${x.field}: ${x.why}`).join("\n")} style={{ fontSize: 10, fontWeight: 700, color: "#B45309", marginTop: 2 }}>⚠ {w.map(x => x.field === "still expected" ? (x.why.match(/expected for (\d+) days/) || [])[1] + " d still expected"
                     : x.field === "unexplained movements" ? (x.why.match(/^(\d+) movement/) || [])[1] + " unexplained movement(s)"   // v7.11.2 (A-RV-24)
-                    : x.field === "ageing stock" ? (x.why.match(/in store (\d+) days/) || [])[1] + " d in store, unsold"   // v7.11.2 (A-RV-24)
+                    : x.field === "ageing stock" ? (x.why.match(/in store (\d+) days/) || [])[1] + (/reserved by/.test(x.why) ? (/still unsold/.test(x.why) ? " d in store, partly unsold" : " d in store, reserved") : " d in store, unsold")   // v7.11.2 (A-RV-24)
                     : (x.why.match(/^(over|short) by [^)]*\)/) || [x.field])[0]).join(" · ")}</div> : null; })()}{/* v7.10.3 (A-RV-15) */}</div>
                 <div>
                   {(() => {

@@ -22,7 +22,8 @@ import { noteNames } from "./format";
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { findLotForSOLine } from "./salesOrders.domain";
-import { unitKg as derivedUnitKg } from "./shipmentModel.domain";
+import { unitKg as derivedUnitKg, shipmentDates } from "./shipmentModel.domain";
+import { shipmentEndPlaceId } from "./tradeFlow.domain";   // v7.28.7
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 function num(v: any): number {
@@ -68,7 +69,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     let qty = relatedGoods.reduce((s: number, g: any) => s + num(g.qtyKg), 0);
     const lastLeg = (sh.legs || [])[((sh.legs || []).length || 1) - 1] || {};
     const firstLeg = (sh.legs || [])[0] || {};
-    const destId = lastLeg.toLocationId || sh.destinationLocationId || lot.locationId;
+    const destId = shipmentEndPlaceId(sh) || lot.locationId;   // v7.28.7 (Batch L): the route's end
       // v6.99.16 (A-R12-4): the unit's delivery place is the real destination when set
       const unitDest = (sh.legs || []).flatMap((l: any) => l.vehicles || []).map((u: any) => u.deliveryLocationId).find((x: any) => x != null && x !== "");
       const destIdFinal = unitDest ?? destId;
@@ -85,8 +86,8 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     // day the record was created. Storage days and every date-based report depend
     // on this. Preference: actual delivery > planned delivery on the last leg >
     // loading date > pickup on the first leg > today (last resort).
-    const date = sh.actualDeliveryDate
-      || lastLeg.plannedDeliveryDate || sh.expectedDeliveryDate
+    const date = shipmentDates(sh).delivered   // v7.28.7 (Batch L): the trucks' unloading (the shipment's own copy is gone)
+    || lastLeg.plannedDeliveryDate || sh.expectedDeliveryDate
       || sh.loadingDate || firstLeg.plannedPickupDate
       || deps.todayISO();
     changed.push(lot.number);
@@ -110,7 +111,15 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         const inMove = { id: deps.nextId(), date, type: "IN", qtyKg: qty, fromId, toId: fromId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — direct flow (ownership at handover)` };
         const soLineGrade = gradeOfGoodsForLot(sh, lot);   // v6.99.22 (G-2): the movement records WHICH GRADE left the lot
       const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, grade: soLineGrade, fromId, toId: destIdFinal, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — client collection / direct pass-through` };
-        return { ...lot, receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000, physicalKg: currentPhysical, status: "Delivered (direct)", arrivalDate: lot.arrivalDate || date, movements: [...(lot.movements || []), inMove, outMove] };
+        // v7.27.6 (FZ-31): a groupage truck taking one direct lot for SEVERAL sales posts one SHIP_OUT per sale (its goods row's kilos,
+        // scaled to the client's reported kilos when there is one) — as the stock branch has done since v6.99.100 — so each sale's
+        // shipped kilos (revenue, the producer's statement, claims) name the right order; a lot for one sale posts exactly as before
+        const perSaleD = relatedGoods.filter((g: any) => num(g.qtyKg) > 0 && g.soRef);
+        const loadedD = perSaleD.reduce((a: number, g: any) => a + num(g.qtyKg), 0);
+        const outMoves = new Set(perSaleD.map((g: any) => String(g.soRef))).size > 1 && loadedD > 0
+          ? perSaleD.map((g: any) => ({ ...outMove, id: deps.nextId(), qtyKg: Math.round(num(g.qtyKg) * (qty / loadedD) * 1000) / 1000, grade: g.quality || soLineGrade, soRef: String(g.soRef), note: `SHIP_OUT via ${sh.number} for ${g.soRef} — client collection / direct pass-through` }))
+          : [outMove];
+        return { ...lot, receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000, physicalKg: currentPhysical, status: "Delivered (direct)", arrivalDate: lot.arrivalDate || date, movements: [...(lot.movements || []), inMove, ...outMoves] };
       }
       const nextPhysical = Math.max(0, currentPhysical - qty);
       // v6.30.1 (Safeguards 7a parity): the movement reducer accumulates and the
@@ -169,6 +178,12 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       const soRef = goodsSoRef || (sh.soRefs || [])[0] || (String(sh.governingSoRef || "").trim() || null);
       const inMove = { id: deps.nextId(), date, type: "IN", qtyKg: qty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — direct flow (ownership at handover)` };
       const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, grade: gradeOfGoodsForLot(sh, lot), fromId: destId, toId: destId, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — direct pass-through to client` };
+      // v7.27.6 (FZ-31): one SHIP_OUT per sale on a groupage truck, as on the outbound branch
+      const perSaleI = (sh.goods || []).filter((g: any) => g.lotRef === lot.number && num(g.qtyKg) > 0 && g.soRef);
+      const loadedI = perSaleI.reduce((a: number, g: any) => a + num(g.qtyKg), 0);
+      const outMovesI = new Set(perSaleI.map((g: any) => String(g.soRef))).size > 1 && loadedI > 0
+        ? perSaleI.map((g: any) => ({ ...outMove, id: deps.nextId(), qtyKg: Math.round(num(g.qtyKg) * (qty / loadedI) * 1000) / 1000, grade: g.quality || outMove.grade, soRef: String(g.soRef), note: `SHIP_OUT via ${sh.number} for ${g.soRef} — direct pass-through to client` }))
+        : [outMove];
       return {
         ...lot,
         baseLocationId: baseAnchor,
@@ -176,8 +191,8 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         physicalKg: currentPhysical, // net zero — never in our stock
         locationId: destId,
         status: "Delivered (direct)",
-        arrivalDate: sh.actualDeliveryDate || lot.arrivalDate || date,
-        movements: [...(lot.movements || []), inMove, outMove],
+        arrivalDate: shipmentDates(sh).delivered || lot.arrivalDate || date,   // v7.28.7: the trucks' unloading
+        movements: [...(lot.movements || []), inMove, ...outMovesI],
       };
     }
     if (notYetReceived) {
@@ -189,7 +204,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000,
         physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000,
         status: "In Stock",
-        arrivalDate: sh.actualDeliveryDate || lot.arrivalDate || date,
+        arrivalDate: shipmentDates(sh).delivered || lot.arrivalDate || date,   // v7.28.7: the trucks' unloading
         movements: [...(lot.movements || []), movement],
       };
     }
@@ -263,7 +278,7 @@ export function buildCollectionShipment(so: any, lots: any[], shipments: any[], 
     const lot = findLotForSOLine(lots, it);
     return {
       id: deps.nextId(),
-      poRef: it.sourceType === "PO" ? it.sourceRef : (lot?.poRef || ""),
+      poRef: (lot?.poRef || ""),
       soRef: so.number,
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product, variety: it.variety || "", cnCode: it.cnCode || "",
@@ -275,7 +290,7 @@ export function buildCollectionShipment(so: any, lots: any[], shipments: any[], 
   const firstLot = goods.length ? (lots || []).find(l => l.number === goods[0].lotRef) : null;
   return {
     id: deps.nextId(),
-    number: nextShipmentNumberPure(shipments, year),
+    number: (info && info.number) || nextShipmentNumberPure(shipments, year),   // v7.27.8 (A-W5): the counter's number when the caller took one
     transportOrderNo: "",
     mode: "Client pickup",
     purpose: "OUTBOUND",
@@ -306,7 +321,7 @@ export function appendSourceGoods(sh: any, kind: "PO" | "SO", doc: any, lots: an
       : (lots || []).find(l => l.poRef === doc.number && norm(l.product) === norm(it.product)) || null;
     return {
       id: deps.nextId(),
-      poRef: kind === "PO" ? doc.number : (it.sourceType === "PO" ? it.sourceRef : (lot?.poRef || "")),
+      poRef: kind === "PO" ? doc.number : ((lot?.poRef || "")),
       soRef: kind === "SO" ? doc.number : "",
       lotRef: lot?.number || (kind === "SO" && it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product, variety: it.variety || "", cnCode: it.cnCode || "",
@@ -396,11 +411,10 @@ export function syncLegFreightCostLines(sh: any, payers?: Array<{ payer: string 
     const type = FREIGHT_TYPE_BY_MODE[leg?.mode] || "sea_freight";
     // v6.82.0 (Round 6): the leg amount is the SUM of the unit prices when any unit
     // carries one — this is the path the save actually runs (D-49 patched the other).
-    const units = (leg?.vehicles || leg?.transportUnits || []);
-    const unitSum = units.reduce((s: number, u: any) => s + numv(u?.costAmount ?? u?.unitPrice), 0);
-    const amt = unitSum > 0 ? unitSum : numv(leg?.costAmount);
+    const units = (leg?.vehicles || []);   // v7.28.9 (Batch L): the trucks own the price — no amount copy on the leg
+    const amt = units.reduce((s: number, u: any) => s + numv(u?.costAmount ?? u?.unitPrice), 0);
     const fx = numv(leg?.costFxRate) || 1;
-    const pln = numv(leg?.costPLN) || Math.round(amt * fx * 100) / 100;
+    const pln = Math.round(amt * fx * 100) / 100;
     let idx = costs.findIndex((c: any) => c && String(c.source || "") === src);
     if (idx === -1 && amt > 0) {
       idx = costs.findIndex((c: any) => c && !c.source && !c._customsAuto && c.type === type);
@@ -527,7 +541,7 @@ export interface LegKgCheck { leg: number; mode: string; goodsKg: number; unitsK
 export function legKgChecks(sh: any): LegKgCheck[] {
   const goodsKg = (sh?.goods || []).reduce((s: number, g: any) => s + (Number(g?.qtyKg) || 0), 0);
   return (sh?.legs || []).map((leg: any, i: number) => {
-    const units = leg?.vehicles || leg?.transportUnits || [];
+    const units = leg?.vehicles || [];   // v7.28.9
     const unitsKg = units.reduce((s: number, u: any) => s + derivedUnitKg(u, sh), 0);   // v6.99.9: derived from loads/feeders, never the legacy typed figure
     return { leg: i + 1, mode: String(leg?.mode || ""), goodsKg: Math.round(goodsKg), unitsKg: Math.round(unitsKg), deltaKg: Math.round(unitsKg - goodsKg), units: units.length };
   }).filter((c: LegKgCheck) => c.units > 0 && Math.abs(c.deltaKg) > 1);

@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
+import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 import { sellerPaysCarriage, takenAtSeller } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 // shipmentModel.domain.ts — v6.85.0: THE REDESIGNED SHIPMENT MODEL (additive layer)
@@ -530,21 +531,25 @@ export function containerPlaceNote(sh: any, u: any): { pol: string | null; pod: 
 // The list showed the header's dates stored at creation and the detail the leg's planned dates; neither read the units,
 // where the planned dates live and where the actual loading / unloading are entered. One reader for both.
 export interface ShipmentDates { plannedLoading: string; plannedDelivery: string; loaded: string; delivered: string; }
+/** v7.27.18 (A-D-4, P-12): a truck's actual loading / unloading date — one reader for the two generations of the field: the editor
+*  writes loadedAt / unloadedAt; trucks entered before keep actualLoadDate / actualUnloadDate (51 of 57 on the real copy of 15 Oct). */
+export function unitLoadedAt(u: any): string { return S(u?.loadedAt) || S(u?.actualLoadDate); }
+export function unitUnloadedAt(u: any): string { return S(u?.unloadedAt) || S(u?.actualUnloadDate); }
 export function shipmentDates(sh: any): ShipmentDates {
   const units = allUnits(sh).map(x => x.unit); const legs = sh?.legs || [];
   const pick = (vals: string[], last = false) => { const v = vals.map(S).filter(Boolean).sort(); return last ? (v[v.length - 1] || "") : (v[0] || ""); };
   return {
     plannedLoading: pick(units.map((u: any) => u.plannedLoadingDate)) || pick(legs.map((l: any) => l.plannedPickupDate)) || S(sh?.loadingDate),
     plannedDelivery: pick(units.map((u: any) => u.plannedDeliveryDate), true) || pick(legs.map((l: any) => l.plannedDeliveryDate), true) || S(sh?.expectedDeliveryDate),
-    loaded: pick(units.map((u: any) => u.loadedAt)),
-    delivered: pick(units.map((u: any) => u.deliveredAt || u.unloadedAt || u.dischargedAt), true),
+    loaded: pick(units.map((u: any) => unitLoadedAt(u))),
+    delivered: pick(units.map((u: any) => S(u.deliveredAt) || unitUnloadedAt(u) || S(u.dischargedAt)), true),
   };
 }
 /** When a lot delivered by the supplier is received: the truck's actual unloading, else its planned delivery, else the PO's. */
 export function suggestedReceiptDate(lot: any, shipments: any[], po: any, todayISO: string): { date: string; from: string } {
   const sh = (shipments || []).find((s: any) => String(s?.status) !== "Cancelled" && (s.goods || []).some((g: any) => String(g.lotRef) === String(lot?.number)));
   if (sh) { const d = shipmentDates(sh); if (d.delivered) return { date: d.delivered, from: `${sh.number} unloaded` }; if (d.plannedDelivery) return { date: d.plannedDelivery, from: `${sh.number} planned delivery` }; }
-  if (S(po?.expectedDeliveryDate)) return { date: S(po.expectedDeliveryDate), from: `${po.number} expected delivery` };
+  { const arr = po ? poExpectedArrival(po, shipments) : ""; if (arr) return { date: arr, from: `${po.number} expected delivery` }; }   // v7.28.5 (Batch L): the PO's one promised date
   if (S(lot?.arrivalDate)) return { date: S(lot.arrivalDate), from: "the lot's expected arrival" };
   return { date: todayISO, from: "today" };
 }
@@ -599,7 +604,7 @@ export const DOC_TYPES: { value: string; label: string; system?: boolean }[] = [
   { value: "Invoice", label: "Invoice" }, { value: "Packing list", label: "Packing list" }, { value: "CMR", label: "CMR" },
   { value: "BL", label: "B/L" }, { value: "AWB", label: "AWB (air waybill)" }, { value: "EUR.1", label: "EUR.1" },
   { value: "Phytosanitary certificate", label: "Phytosanitary certificate" }, { value: "Certificate of origin", label: "Certificate of origin" }, { value: "Insurance certificate", label: "Insurance certificate" },   // v7.20.2 (A-INC-2): the certificate a CIF / CIP sale holds
-  { value: "Export declaration", label: "Export declaration" }, { value: "Import declaration", label: "Import declaration" },
+  { value: "Export declaration", label: "Export declaration" }, { value: "Import declaration", label: "Import declaration" }, { value: "T1 transit", label: "T1 transit" },   // v7.27.11 (FZ-16)
   { value: "Transport order", label: "Transport order" }, { value: "Loading protocol", label: "Loading protocol" },
   { value: "Export declaration (EAD)", label: "Export declaration (EAD)", system: true }, { value: "Customs release (CC529C)", label: "Customs release (CC529C)", system: true },
   { value: "Exit confirmation (CC599C)", label: "Exit confirmation (CC599C)", system: true }, { value: "Customs declaration copy (SAD)", label: "Customs declaration copy (SAD)", system: true },
@@ -612,16 +617,4 @@ export function docTypeOf(typed: any): { type: string; description?: string } {
   const hit = DOC_TYPES.find(t => t.value.toLowerCase() === s.toLowerCase()); if (hit) return { type: hit.value };
   const al = DOC_ALIASES[s.toLowerCase().replace(/\s+/g, " ")]; if (al) return { type: al };
   return { type: "Other", description: s };
-}
-/** Once per dataset: a shipment's typed document types mapped to the list (the same object when nothing changes). */
-export function mapDocTypes(sh: any, log?: string[] | null): any {
-  if (!sh || sh.deleted) return sh;
-  let changed = false;
-  const documents = (sh.documents || []).map((d: any) => {
-    const t = S(d?.type); if (!t) return d;
-    const r = docTypeOf(t); if (r.type === t) return d;
-    changed = true; if (log) log.push(`${sh.number}: "${t}" → ${r.type}${r.description ? ` (${r.description})` : ""}`);
-    return { ...d, type: r.type, ...(r.description ? { description: r.description } : {}) };
-  });
-  return changed ? { ...sh, documents } : sh;
 }

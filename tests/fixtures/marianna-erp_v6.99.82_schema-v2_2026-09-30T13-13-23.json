@@ -18649,12 +18649,12 @@
           "qty": "4680",
           "pallets": "",
           "unitPrice": "0.80",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0001",
-          "sourceLineId": 1784642410668,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0001",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0001"
         },
         {
           "id": 1784642410676,
@@ -18667,12 +18667,12 @@
           "qty": "10062",
           "pallets": "",
           "unitPrice": "0.90",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0001",
-          "sourceLineId": 1784642410669,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0002",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0001"
         },
         {
           "id": 1784642410677,
@@ -18685,12 +18685,12 @@
           "qty": "4680",
           "pallets": "",
           "unitPrice": "0.90",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0001",
-          "sourceLineId": 1784642410670,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0003",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0001"
         }
       ],
       "notes": "",
@@ -18740,12 +18740,12 @@
           "qty": "550",
           "pallets": "",
           "unitPrice": "6.89",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0002",
-          "sourceLineId": 1784715614351,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0004",
           "packaging": "5kg karton",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0002"
         },
         {
           "id": 1784798944330,
@@ -18758,12 +18758,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "4.89",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0003",
-          "sourceLineId": 1784798944321,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0005",
           "packaging": "5kg carton box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0003"
         },
         {
           "id": 1784798944331,
@@ -18776,12 +18776,12 @@
           "qty": "1650",
           "pallets": "3",
           "unitPrice": "5.99",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0003",
-          "sourceLineId": 1784798944324,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0006",
           "packaging": "5kg carton box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0003"
         },
         {
           "id": 1784798944332,
@@ -18794,12 +18794,12 @@
           "qty": "950",
           "pallets": "1.5",
           "unitPrice": "1.79",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0003",
-          "sourceLineId": 1784798944325,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0007",
           "packaging": "5kg carton box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0003"
         },
         {
           "id": 1784798944333,
@@ -18812,12 +18812,12 @@
           "qty": "950",
           "pallets": "1.5",
           "unitPrice": "3.49",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0003",
-          "sourceLineId": 1784798944326,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0008",
           "packaging": "5kg carton box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0003"
         }
       ],
       "notes": "",
@@ -18867,12 +18867,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "0.99",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0004",
-          "sourceLineId": 1784798944335,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0009",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0004"
         },
         {
           "id": 1784798944581,
@@ -18885,12 +18885,12 @@
           "qty": "13806",
           "pallets": "15",
           "unitPrice": "1.09",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0004",
-          "sourceLineId": 1784798944336,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0010",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0004"
         }
       ],
       "notes": "",
@@ -18940,12 +18940,12 @@
           "qty": "1375",
           "pallets": "",
           "unitPrice": "6.20",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0005",
-          "sourceLineId": 1785147931290,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0011",
           "packaging": "5 kg carton boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0005"
         },
         {
           "id": 1785403125724,
@@ -18958,12 +18958,12 @@
           "qty": "275",
           "pallets": "",
           "unitPrice": "4.20",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0005",
-          "sourceLineId": 1785147931291,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0012",
           "packaging": "5 kg carton boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0005"
         },
         {
           "id": 1785403125725,
@@ -18976,12 +18976,12 @@
           "qty": "1300",
           "pallets": "",
           "unitPrice": "2.35",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0005",
-          "sourceLineId": 1785147931293,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0014",
           "packaging": "5 kg carton boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0005"
         },
         {
           "id": 1785403125726,
@@ -18994,12 +18994,12 @@
           "qty": "550",
           "pallets": "",
           "unitPrice": "4.07",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0005",
-          "sourceLineId": 1785147931294,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0015",
           "packaging": "5 kg carton boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0005"
         }
       ],
       "notes": "",
@@ -19049,12 +19049,12 @@
           "qty": "23100",
           "pallets": "22",
           "unitPrice": "1.73",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0007",
-          "sourceLineId": 1785403125742,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0021",
           "packaging": "10 kg bag",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0007"
         }
       ],
       "notes": "",
@@ -19104,12 +19104,12 @@
           "qty": "18900",
           "pallets": "18",
           "unitPrice": "1.73",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0007",
-          "sourceLineId": 1785403125742,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0021",
           "packaging": "10 kg bag",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0007"
         }
       ],
       "notes": "",
@@ -19159,12 +19159,12 @@
           "qty": "1300",
           "pallets": "1.5",
           "unitPrice": "6.38",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0006",
-          "sourceLineId": 1785403125728,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0016",
           "packaging": "5 kg carton box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0006"
         },
         {
           "id": 1785834105284,
@@ -19177,12 +19177,12 @@
           "qty": "200",
           "pallets": "0.5",
           "unitPrice": "8.38",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0006",
-          "sourceLineId": 1785403125729,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0017",
           "packaging": "5 kg carton box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0006"
         },
         {
           "id": 1785834105286,
@@ -19195,12 +19195,12 @@
           "qty": "845",
           "pallets": "1",
           "unitPrice": "2.73",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0006",
-          "sourceLineId": 1785403125730,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0018",
           "packaging": "13 kg carton box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0006"
         },
         {
           "id": 1785834105287,
@@ -19213,12 +19213,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "4.19",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0006",
-          "sourceLineId": 1785403125732,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0020",
           "packaging": "5 kg carton box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0006"
         },
         {
           "id": 1785834105288,
@@ -19231,12 +19231,12 @@
           "qty": "1300",
           "pallets": "",
           "unitPrice": "2.48",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0006",
-          "sourceLineId": 1785403125731,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0019",
           "packaging": "5 kg carton box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0006"
         }
       ],
       "notes": "",
@@ -19289,12 +19289,12 @@
           "qty": "5382",
           "pallets": "6",
           "unitPrice": "0.90",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105293,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0026",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785834105340,
@@ -19307,12 +19307,12 @@
           "qty": "7488",
           "pallets": "8",
           "unitPrice": "0.80",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105294,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0027",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785834105342,
@@ -19325,12 +19325,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.70",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105295,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0028",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785834105343,
@@ -19343,12 +19343,12 @@
           "qty": "2808",
           "pallets": "3",
           "unitPrice": "0.90",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105296,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0029",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785834105344,
@@ -19361,12 +19361,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.70",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105297,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0030",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785834105346,
@@ -19469,12 +19469,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.8",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785834105316,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0036",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1785834105352,
@@ -19487,12 +19487,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "0.9",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785834105317,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0037",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1785834105353,
@@ -19505,12 +19505,12 @@
           "qty": "11934",
           "pallets": "13",
           "unitPrice": "1.00",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785834105318,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0038",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1785834105354,
@@ -19577,12 +19577,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.7",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0013",
-          "sourceLineId": 1785834105331,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0042",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0013"
         },
         {
           "id": 1785834105358,
@@ -19595,12 +19595,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "0.8",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0013",
-          "sourceLineId": 1785834105332,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0043",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0013"
         },
         {
           "id": 1785834105359,
@@ -19613,12 +19613,12 @@
           "qty": "11232",
           "pallets": "12",
           "unitPrice": "0.9",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0013",
-          "sourceLineId": 1785834105333,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0044",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0013"
         }
       ],
       "notes": "PO PO-2026-0010 was cancelled on 2026-08-05. Review/resource this SO before confirming.\nPO PO-2026-0012 was cancelled on 2026-08-05. Review/resource this SO before confirming.",
@@ -19670,12 +19670,12 @@
           "qty": "5382",
           "pallets": "6",
           "unitPrice": "0.90",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105293,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0026",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699919,
@@ -19688,12 +19688,12 @@
           "qty": "7488",
           "pallets": "8",
           "unitPrice": "0.8",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105294,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0027",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699920,
@@ -19706,12 +19706,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.7",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105295,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0028",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699921,
@@ -19724,12 +19724,12 @@
           "qty": "2808",
           "pallets": "3",
           "unitPrice": "0.9",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105296,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0029",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699922,
@@ -19742,12 +19742,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.8",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105297,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0030",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699923,
@@ -19760,12 +19760,12 @@
           "qty": "7488",
           "pallets": "8",
           "unitPrice": "0.9",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699901,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0046",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699924,
@@ -19778,12 +19778,12 @@
           "qty": "7254",
           "pallets": "8",
           "unitPrice": "0.2",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699902,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0047",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699925,
@@ -19796,12 +19796,12 @@
           "qty": "936",
           "pallets": "1",
           "unitPrice": "0.7",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699903,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0048",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699926,
@@ -19814,12 +19814,12 @@
           "qty": "936",
           "pallets": "1",
           "unitPrice": "0.9",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699904,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0049",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699927,
@@ -19832,12 +19832,12 @@
           "qty": "2808",
           "pallets": "3",
           "unitPrice": "0.7",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699905,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0050",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1785919699928,
@@ -19850,12 +19850,12 @@
           "qty": "1872",
           "pallets": "",
           "unitPrice": "0.8",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785834105316,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0036",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1785919699929,
@@ -19868,12 +19868,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "0.9",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785834105317,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0037",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1785919699930,
@@ -19886,12 +19886,12 @@
           "qty": "11934",
           "pallets": "13",
           "unitPrice": "1.01",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785834105318,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0038",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1785919699931,
@@ -19904,12 +19904,12 @@
           "qty": "3744",
           "pallets": "4",
           "unitPrice": "0.7",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785919699911,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0051",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1785919699932,
@@ -19922,12 +19922,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "0.8",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785919699912,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0052",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1785919699933,
@@ -19940,12 +19940,12 @@
           "qty": "10062",
           "pallets": "11",
           "unitPrice": "0.9",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785919699913,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0053",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1785919699934,
@@ -19958,12 +19958,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.8",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0013",
-          "sourceLineId": 1785834105331,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0042",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0013"
         },
         {
           "id": 1785919699935,
@@ -19976,12 +19976,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "0.9",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0013",
-          "sourceLineId": 1785834105332,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0043",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0013"
         },
         {
           "id": 1785919699936,
@@ -19994,12 +19994,12 @@
           "qty": "11232",
           "pallets": "12",
           "unitPrice": "1.10",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0013",
-          "sourceLineId": 1785834105333,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0044",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0013"
         }
       ],
       "notes": "[2026-08-05 11:47] OVERRIDE: saved despite duplicate Import permit \"1517922375177291\" (also on SO-2026-0008); ACID number \"6815776237140214223\" (also on SO-2026-0008).\n[2026-08-05 11:55] OVERRIDE: saved despite duplicate Import permit \"1517922375177291\" (also on SO-2026-0008); ACID number \"6815776237140214223\" (also on SO-2026-0008).\n[2026-08-05 12:07] OVERRIDE: saved despite duplicate Import permit \"1517922375177291\" (also on SO-2026-0008); ACID number \"6815776237140214223\" (also on SO-2026-0008).\n[2026-08-05 12:17] OVERRIDE: saved despite duplicate Import permit \"1517922375177291\" (also on SO-2026-0008); ACID number \"6815776237140214223\" (also on SO-2026-0008).",
@@ -20050,12 +20050,12 @@
           "qty": "19422",
           "pallets": "21",
           "unitPrice": "0.98",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0015",
-          "sourceLineId": 1786360743597,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0057",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0015"
         },
         {
           "id": 1786360743610,
@@ -20068,12 +20068,12 @@
           "qty": "3744",
           "pallets": "4",
           "unitPrice": "0.80",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0016",
-          "sourceLineId": 1786360743600,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0054",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0016"
         },
         {
           "id": 1786360743611,
@@ -20086,12 +20086,12 @@
           "qty": "6552",
           "pallets": "7",
           "unitPrice": "0.95",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0016",
-          "sourceLineId": 1786360743601,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0055",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0016"
         },
         {
           "id": 1786360743612,
@@ -20104,12 +20104,12 @@
           "qty": "9126",
           "pallets": "10",
           "unitPrice": "1.05",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0016",
-          "sourceLineId": 1786360743602,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0056",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0016"
         },
         {
           "id": 1786360743616,
@@ -20122,12 +20122,12 @@
           "qty": "19422",
           "pallets": "21",
           "unitPrice": "1.10",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0017",
-          "sourceLineId": 1786360743613,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0058",
           "packaging": "13 wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0017"
         }
       ],
       "notes": "",
@@ -20177,12 +20177,12 @@
           "qty": "5382",
           "pallets": "6",
           "unitPrice": "1.00",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105293,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0026",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068569,
@@ -20195,12 +20195,12 @@
           "qty": "7488",
           "pallets": "8",
           "unitPrice": "0.90",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105294,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0027",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068570,
@@ -20213,12 +20213,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.84",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105295,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0028",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068571,
@@ -20231,12 +20231,12 @@
           "qty": "2808",
           "pallets": "3",
           "unitPrice": "0.94",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105296,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0029",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068572,
@@ -20249,12 +20249,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.84",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785834105297,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0030",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068577,
@@ -20267,12 +20267,12 @@
           "qty": "7488",
           "pallets": "8",
           "unitPrice": "1.00",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699901,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0046",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068578,
@@ -20285,12 +20285,12 @@
           "qty": "7254",
           "pallets": "8",
           "unitPrice": "0.90",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699902,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0047",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068579,
@@ -20303,12 +20303,12 @@
           "qty": "936",
           "pallets": "1",
           "unitPrice": "0.84",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699903,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0048",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068580,
@@ -20321,12 +20321,12 @@
           "qty": "936",
           "pallets": "1",
           "unitPrice": "0.94",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699904,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0049",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068581,
@@ -20339,12 +20339,12 @@
           "qty": "2808",
           "pallets": "3",
           "unitPrice": "0.84",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0009",
-          "sourceLineId": 1785919699905,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0050",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "II"
+          "grade": "II",
+          "migratedFromPO": "PO-2026-0009"
         },
         {
           "id": 1786444068582,
@@ -20357,12 +20357,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.98",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785834105316,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0036",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1786444068583,
@@ -20375,12 +20375,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "1.00",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785834105317,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0037",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1786444068584,
@@ -20393,12 +20393,12 @@
           "qty": "11934",
           "pallets": "13",
           "unitPrice": "1.10",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785834105318,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0038",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1786444068585,
@@ -20411,12 +20411,12 @@
           "qty": "3744",
           "pallets": "4",
           "unitPrice": "0.94",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785919699911,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0051",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1786444068586,
@@ -20429,12 +20429,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "0.94",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785919699912,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0052",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1786444068587,
@@ -20447,12 +20447,12 @@
           "qty": "10062",
           "pallets": "11",
           "unitPrice": "1.04",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0011",
-          "sourceLineId": 1785919699913,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0053",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0011"
         },
         {
           "id": 1786444068588,
@@ -20465,12 +20465,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.78",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0013",
-          "sourceLineId": 1785834105331,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0042",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0013"
         },
         {
           "id": 1786444068589,
@@ -20483,12 +20483,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "0.86",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0013",
-          "sourceLineId": 1785834105332,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0043",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0013"
         },
         {
           "id": 1786444068590,
@@ -20501,12 +20501,12 @@
           "qty": "11232",
           "pallets": "12",
           "unitPrice": "0.98",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0013",
-          "sourceLineId": 1785834105333,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0044",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0013"
         }
       ],
       "notes": "[2026-08-11 10:51] OVERRIDE: saved despite duplicate Import permit \"1517922375177291\" (also on SO-2026-0008); Import permit \"1517922375177291\" (also on SO-2026-0009); ACID number \"6815776237140214223\" (also on SO-2026-0008); ACID number \"6815776237140214223\" (also on SO-2026-0009).\n[2026-08-11 10:58] OVERRIDE: saved despite duplicate Import permit \"1517922375177291\" (also on SO-2026-0008); Import permit \"1517922375177291\" (also on SO-2026-0009); ACID number \"6815776237140214223\" (also on SO-2026-0008); ACID number \"6815776237140214223\" (also on SO-2026-0009).\n[2026-08-11 11:06] OVERRIDE: saved despite duplicate Import permit \"1517922375177291\" (also on SO-2026-0008); Import permit \"1517922375177291\" (also on SO-2026-0009); ACID number \"6815776237140214223\" (also on SO-2026-0008); ACID number \"6815776237140214223\" (also on SO-2026-0009).\n[2026-08-11 11:10] OVERRIDE: saved despite duplicate Import permit \"1517922375177291\" (also on SO-2026-0008); Import permit \"1517922375177291\" (also on SO-2026-0009); ACID number \"6815776237140214223\" (also on SO-2026-0008); ACID number \"6815776237140214223\" (also on SO-2026-0009).\n[2026-08-11 11:44] OVERRIDE: saved despite duplicate Import permit \"1517922375177291\" (also on SO-2026-0008); Import permit \"1517922375177291\" (also on SO-2026-0009); ACID number \"6815776237140214223\" (also on SO-2026-0008); ACID number \"6815776237140214223\" (also on SO-2026-0009).",
@@ -20556,12 +20556,12 @@
           "qty": "1100",
           "pallets": "2",
           "unitPrice": "4.16",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0014",
-          "sourceLineId": 1785919699717,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0045",
           "packaging": "5 kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0014"
         }
       ],
       "notes": "",
@@ -20611,12 +20611,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "4.50",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0018",
-          "sourceLineId": 1786444068668,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0059",
           "packaging": "5 kg box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0018"
         },
         {
           "id": 1786444068678,
@@ -20629,12 +20629,12 @@
           "qty": "2200",
           "pallets": "4",
           "unitPrice": "6.71",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0018",
-          "sourceLineId": 1786444068669,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0060",
           "packaging": "5 kg box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0018"
         },
         {
           "id": 1786444068679,
@@ -20647,12 +20647,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "3.81",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0018",
-          "sourceLineId": 1786444068670,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0061",
           "packaging": "5 kg box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0018"
         },
         {
           "id": 1786444068680,
@@ -20665,12 +20665,12 @@
           "qty": "300",
           "pallets": "1",
           "unitPrice": "4.30",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0018",
-          "sourceLineId": 1786444068671,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0062",
           "packaging": "6 pcs box",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0018"
         }
       ],
       "notes": "",
@@ -20720,12 +20720,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "4.50",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0019",
-          "sourceLineId": 1786614300417,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0063",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0019"
         },
         {
           "id": 1786696857280,
@@ -20738,12 +20738,12 @@
           "qty": "2200",
           "pallets": "4",
           "unitPrice": "6.68",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0019",
-          "sourceLineId": 1786614300418,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0064",
           "packaging": "5 kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0019"
         },
         {
           "id": 1786696857281,
@@ -20756,12 +20756,12 @@
           "qty": "1300",
           "pallets": "2",
           "unitPrice": "2.51",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0019",
-          "sourceLineId": 1786614300419,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0065",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0019"
         }
       ],
       "notes": "",
@@ -20811,12 +20811,12 @@
           "qty": "5616",
           "pallets": "6",
           "unitPrice": "0.85",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0021",
-          "sourceLineId": 1786696857273,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0071",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0021"
         },
         {
           "id": 1786696857317,
@@ -20829,12 +20829,12 @@
           "qty": "13806",
           "pallets": "15",
           "unitPrice": "0.95",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0021",
-          "sourceLineId": 1786696857274,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0072",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0021"
         },
         {
           "id": 1786696857319,
@@ -20847,12 +20847,12 @@
           "qty": "2808",
           "pallets": "3",
           "unitPrice": "0.88",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0022",
-          "sourceLineId": 1786696857287,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0073",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0022"
         },
         {
           "id": 1786696857320,
@@ -20865,12 +20865,12 @@
           "qty": "13104",
           "pallets": "14",
           "unitPrice": "0.94",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0022",
-          "sourceLineId": 1786696857288,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0074",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0022"
         },
         {
           "id": 1786696857321,
@@ -20883,12 +20883,12 @@
           "qty": "2808",
           "pallets": "3",
           "unitPrice": "0.88",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0022",
-          "sourceLineId": 1786696857289,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0075",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0022"
         },
         {
           "id": 1786696857322,
@@ -20901,12 +20901,12 @@
           "qty": "6552",
           "pallets": "",
           "unitPrice": "0.99",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0023",
-          "sourceLineId": 1786696857296,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0076",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0023"
         },
         {
           "id": 1786696857323,
@@ -20919,12 +20919,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.96",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0023",
-          "sourceLineId": 1786696857297,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0077",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0023"
         },
         {
           "id": 1786696857324,
@@ -20937,12 +20937,12 @@
           "qty": "9126",
           "pallets": "10",
           "unitPrice": "0.99",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0023",
-          "sourceLineId": 1786696857298,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0078",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0023"
         },
         {
           "id": 1786696857325,
@@ -20955,12 +20955,12 @@
           "qty": "936",
           "pallets": "1",
           "unitPrice": "0.86",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0023",
-          "sourceLineId": 1786696857299,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0079",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0023"
         },
         {
           "id": 1786696857326,
@@ -20973,12 +20973,12 @@
           "qty": "936",
           "pallets": "1",
           "unitPrice": "0.84",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0023",
-          "sourceLineId": 1786696857300,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0080",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0023"
         },
         {
           "id": 1786696857327,
@@ -20991,12 +20991,12 @@
           "qty": "17550",
           "pallets": "",
           "unitPrice": "1.10",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0024",
-          "sourceLineId": 1786696857308,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0081",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0024"
         },
         {
           "id": 1786696857328,
@@ -21009,12 +21009,12 @@
           "qty": "1872",
           "pallets": "2",
           "unitPrice": "0.95",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0024",
-          "sourceLineId": 1786696857309,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0082",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0024"
         },
         {
           "id": 1786696857329,
@@ -21027,12 +21027,12 @@
           "qty": "19422",
           "pallets": "21",
           "unitPrice": "1.10",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0024",
-          "sourceLineId": 1786696857314,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0083",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0024"
         }
       ],
       "notes": "",
@@ -21082,12 +21082,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "8.11",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0025",
-          "sourceLineId": 1786971596615,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0084",
           "packaging": "5 kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0025"
         },
         {
           "id": 1787216762926,
@@ -21100,12 +21100,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "4.61",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0025",
-          "sourceLineId": 1786971596616,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0085",
           "packaging": "5 kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0025"
         },
         {
           "id": 1787216762927,
@@ -21118,12 +21118,12 @@
           "qty": "650",
           "pallets": "1",
           "unitPrice": "2.66",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0025",
-          "sourceLineId": 1786971596617,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0086",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0025"
         }
       ],
       "notes": "",
@@ -21173,12 +21173,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "4.96",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0026",
-          "sourceLineId": 1787301346702,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0087",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0026"
         },
         {
           "id": 1787316565918,
@@ -21191,12 +21191,12 @@
           "qty": "1650",
           "pallets": "3",
           "unitPrice": "6.15",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0026",
-          "sourceLineId": 1787301346703,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0088",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0026"
         },
         {
           "id": 1787316565919,
@@ -21209,12 +21209,12 @@
           "qty": "1100",
           "pallets": "2",
           "unitPrice": "8.15",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0026",
-          "sourceLineId": 1787301346704,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0089",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0026"
         },
         {
           "id": 1787316565920,
@@ -21227,12 +21227,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "3.86",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0026",
-          "sourceLineId": 1787301346705,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0090",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0026"
         }
       ],
       "notes": "",
@@ -21284,12 +21284,12 @@
           "qty": "14285",
           "pallets": "26",
           "unitPrice": "9.60",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0027",
-          "sourceLineId": 1787582218134,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0091",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0027"
         }
       ],
       "notes": "",
@@ -21339,12 +21339,12 @@
           "qty": "1950",
           "pallets": "3",
           "unitPrice": "3.16",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0029",
-          "sourceLineId": 1787902217225,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0093",
           "packaging": "10 kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0029"
         },
         {
           "id": 1787902217237,
@@ -21357,12 +21357,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "5.06",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0029",
-          "sourceLineId": 1787902217226,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0094",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0029"
         },
         {
           "id": 1787902217238,
@@ -21375,12 +21375,12 @@
           "qty": "2200",
           "pallets": "4",
           "unitPrice": "6.25",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0029",
-          "sourceLineId": 1787902217227,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0095",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0029"
         },
         {
           "id": 1787902217239,
@@ -21393,12 +21393,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "7.57",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0029",
-          "sourceLineId": 1787902217228,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0096",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0029"
         },
         {
           "id": 1787902217240,
@@ -21411,12 +21411,12 @@
           "qty": "550",
           "pallets": "1",
           "unitPrice": "4.56",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0029",
-          "sourceLineId": 1787902217229,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0097",
           "packaging": "5kg boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0029"
         }
       ],
       "notes": "",
@@ -21468,12 +21468,12 @@
           "qty": "38844",
           "pallets": "42",
           "unitPrice": "0.65",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0028",
-          "sourceLineId": 1787902217125,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0092",
           "packaging": "13kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0028"
         }
       ],
       "notes": "",
@@ -21525,12 +21525,12 @@
           "qty": "19422",
           "pallets": "21",
           "unitPrice": "0.80",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0030",
-          "sourceLineId": 1788354761652,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0099",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0030"
         },
         {
           "id": 1788432629849,
@@ -21543,12 +21543,12 @@
           "qty": "19422",
           "pallets": "21",
           "unitPrice": "0.90",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0030",
-          "sourceLineId": 1788354761648,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0098",
           "packaging": "13 kg wooden boxes",
           "pricingUnit": "kg",
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0030"
         }
       ],
       "notes": "",
@@ -21600,14 +21600,14 @@
           "qty": 5616,
           "pallets": "6",
           "unitPrice": "0.85",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0031",
-          "sourceLineId": 1788432629970944,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0105",
           "packaging": "Wooden box (13 kg)",
           "pricingUnit": "kg",
           "boxes": 432,
           "kgPerBox": 13,
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0031"
         },
         {
           "id": 1788432629970949,
@@ -21620,14 +21620,14 @@
           "qty": 13806,
           "pallets": "15",
           "unitPrice": "0.95",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0031",
-          "sourceLineId": 1788432629970907,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0100",
           "packaging": "Wooden box (13 kg)",
           "pricingUnit": "kg",
           "boxes": 1062,
           "kgPerBox": 13,
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0031"
         },
         {
           "id": 1788432629970954,
@@ -21640,14 +21640,14 @@
           "qty": 1872,
           "pallets": "2",
           "unitPrice": "0.85",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0032",
-          "sourceLineId": 1788432629970913,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0101",
           "packaging": "Wooden box (13 kg)",
           "pricingUnit": "kg",
           "boxes": 144,
           "kgPerBox": 13,
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0032"
         },
         {
           "id": 1788432629970955,
@@ -21660,14 +21660,14 @@
           "qty": 1872,
           "pallets": "2",
           "unitPrice": "0.95",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0032",
-          "sourceLineId": 1788432629970914,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0102",
           "packaging": "Wooden box (13 kg)",
           "pricingUnit": "kg",
           "boxes": 144,
           "kgPerBox": 13,
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0032"
         },
         {
           "id": 1788432629970956,
@@ -21680,14 +21680,14 @@
           "qty": 4446,
           "pallets": "5",
           "unitPrice": "0.75",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0032",
-          "sourceLineId": 1788432629970915,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0103",
           "packaging": "Wooden box (13 kg)",
           "pricingUnit": "kg",
           "boxes": 342,
           "kgPerBox": 13,
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0032"
         },
         {
           "id": 1788432629970957,
@@ -21700,14 +21700,14 @@
           "qty": 11232,
           "pallets": "12",
           "unitPrice": "0.85",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0032",
-          "sourceLineId": 1788432629970916,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0104",
           "packaging": "Wooden box (13 kg)",
           "pricingUnit": "kg",
           "boxes": 864,
           "kgPerBox": 13,
-          "grade": "IB"
+          "grade": "IB",
+          "migratedFromPO": "PO-2026-0032"
         }
       ],
       "notes": "",
@@ -21822,15 +21822,15 @@
           "qty": 17550,
           "pallets": 19,
           "unitPrice": "0.88",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0040",
-          "sourceLineId": 1788432629972004,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0119",
           "packaging": "Wooden box (13 kg)",
           "boxes": 1350,
           "grade": "I",
           "pricingUnit": "kg",
           "coloration": "60%+",
-          "kgPerBox": 13
+          "kgPerBox": 13,
+          "migratedFromPO": "PO-2026-0040"
         },
         {
           "id": 1788432629972182,
@@ -21845,14 +21845,14 @@
           "packagingId": null,
           "cnCode": "08081080",
           "origin": "Poland",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0040",
-          "sourceLineId": "pk-1790425116409-1",
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0120",
           "unitPrice": 0.75,
           "priceToAgree": false,
           "addedByPackingResult": true,
           "boxes": null,
-          "pallets": null
+          "pallets": null,
+          "migratedFromPO": "PO-2026-0040"
         }
       ],
       "notes": "",
@@ -21905,15 +21905,15 @@
           "qty": 5382,
           "pallets": 6,
           "unitPrice": "0.85",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0041",
-          "sourceLineId": 1788432629972415,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0123",
           "packaging": "Wooden box (13 kg)",
           "boxes": 414,
           "coloration": "Red 50%",
           "pricingUnit": "kg",
           "kgPerBox": 13,
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0041"
         },
         {
           "id": 1788432629972430,
@@ -21926,15 +21926,15 @@
           "qty": 9360,
           "pallets": 10,
           "unitPrice": "0.80",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0041",
-          "sourceLineId": 1788432629972414,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0122",
           "packaging": "Wooden box (13 kg)",
           "coloration": "Red 50%",
           "pricingUnit": "kg",
           "boxes": 720,
           "kgPerBox": 13,
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0041"
         },
         {
           "id": 1788432629972431,
@@ -21947,15 +21947,15 @@
           "qty": 10062,
           "pallets": 11,
           "unitPrice": "0.75",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0042",
-          "sourceLineId": 1788432629972418,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0121",
           "packaging": "Wooden box (13 kg)",
           "coloration": "Red 60%",
           "pricingUnit": "kg",
           "boxes": 774,
           "kgPerBox": 13,
-          "grade": "I"
+          "grade": "I",
+          "migratedFromPO": "PO-2026-0042"
         },
         {
           "id": 1788432629972539,
@@ -21970,14 +21970,14 @@
           "packagingId": "wooden-box-13",
           "cnCode": "08081080",
           "origin": "Poland",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0041",
-          "sourceLineId": "pk-1790605034209-1",
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0124",
           "unitPrice": "0.84",
           "priceToAgree": true,
           "addedByPackingResult": true,
           "boxes": 360,
-          "pallets": 5
+          "pallets": 5,
+          "migratedFromPO": "PO-2026-0041"
         },
         {
           "id": 1788432629972583,
@@ -21992,14 +21992,14 @@
           "packagingId": "wooden-box-13",
           "cnCode": "08081080",
           "origin": "Poland",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0042",
-          "sourceLineId": "pk-1790609086438-1",
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0125",
           "unitPrice": "0.83",
           "priceToAgree": true,
           "addedByPackingResult": true,
           "boxes": 720,
-          "pallets": 10
+          "pallets": 10,
+          "migratedFromPO": "PO-2026-0042"
         }
       ],
       "notes": "",
@@ -22048,14 +22048,14 @@
           "qty": 14300,
           "pallets": 26,
           "unitPrice": "60",
-          "sourceType": "PO",
-          "sourceRef": "PO-2026-0043",
-          "sourceLineId": 1788432629972609,
+          "sourceType": "STOCK",
+          "sourceRef": "LOT-2026-0126",
           "packaging": "Carton (5 kg)",
           "coloration": "",
           "pricingUnit": "box",
           "boxes": 2860,
-          "kgPerBox": 5
+          "kgPerBox": 5,
+          "migratedFromPO": "PO-2026-0043"
         }
       ],
       "notes": "",
