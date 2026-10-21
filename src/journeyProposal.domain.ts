@@ -49,3 +49,19 @@ export function proposeJourney(po: any, so: any, ctx: JourneyCtx = {}): JourneyP
   else road(A, B, `${aWhy}${bWhy ? "; " + bWhy : ""}`);
   return { legs, note: "" };
 }
+
+// v7.30.10 (owner test 21 Oct): the picker hands back { id, name, location } — the journey keeps the place's id (it kept the whole
+// object, so the field showed empty after a choice)
+export const placeIdOf = (v: any) => (v && typeof v === "object" ? (v.id ?? null) : (v ?? null));
+
+/** The shipment's legs from the journey: the first leg of the same mode keeps the built trucks (the goods ride on them), every other
+ *  leg starts with one empty unit of its own. */
+export function legsFromJourney(journey: any[], builtLegs: any[] = []): any[] {
+  const tpl = (builtLegs || [])[0] || {}; let reused = false;
+  return (journey || []).map((j: any, i: number) => {
+    const fromBuilt = !reused && String(tpl.mode || "Road") === String(j.mode);
+    if (fromBuilt) reused = true;
+    return { ...(fromBuilt ? tpl : {}), id: i + 1, mode: j.mode, status: fromBuilt ? (tpl.status || "Booked") : "Booked", fromLocationId: placeIdOf(j.fromLocationId), toLocationId: placeIdOf(j.toLocationId),
+      vehicles: fromBuilt && Array.isArray(tpl.vehicles) && tpl.vehicles.length ? tpl.vehicles : [{ id: 1 }] };
+  });
+}

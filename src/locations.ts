@@ -492,12 +492,12 @@ export function warehouseAddressLocations(contacts: any[]): Location[] {
     });
   });
   out.forEach(loc => {
-    const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
-    if (!existing) LOCATIONS.push(loc);
-    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; }
+  const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
+  if (!existing) LOCATIONS.push({ ...loc, fromDirectory: true } as any);   // v7.30.14: the Directory's, kept fresh
+  else { (existing as any).fromDirectory = true; existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; }
   });
   return out;
-}
+  }
 
 // ─── COUNTERPARTY ADDRESSES AS LOCATIONS (v6.15, #6) ────────────────────────
 // From / To / Destination must offer the supplier, client and warehouse
@@ -544,11 +544,18 @@ export function counterpartyLocations(contacts: any[]): Location[] {
 }
 
 // Register (idempotently) supplier / client / warehouse counterparty addresses.
+// v7.30.14 (owner test 21 Oct: "the destination dropdown picks still old data … we may have 2 sources"): the module kept a COPY of
+// the companies' addresses taken once, when the app started, and that copy won over the live Directory in every place picker — so an
+// address completed, renamed or unticked afterwards still showed the old way. Now the copy is marked, refreshed whenever the Directory
+// changes (App calls this), loses the addresses that are gone, and the pickers read the live Directory first.
 export function registerCounterpartyLocations(contacts: any[]): void {
-  counterpartyLocations(contacts).forEach((loc: Location) => {
+const live = counterpartyLocations(contacts);
+const keep = new Set(live.map((l: Location) => String(l.id)));
+for (let i = LOCATIONS.length - 1; i >= 0; i--) { const l: any = LOCATIONS[i]; if (l && l.fromDirectory && !keep.has(String(l.id))) LOCATIONS.splice(i, 1); }
+live.forEach((loc: Location) => {
     const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
-    if (!existing) LOCATIONS.push(loc);
-    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; (existing as any).pickable = (loc as any).pickable; (existing as any).ownerId = (loc as any).ownerId; }   // v7.3.5
+    if (!existing) LOCATIONS.push({ ...loc, fromDirectory: true } as any);
+    else { (existing as any).fromDirectory = true; existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; (existing as any).pickable = (loc as any).pickable; (existing as any).ownerId = (loc as any).ownerId; }   // v7.3.5
   });
 }
 
@@ -584,9 +591,12 @@ export function isPortType(l: any, opts: { airports?: boolean } = {}): boolean {
   return PORT_TYPES.includes(t) || (!!opts.airports && t === "Airport");   // v7.27.3 (FZ-26): the type only — the old word "PORT" no longer makes a port
 }
 export function unifiedLocations(contacts: any[] = []): Location[] {
-  const byId = new Map<string, Location>();
-  [...allLocations(), ...counterpartyLocations(contacts || [])].forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
-  return sortLocations(Array.from(byId.values()));
+// v7.30.14: ONE SOURCE for a company's address — the live Directory first; the module's own list adds only the places that are not a
+// company's (ports, airports, borders, own and custom places). Without a Directory at hand (an old caller), the kept copy still answers.
+const byId = new Map<string, Location>(); const live = counterpartyLocations(contacts || []); const haveDirectory = (contacts || []).length > 0;
+live.forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
+allLocations().forEach((l: any) => { if (!l || byId.has(String(l.id))) return; if (haveDirectory && l.fromDirectory) return; byId.set(String(l.id), l); });
+return sortLocations(Array.from(byId.values()));
 }
 /** Resolve any location id — built-in, custom or counterparty site. */
 export function locationById(id: any, contacts: any[] = []): Location | null {

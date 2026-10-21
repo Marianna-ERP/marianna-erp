@@ -50,6 +50,12 @@ if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the 
     if (/^\s*(\/\/|\*)/.test(l)) return; const m = l.match(/fetch\(\s*[`"'](https:\/\/[^/`"'$]+)/); if (m && !connect.split(/\s+/).some(s => s === m[1] || (s.startsWith("https://*.") && m[1].endsWith(s.slice(9))))) off.push(`${f}:${i + 1} fetches ${m[1]}`); }));
   if (off.length) { failed++; console.log(`  ✗ security headers: ${off.slice(0, 4).join("; ")}`); } else console.log("  ✓ security headers: set, and every outside address the code fetches is allowed by the policy");
 }
+// v7.30.7 (owner test 21 Oct, P-13): NO DEVELOPER'S NOTE ON A SCREEN — "no backend yet", "interim workflow / flow" never shown to the team
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.tsx$/.test(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\/\/|\*|\{\/\*)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, ""); if (/no backend yet|Interim (workflow|flow)|until the email backend/i.test(c)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ no developer's note on a screen: ${off.slice(0, 4).join(", ")}`); } else console.log("  ✓ no developer's note on a screen");
+}
 // v7.28.11 (Batch L · FZ-03, P-13): A COMPANY'S COUNTRY IS ITS CODE — no file reads a company record's country name except the
 // helpers (companyCountryName / companyCountryIso) and the company tidy-up; the copies on documents keep the printed name
 {

@@ -11,7 +11,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
-import { stampSiteIds, ensureUsedBuiltinsAreOrdinary, usedLocationIds } from "./locations";
+import { stampSiteIds, ensureUsedBuiltinsAreOrdinary, usedLocationIds , registerCounterpartyLocations } from "./locations";
 import { normaliseLot } from "./seasonOps.domain";
 import { normalisePO } from "./po.domain";
 import { normaliseSO } from "./so.domain";
@@ -163,6 +163,8 @@ export default function App() {
   const [productCatalog, setProductCatalog] = useLocalStoredState("productCatalog", PRODUCT_CATALOG_SEED);
   const [packagingTypes, setPackagingTypes] = useLocalStoredState("packagingTypes", PACKAGING_SEED);
   const [claims, setClaimsRaw] = useLocalStoredState("claims", []);
+  // v7.30.14 (owner test 21 Oct): the place module's copy of the companies' addresses follows the Directory as it changes
+  useEffect(() => { try { registerCounterpartyLocations(contacts || []); } catch { /* the pickers read the Directory anyway */ } }, [contacts]);
   // v7.30.2 (Batch M · M-3): a save that asked for a number the shared counter could not give stops before writing anything; say so
   useEffect(() => {
     const onRefusal = (ev: PromiseRejectionEvent) => { const r: any = ev && ev.reason; if (r && r.name === "NumberingUnavailable") { ev.preventDefault(); uiAlert({ tone: "warn", title: "Not saved", message: String(r.message) }); } };   // the app's own window (A-RV-17)

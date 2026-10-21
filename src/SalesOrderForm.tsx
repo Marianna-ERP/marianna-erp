@@ -163,7 +163,11 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
   // v6.99.15: the destination is a LocationPicker over unifiedLocations() — no module-level list any more.
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   // v6.79.0 (W-1): locks read the EFFECTIVE status — a typed label cannot unlock what the shipments locked, or lock what never moved.
-  const soFullyLocked = (_st: any, o?: any) => isShippedOrLater(o || order, sd.shipments);
+  // v7.30.8 (owner test 21 Oct): what locks the form is the sale AS SAVED — a status chosen in the form by mistake can be taken back,
+  // and everything typed meanwhile kept, until Save; a new sale locks nothing before its first save
+  const savedRec: any = (allOrders || []).find((x: any) => x && order && x.id != null && String(x.id) === String(order.id)) || null;
+  const lockBasis: any = savedRec ? { ...order, status: savedRec.status, statusOverride: savedRec.statusOverride } : { ...order, status: "Draft", statusOverride: "" };
+  const soFullyLocked = (_st: any, _o?: any) => isShippedOrLater(lockBasis, sd.shipments);
   const si = (i, k, v) => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
   const addItem = () => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
   const removeItem = (i) => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
@@ -235,7 +239,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
 
   // Status lock: once Confirmed+, currency/fx and pricing fields lock to prevent accidental edits
   const lockedStatuses = new Set(["Confirmed", "Loading", "Shipped", "Delivered", "Invoiced", "Closed"]);
-  const isLocked = lockedStatuses.has(effectiveSoStatus(order, sd.shipments)); // v6.79.0 (W-1)
+  const isLocked = lockedStatuses.has(effectiveSoStatus(lockBasis, sd.shipments)); // v6.79.0 (W-1) · v7.30.8: as saved
   // v7.13.4 (A-AU-2, owner 9 Oct): the order's rate = NBP of the last working day before the order date, less the safety buffer
   // (Settings → Exchange rates). Not typed; an agreed contract rate only with its reason. Locked on confirmation as before.
   const [fxNoteO, setFxNoteO] = React.useState("");
@@ -267,7 +271,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
   // (the goods are on their way; the commercial deal is fixed). A warning is shown
   // before this lock takes effect (see the banner below).
   const FULLY_LOCKED_STATUSES = new Set(["Shipped", "Delivered", "Invoiced", "Closed"]);
-  const fullyLocked = FULLY_LOCKED_STATUSES.has(effectiveSoStatus(order, sd.shipments)); // v6.79.0 (W-1)
+  const fullyLocked = FULLY_LOCKED_STATUSES.has(effectiveSoStatus(lockBasis, sd.shipments)); // v6.79.0 (W-1) · v7.30.8: as saved
 
   // Sourcing rule: every line must be sourced (stock lot OR PO in any status) before
   // the SO can move past Draft. This is a hard business rule — we can't promise goods
@@ -509,7 +513,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                 <Sel value={order.status || "Draft"} onChange={async e => {
                   const nv = e.target.value;
                   // v6.79.0 (W-1): the lock reads the EFFECTIVE status — what the shipments say.
-                  const effNow = effectiveSoStatus(order, sd.shipments);
+                  const effNow = effectiveSoStatus(lockBasis, sd.shipments);   // v7.30.8: forward-only reads the sale as saved
                   const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(effNow);
                   const willLock = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(nv));
                   // v6.63.0 (D-10, ruling D4): a locked SO moves FORWARD only.
@@ -565,14 +569,17 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     if (!ok) return;
                   }
                   sf("status", nv);
+                  // v7.30.8: back to Draft before saving — the rate fixed by a confirmation that was never saved is released again
+                  if (nv === "Draft" && !(savedRec && savedRec.fxLockedAt)) setOrder((o: any) => { if (!o || !o.fxLockedAt) return o; const n = { ...o }; delete n.fxLockedAt; return n; });
                 }} disabled={order.status === "Cancelled"}
                   title={order.status === "Cancelled" ? "This SO is cancelled — read-only and can't be reactivated." : ""}
                   style={{ borderLeft: `4px solid ${(SO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (SO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
                   {Object.keys(SO_STATUSES).map(s => {
                     // Draft and Cancelled are always available; everything else requires all lines to be
                     // (a) sourced AND (b) have enough combined available qty to cover the demanded qty.
-                    const curOrd2 = (SO_STATUSES[order.status || "Draft"] || {}).order ?? 0;
-                    const isBackward = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status)) && s !== "Cancelled" && ((SO_STATUSES[s] || {}).order ?? 0) < curOrd2;
+                    const savedSt = String((savedRec && savedRec.status) || "Draft");   // v7.30.8: forward-only from the status as saved
+                    const curOrd2 = (SO_STATUSES[savedSt] || {}).order ?? 0;
+                    const isBackward = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(savedSt) && s !== "Cancelled" && ((SO_STATUSES[s] || {}).order ?? 0) < curOrd2;
                     if (s === "Draft" || s === "Cancelled") return <option key={s} value={s} disabled={s === "Draft" && isBackward}>{s}{s === "Draft" && isBackward ? "  — forward only" : ""}</option>;
                     if (isBackward) return <option key={s} value={s} disabled>{s}  — forward only</option>;
                     const needsSource = !sourcing.allSourced;
@@ -748,7 +755,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
 
           {hasDuplicateSources && (
             <div style={{ padding: "10px 14px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, marginBottom: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E", marginBottom: 4 }}>⚠ Same source assigned to more than one line</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E", marginBottom: 4 }}>⚠ Same source assigned to more than one line — the lines are outlined in red below</div>
               {Object.values(dupSourceGroups).map((g: any, gi) => (
                 <div key={gi} style={{ fontSize: 11, color: "#92400E" }}>
                   Lines {g.indices.map((x: number) => x + 1).join(", ")} all draw from <strong>{g.sourceRef}</strong>{""} — combined <strong>{fmtNum(g.totalQty)} kg</strong>. If this is one physical product, you may be assigning it twice; merge the lines or pick a different source.
@@ -778,15 +785,17 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               const avail = availability[i] || {};
               const showAvail = it.sourceType && it.sourceRef && avail.lineQty > 0;
               const lineOverageBlocks = avail.hasOverage && nonDraftStatuses.includes(order.status);
+              const lineDup = !!(dupLineIndex as any)[i];   // v7.30.9 (owner test 21 Oct): the same source on another line — outlined in red
               // v6.99.22 (G-4/G-5, owner approval): sorting turned part of the lot into class II — the line promises a class we no longer have.
               const gradeShort = avail.grade && avail.gradeShort > 0.5 ? avail.gradeShort : 0;
               const canAdjust = gradeShort > 0 && !soFullyLocked(order.status, order) && !["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(order, sd.shipments || [])));
               return (
                 <div key={i} style={{
                   marginBottom: 12, padding: 12, borderRadius: 8,
-                  background: lineIsBlocking || lineOverageBlocks ? "#FEF2F2" : (avail.hasOverage ? "#FFFBEB" : "#FAFAFA"),
-                  border: lineIsBlocking || lineOverageBlocks ? "1px solid #FCA5A5" : (avail.hasOverage ? "1px solid #FCD34D" : "1px solid #F3F4F6")
-                }}>
+                  background: lineIsBlocking || lineOverageBlocks || lineDup ? "#FEF2F2" : (avail.hasOverage ? "#FFFBEB" : "#FAFAFA"),
+                  border: lineIsBlocking || lineOverageBlocks || lineDup ? "2px solid #DC2626" : (avail.hasOverage ? "1px solid #FCD34D" : "1px solid #F3F4F6")
+                  }} data-line-to-correct={lineIsBlocking || lineOverageBlocks || lineDup ? "1" : undefined}>
+                  {lineDup && <div style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", marginBottom: 6 }}>Line {i + 1} draws from the same source as line{(dupLineIndex as any)[i].others.length > 1 ? "s" : ""} {(dupLineIndex as any)[i].others.map((x: number) => x + 1).join(", ")} — keep one, or change its source.</div>}
                   {/* Source bar */}
                   {gradeShort > 0 && (
                     <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "7px 10px", marginBottom: 8, fontSize: 11, color: "#92400E" }}>

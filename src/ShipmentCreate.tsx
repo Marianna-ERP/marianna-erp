@@ -11,8 +11,8 @@ import { isExwSale, isDRulePurchase } from "./incoterms.domain";   // v7.19.1 / 
 import { placeForPrint , counterpartyLocations , unifiedLocations , placeGroup , locationById , isPortType } from "./locations";
 import { catalogItems } from "./productCatalog";   // v7.18.4 (A-AU-9)
 import { Card, HEADER_MODES, Inp, Lbl, SectionTitle, Sel, buildManualShipment, buildShipmentFromPO, buildShipmentFromSO, countryOfLocation, fmtNum, locById, locText, mergedLocations, modeChangePatch, parseNum, todayISO } from "./Shipments";
-import { proposeJourney } from "./journeyProposal.domain";   // v7.29.0 (SC-15)
-import { JourneyProposalCard, legsFromJourney } from "./JourneyProposalCard";   // v7.29.0 (SC-15)
+import { proposeJourney, legsFromJourney } from "./journeyProposal.domain";   // v7.29.0 (SC-15)
+import { JourneyProposalCard } from "./JourneyProposalCard";   // v7.29.0 (SC-15)
 import { poExpectedArrival, poPromisedDate } from "./po.domain";   // v7.28.5 (Batch L)
 import { overReceiptCheck, receiptWarningText } from "./receipts.domain";   // v7.11.0 (A-RV-23)
 import { issueNumber } from "./numbering";   // v7.27.8 (A-W5)

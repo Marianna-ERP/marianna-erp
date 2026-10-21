@@ -36,7 +36,7 @@ import { companyProfile } from "./useLocalStoredState";
 import { OrderForm } from "./PurchaseOrderForm";
 import { PackingResultWindow, SupplierTruckWindow, OrderDetail } from "./PurchaseOrderDetail";
 import { PODoc, PrintModal } from "./PurchaseOrderDocument";
-import { promisedDateKind, poPromisedDate, poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
+import { promisedDateKind, poPromisedDate, poExpectedArrival, promisedDateLabel } from "./po.domain";   // v7.28.5 (Batch L)
 import { peopleOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 (Batch L)
 import { issueNumber, issueNumbers } from "./numbering";   // v7.27.8 (A-W5)
 // v7.22.4 (A-RV-16, Batch F): no hidden module copies — the packaging types and the counterparties the purchase screens and the
@@ -351,8 +351,8 @@ function EmailModal({ order, contacts = [], onClose }: any) {
         <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
           {/* Honest explanation of the workflow */}
           <div style={{ padding: "12px 14px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠ Interim workflow — no backend yet</div>
-            Until the email backend is built, sending happens in two steps:
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>How sending works</div>
+            Sending takes two steps:
             <ol style={{ margin: "6px 0 0 18px", padding: 0 }}>
               <li>Click <strong>Save PDF</strong> below — the print dialog opens. Choose <em>Save as PDF</em> as the destination, save the file (e.g. to your Desktop).</li>
               <li>Click <strong>Open email draft</strong> — your default mail app (Outlook, Apple Mail, Gmail) opens with the message pre-filled. Drag the saved PDF into the email as an attachment, then hit Send.</li>
@@ -1386,7 +1386,7 @@ ${blockNote}`.trim(),
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 110px 100px 130px 170px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
             {/* v6.58.0 column order (user ruling): number, supplier+products, order date, delivery date, status, TOTAL (was "value"), linked documents */
-              ["PO NUMBER", "SUPPLIER · PRODUCTS", "ORDER DATE", "DELIVERY DATE", "STATUS", "TOTAL", "LINKED DOCUMENTS"].map((h, i) => (
+              ["PO NUMBER", "SUPPLIER · PRODUCTS", "ORDER DATE", "PROMISED DATE", "STATUS", "TOTAL", "LINKED DOCUMENTS"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
           </div>
@@ -1425,7 +1425,8 @@ ${blockNote}`.trim(),
                   </div>
                 </div>
                 <div style={{ fontSize: 11, color: isLoadingOverdue ? "#B45309" : "#444", fontWeight: isLoadingOverdue ? 600 : 400 }} title={isLoadingOverdue ? "the loading date has passed on an active PO" : undefined}>{formatDMY(o.orderDate) || formatDMY(o.loadingDate) || "—"}</div>{/* v6.99.107 (A-CLR-1, owner): amber — a timing hint, not an error */}
-                <div style={{ fontSize: 11, color: "#444" }}>{formatDMY(poExpectedArrival(o, extShipments || [])) || "—"}</div>
+                <div style={{ fontSize: 11, color: "#444" }}>{(() => { const pd = poPromisedDate(o), arr = poExpectedArrival(o, extShipments || []);   // v7.30.6 (owner test 21 Oct): the one promised date, named by its rule
+                return <><div>{formatDMY(pd) || "—"}</div>{pd ? <div style={{ fontSize: 10, color: "#94A3B8" }}>{promisedDateLabel(o)}</div> : null}{arr && promisedDateKind(o) !== "delivery" ? <div style={{ fontSize: 10, color: "#64748B" }}>arrives {formatDMY(arr)}</div> : null}</>; })()}</div>
                 <div><StatusBadge status={o.status} /></div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(total, o.currency)}</div>

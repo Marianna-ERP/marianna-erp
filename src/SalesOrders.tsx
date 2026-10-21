@@ -595,8 +595,8 @@ function EmailModal({ order, contacts = [], onClose }: any) {
         </div>
         <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
           <div style={{ padding: "12px 14px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠ Interim workflow — no backend yet</div>
-            Until the email backend is built, sending happens in two steps: save the SO as PDF, then open an email draft and attach the PDF manually.
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>How sending works</div>
+            Sending takes two steps: save the SO as PDF, then open an email draft and attach the PDF manually.
           </div>
           <div><Lbl>TO</Lbl><Inp value={recipient || "(client email missing in Contacts)"} disabled style={{ background: "#F9FAFB", color: "#666" }} /></div>
           <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>

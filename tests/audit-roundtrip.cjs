@@ -4791,6 +4791,53 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.30.6 – v7.30.13 — the owner's test of 21 Oct ══
+(function v73013(){
+  console.log("\n══ v7.30.6–13 — the owner's test of 21 Oct ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("v7.30.6: the PO list shows each PO's one promised date, named by its rule, and the arrival once a truck is planned", () => {
+    const s = rd("PurchaseOrders.tsx"); ok(/"ORDER DATE", "PROMISED DATE", "STATUS"/.test(s) && /const pd = poPromisedDate\(o\), arr = poExpectedArrival\(o, extShipments \|\| \[\]\)/.test(s) && /promisedDateLabel\(o\)/.test(s), "the column still reads the arrival only");
+  });
+  t("v7.30.8: the sale form's locks and its forward-only rule read the sale AS SAVED — a status chosen by mistake can be taken back until Save; an unsaved confirmation's rate is released on going back to Draft", () => {
+    const s = rd("SalesOrderForm.tsx");
+    ok(/const isLocked = lockedStatuses\.has\(effectiveSoStatus\(lockBasis, sd\.shipments\)\)/.test(s) && /const fullyLocked = FULLY_LOCKED_STATUSES\.has\(effectiveSoStatus\(lockBasis, sd\.shipments\)\)/.test(s), "the locks read the form's typed status");
+    ok(/const effNow = effectiveSoStatus\(lockBasis, sd\.shipments\)/.test(s) && /const savedSt = String\(\(savedRec && savedRec\.status\) \|\| "Draft"\)/.test(s), "forward-only reads the typed status");
+    ok(/if \(nv === "Draft" && !\(savedRec && savedRec\.fxLockedAt\)\)/.test(s), "the unsaved confirmation's rate is not released");
+  });
+  t("v7.30.9: a line to correct — the same source as another line included — is outlined in red with a note", () => {
+    const s = rd("SalesOrderForm.tsx"); ok(/const lineDup = !!\(dupLineIndex as any\)\[i\]/.test(s) && /lineIsBlocking \|\| lineOverageBlocks \|\| lineDup \? "2px solid #DC2626"/.test(s), "no red outline");
+  });
+  t("v7.30.10: the journey card keeps the chosen place's id; a leg place saved as an object is repaired by the shipment tidy-up", () => {
+    const JC = B("journeyProposal.domain.js"), SS = B("storeShapes.js");
+    eq(JC.placeIdOf({ id: 7, name: "Koper" }), 7); eq(JC.placeIdOf(9), 9); eq(JC.placeIdOf(null), null);
+    eq(JSON.stringify(JC.legsFromJourney([{ mode: "Road", fromLocationId: { id: 1, name: "A" }, toLocationId: { id: 2 } }], []).map(l => [l.fromLocationId, l.toLocationId])), "[[1,2]]");
+    const sh = SS.shapeShipment({ id: 1, number: "S", legs: [{ id: 1, fromLocationId: { id: 3, name: "x", location: {} }, toLocationId: 4, vehicles: [] }] });
+    eq(JSON.stringify([sh.legs[0].fromLocationId, sh.legs[0].toLocationId]), "[3,4]", "the object stayed");
+  });
+  t("v7.30.11–13: the booking's POD shows the sale's port; the unit's price comes before its currency; the carrier order asks for 0% VAT on an export outside the EU (owner's wording)", () => {
+    const e = rd("ShipmentEditor.tsx"); ok(/value=\{b\?\.podId \?\? b\?\.pod \?\? \(bp\.podDoc\?\.id \?\? ""\)\}/.test(e), "the POD does not show the sale's port");
+    const g = e.split("\n").findIndex(l => l.includes('gridTemplateColumns: "160px 90px 1fr", gap: 9, marginTop: 9')); ok(g > 0 && /Price for this unit/.test(e.split("\n")[g + 1]), "the price is not first");
+    const d = rd("ShipmentDocuments.tsx"); ok(/Prosimy o zastosowanie stawki VAT 0% na wystawianych przez Państwa fakturach, zgodnie z art\. 41 ust\. 4 ustawy o VAT, w związku z wywozem towaru poza UE, potwierdzonym dokumentem celnym IE-599/.test(d) && /=== "EXPORT"/.test(d), "the VAT clause is missing or not tied to exports");
+  });
+})();
+
+// ══ v7.30.14 — owner test 21 Oct: one source for a company's address in every place picker ══
+(function v73014(){
+  console.log("\n══ v7.30.14 — the place pickers read the live Directory ══");
+  const L = B("locations.js");
+  t("v7.30.14: the companies' addresses copied at start never win over the live Directory — an address changed, removed or unticked afterwards shows the new way in every picker; the copy follows the Directory when re-registered", () => {
+    const mk = (street, extra = {}) => [{ id: 4242, name: "Fresh Client Sp. z o.o.", roles: ["Client"], type: "Client", countryIso: "PL", addr: { street, postcode: "00-001", city: "Warszawa" }, people: [], ...extra }];
+    L.registerCounterpartyLocations(mk("Old Street 1"));
+    const before = L.unifiedLocations([]).filter(l => String(l.name).startsWith("Fresh Client"));
+    ok(before.length >= 1 && /Old Street 1/.test(String(before[0].address || "")), "the copy was not taken (test set-up)");
+    const fresh = mk("New Street 9");
+    const now = L.unifiedLocations(fresh).filter(l => String(l.name).startsWith("Fresh Client"));
+    eq(now.length, 1, "the company's address offered twice"); ok(/New Street 9/.test(String(now[0].address || "")), "the picker shows the old address: " + now[0].address);
+    L.registerCounterpartyLocations(fresh); ok(/New Street 9/.test(String((L.unifiedLocations([]).find(l => String(l.name).startsWith("Fresh Client")) || {}).address || "")), "the copy did not follow the Directory");
+    L.registerCounterpartyLocations([]); eq(L.unifiedLocations([]).filter(l => String(l.name).startsWith("Fresh Client")).length, 0, "an address that is gone is still offered");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

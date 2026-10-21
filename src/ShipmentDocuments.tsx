@@ -5,9 +5,9 @@ import { jobsByCarrierLeg, effectiveLoad, truckTour, tourGaps, truckLoadingStops
 import { grossForGoodsLine } from "./packaging.domain";
 import { formatDMY } from "./dates";
 import { printHtmlNode } from "./documentService";
-import { placeForPrint } from "./locations";
+import { placeForPrint, locationById } from "./locations";
 import { COMPANY, Card, FieldPrint, Inp, LOGO_DATA_URL, Lbl, SectionTitle, Sel, blankTransportUnit, cargoVariance, fmtMoney, fmtNum, locationTextFromFields, parseNum, providerById, providerCosts, providerIdsForShipment, providerLegs, providerRoleForLeg, providerRolePL, providerUnitsForLeg, shipmentCostPLN, todayISO } from "./Shipments";
-import { shipmentStartPlaceId, shipmentEndPlaceId } from "./tradeFlow.domain";   // v7.28.7 (Batch L)
+import { shipmentStartPlaceId, shipmentEndPlaceId, shipmentTradeDirection } from "./tradeFlow.domain";   // v7.28.7 (Batch L)
 
 export function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders = [], customTerms = "", pos = [], packagingTypes = [], lots = [] }: any) {
   const docNo = shipment.transportOrderNo || shipment.number;
@@ -138,6 +138,10 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
     ["Disputes are subject to Polish transport law / CMR and the competent court for Warsaw.", "Spory podlegaja polskiemu prawu przewozowemu / CMR i sadowi wlasciwemu dla Warszawy."],
   ];
   const manualTermsLines = String(customTerms || shipment.customOrderTerms || "").split("\n").map(s => s.trim()).filter(Boolean);
+  // v7.30.13 (owner 21 Oct): on a shipment taking the goods out of the EU, the carrier is asked to invoice at 0% VAT — the owner's wording
+  const exportOutsideEU = shipmentTradeDirection(shipment, { pos, orders, countryOf: (id: any) => String((locationById(id, contacts || []) || {}).country || "") }) === "EXPORT";
+  const VAT_EXPORT_TERM = ["Please apply the 0% VAT rate on the invoices you issue, in accordance with Art. 41(4) of the VAT Act, as the goods are exported outside the EU, confirmed by the customs document IE-599.", "Prosimy o zastosowanie stawki VAT 0% na wystawianych przez Państwa fakturach, zgodnie z art. 41 ust. 4 ustawy o VAT, w związku z wywozem towaru poza UE, potwierdzonym dokumentem celnym IE-599"];
+  const termsForRoad = exportOutsideEU ? [...ROAD_TERMS, VAT_EXPORT_TERM] : ROAD_TERMS;
 
   return (
     <div style={{ background: "#fff", color: "#111", fontFamily: "Arial, Calibri, sans-serif", fontSize: 10, lineHeight: 1.22, padding: 12 }}>
@@ -270,11 +274,11 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
       {(() => { const block = (<>
       <div style={{ marginTop: 6, fontWeight: 850, fontSize: 9.5 }}>Terms / Warunki</div>{/* v6.99.140 (A-TO-8, owner): the terms in a smaller type — room below for the carrier's signature and stamp */}
       {allRoad ? (
-        <ol style={{ marginTop: 2, paddingLeft: 14, marginBottom: 0, fontSize: 8, lineHeight: 1.25 }}>{ROAD_TERMS.map((t, i) => <li key={i} style={{ marginBottom: 1 }}><span>{t[0]}</span> <span style={{ color: "#555", fontStyle: "italic" }}>/ {t[1]}</span></li>)}</ol>
+        <ol style={{ marginTop: 2, paddingLeft: 14, marginBottom: 0, fontSize: 8, lineHeight: 1.25 }}>{termsForRoad.map((t, i) => <li key={i} style={{ marginBottom: 1 }}><span>{t[0]}</span> <span style={{ color: "#555", fontStyle: "italic" }}>/ {t[1]}</span></li>)}</ol>
       ) : manualTermsLines.length > 0 ? (
-        <ol style={{ marginTop: 2, paddingLeft: 14, marginBottom: 0, fontSize: 8, lineHeight: 1.25 }}>{manualTermsLines.map((t, i) => <li key={i} style={{ marginBottom: 1 }}>{t}</li>)}</ol>
+        <ol style={{ marginTop: 2, paddingLeft: 14, marginBottom: 0, fontSize: 8, lineHeight: 1.25 }}>{manualTermsLines.map((t, i) => <li key={i} style={{ marginBottom: 1 }}>{t}</li>)}{exportOutsideEU && <li data-vat-export="1" style={{ marginBottom: 1 }}><span>{VAT_EXPORT_TERM[0]}</span> <span style={{ color: "#555", fontStyle: "italic" }}>{VAT_EXPORT_TERM[1]}</span></li>}</ol>
       ) : (
-        <div style={{ marginTop: 3, fontStyle: "italic", color: "#555" }}>Terms as per separate agreement / booking confirmation. · Warunki zgodnie z odrebna umowa / potwierdzeniem bookingu.</div>
+        <div style={{ marginTop: 3, fontStyle: "italic", color: "#555" }}>{exportOutsideEU && <div data-vat-export="1" style={{ fontStyle: "normal", color: "#111" }}>{VAT_EXPORT_TERM[0]} <span style={{ color: "#555", fontStyle: "italic" }}>{VAT_EXPORT_TERM[1]}</span></div>}Terms as per separate agreement / booking confirmation. · Warunki zgodnie z odrebna umowa / potwierdzeniem bookingu.</div>
       )}
       {allRoad && manualTermsLines.length > 0 && (<>   {/* v7.15.1 (owner 9 Oct): conditions written for a ROAD carrier print too — before, the standard terms replaced them */}
         <div data-written-terms="1" style={{ marginTop: 4, fontWeight: 850, fontSize: 9.5 }}>Additional conditions / Warunki dodatkowe</div>

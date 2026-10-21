@@ -22,6 +22,9 @@ export function shapingSetter(set: (u: any) => void, shape: (rec: any) => any): 
  *  unloadedAt; the older pair (actualLoadDate / actualUnloadDate) is moved there when the new one is empty, then dropped. Returns the
  *  same object when nothing changes, so an unchanged record is not rewritten. */
 export function shapeShipment(sh: any): any {
+  // v7.30.10 (owner test 21 Oct): a leg place written by the v7.29.0–v7.30.5 journey card as { id, name, location } becomes its id
+  if (sh && Array.isArray(sh.legs) && sh.legs.some((l: any) => l && ((l.fromLocationId && typeof l.fromLocationId === "object") || (l.toLocationId && typeof l.toLocationId === "object"))))
+    sh = { ...sh, legs: sh.legs.map((l: any) => !l ? l : { ...l, fromLocationId: l.fromLocationId && typeof l.fromLocationId === "object" ? (l.fromLocationId.id ?? null) : l.fromLocationId, toLocationId: l.toLocationId && typeof l.toLocationId === "object" ? (l.toLocationId.id ?? null) : l.toLocationId }) };
   if (!sh || !Array.isArray(sh.legs)) return sh;
   let changed = false;
   const legs = sh.legs.map((l: any) => {

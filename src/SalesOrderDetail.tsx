@@ -59,9 +59,9 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
         </div>
 
         <div style={{ padding: 20, overflowY: "auto", background: "#FAFAFA", flex: 1 }}>
-          {/* Backend-phase note */}
+          {/* v7.30.7: what confirming does */}
           <div style={{ padding: "10px 14px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, marginBottom: 14, fontSize: 11, color: "#92400E", lineHeight: 1.5 }}>
-            <strong>Interim flow (no backend yet):</strong> the invoice will be saved on this SO as a "pending" record. When the Invoices module is integrated, it will be created there automatically. For now, also enter it in Fakturownia and link the PDF.
+            <strong>What happens:</strong> the invoice is saved in the Invoices register, linked to this sale. From the Invoices module you issue it in Fakturownia (or, if it was issued there directly, its number is matched on import).   {/* v7.30.7 (owner test 21 Oct): no developer's interim note */}
           </div>
 
           <Card style={{ marginBottom: 12 }}>

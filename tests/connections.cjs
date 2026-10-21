@@ -207,7 +207,8 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     await t("v7.13.4: a draft EUR sale's rate is NBP of the day before its order date less the buffer — shown, with 'agreed rate…'", async () => {
       FXN.setFxSettings({ EUR: 4.27, _bufferPct: 2 });
       const SOF = require(path.resolve("./src/SalesOrderForm")); const Form = SOF.OrderForm;
-      const so = { ...(d.orders.find(o => o.currency === "EUR") || d.orders[0]), currency: "EUR", status: "Draft", fxLockedAt: "", fxAgreedReason: "", orderDate: "2026-09-30" };
+      // v7.30.8: the form locks by the sale AS SAVED — a draft is a sale not saved beyond Draft, so this one is new (its own id)
+      const so = { ...(d.orders.find(o => o.currency === "EUR") || d.orders[0]), id: 990001, number: "SO-2026-9901", currency: "EUR", status: "Draft", fxLockedAt: "", fxAgreedReason: "", orderDate: "2026-09-30" };
       const host6 = document.createElement("div"); document.body.appendChild(host6); const r6 = createRoot(host6);
       await act(async () => { r6.render(React.createElement(Form, { order: so, setOrder: noop, onSave: noop, onCancel: noop, allOrders: d.orders, contacts: d.contacts, lots: d.lots, pos: d.pos, shipments: d.shipments })); });
       await act(async () => { await new Promise(r => setTimeout(r, 50)); });
