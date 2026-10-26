@@ -97,6 +97,7 @@
     "../src/datesChain.domain.ts",
     "../src/placeRepair.domain.ts",
     "../src/journeyProposal.domain.ts",
-    "../src/placeReplace.domain.ts"
+    "../src/placeReplace.domain.ts",
+    "../src/rateReview.domain.ts"
   ]
 }

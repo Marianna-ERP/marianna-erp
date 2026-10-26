@@ -176,9 +176,13 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     global.fetch = async (url) => { const m = String(url).match(/tables\/A\/(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})/); if (!m) return { ok: false, status: 500 }; return { ok: true, status: 200, json: async () => nbpJson(m[1]).filter(x => x.effectiveDate <= m[2]) }; };
     const FXN = require(path.resolve("./src/fx"));
     await t("v7.13.0: Settings shows the NBP rates (read, not typed) and the order buffer with its own Save", async () => {
-      const St = require(path.resolve("./src/Settings")).default;
-      const h = renderToStaticMarkup(React.createElement(St, { fxSettings: { EUR: 4.2711, USD: 3.71, GBP: 5.0, _nbp: 20261008, _bufferPct: 2 }, setFxSettings: noop, contacts: d.contacts, users: [], setUsers: noop, userName: "Hazem Osman" }));
-      ok(/data-fx-reference="1"/.test(h) && /EUR <b>4\.2711<\/b>/.test(h), "no read-only NBP rates"); ok(/data-fx-buffer="1"/.test(h), "no buffer field");
+      const St = require(path.resolve("./src/Settings")).default; const FXm = require(path.resolve("./src/fx"));
+      // v7.33.2 (FX-1): the box reads the NBP tables this browser holds (not a copy in the settings) — seed yesterday's table
+      const y = new Date(); y.setDate(y.getDate() - 1); const yIso = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, "0")}-${String(y.getDate()).padStart(2, "0")}`;
+      FXm.__setNbpStore({ days: { [yIso]: { EUR: 4.2711, USD: 3.71, GBP: 5.0 } }, covered: {} });
+      const h = renderToStaticMarkup(React.createElement(St, { fxSettings: { _bufferPct: 2 }, setFxSettings: noop, contacts: d.contacts, users: [], setUsers: noop, userName: "Hazem Osman" }));
+      FXm.__setNbpStore({ days: {}, covered: {} });
+      ok(/data-fx-reference="1"/.test(h) && /EUR <b>4\.2711<\/b>/.test(h), "no read-only NBP rates"); ok(/data-nbp-held="1"/.test(h) && /Refresh now/.test(h), "the tables held are not shown"); ok(/data-fx-buffer="1"/.test(h), "no buffer field");
       ok(!/step="0\.0001"[^>]*value="4\.2711"/.test(h), "the EUR rate can still be typed");
     });
     await t("v7.13.2: an EUR invoice's rate is NBP of the day before its issue date — shown, not typed", async () => {

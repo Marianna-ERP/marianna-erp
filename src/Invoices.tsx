@@ -11,7 +11,7 @@ import { periodGuard } from "./periodClose.domain";
 import { fxMissing } from "./fx";
 import DateInput from "./DateInput";
 import { useConfirm, notifySaved, SmallButton } from "./ui";
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate, nbpRateBefore } from "./fx";   // v7.13.2–7.13.3 (A-AU-2)
@@ -146,8 +146,12 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
       const sug = suggestForRow(r, contacts, shipments, pos);
       const learned = learnFromRegister(r, invoices, contacts);   // v6.99.135 (A-FI-1): what this seller's last invoice was
       const dup = isDuplicateCostInvoice(r.number, invoices);
+      // v7.33.1 (INV-PDF): the registered twin has no Fakturownia id (typed by hand, or made from an operational cost) — adopt it
+      const twin = dup ? (invoices || []).find((i2: any) => i2 && i2.kind === "COST" && i2.paymentStatus !== "Cancelled" && String(i2.number || "").replace(/\s+/g, "").toLowerCase() === String(r.number || "").replace(/\s+/g, "").toLowerCase()) : null;
+      const sameCo = (a: any, b: any) => String(a || "").toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]/g, "").slice(0, 12) === String(b || "").toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]/g, "").slice(0, 12);
+      const adopt = twin && !(twin.fakturownia && (twin.fakturownia.fktId || twin.fakturownia.ref)) && r.fktId != null && (sameCo(twin.counterparty?.name, r.seller) || (twin.counterparty?.taxNo && String(twin.counterparty.taxNo).replace(/\D/g, "") === String(r.sellerTaxNo || "").replace(/\D/g, ""))) ? twin.id : null;
       const vatFix = dup ? vatFixFor(r, invoices) : null;   // v7.26.0 (A-INV-1): the old overhead path left it without VAT — this corrects it
-      return { ...r, ...sug, ...(learned?.tag ? { tag: learned.tag } : {}), dup, vatFix, include: vatFix ? true : (!dup && !!r.net && !!r.gross),   /* v7.26.0: a row missing its net or gross is not ticked for you */
+      return { ...r, ...sug, ...(learned?.tag ? { tag: learned.tag } : {}), dup, vatFix, adopt, include: vatFix || adopt != null ? true : (!dup && !!r.net && !!r.gross),   /* v7.26.0: a row missing its net or gross is not ticked for you */
         category: learned?.category || guessCostCategory(`${r.seller} ${r.description || ""}`),
         warehouseId: learned?.warehouseId ?? (warehouses[0]?.id ?? ""), learned: learned ? { from: learned.from, recurring: learned.recurring } : null };
     });
@@ -220,11 +224,10 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
         return;
       }
       if (r.tag === "OVERHEAD") {
-        // v6.64.1 (D-17): OVERHEAD rows write the operational cost ONLY — the
-        // register invoice is then created exactly once by migrateLegacyInvoices
-        // (source migrated:opCost:*). Writing both here AND letting the fold run
-        // produced two register invoices per overhead row (DUP_INVOICE alerts).
-        opCosts.push(operationalCostFromRow(r, r.category || "other"));
+        // v7.33.1 (INV-PDF, owner 26 Oct): the register invoice is written HERE, with its Fakturownia id, NIP and address (its PDF can then
+        // be saved); the operational cost line beside it is marked as its mirror, so nothing at start makes a second, id-less invoice
+        regs.push(buildCostInvoice(r, r.tag, {}, contact));
+        opCosts.push({ ...operationalCostFromRow(r, r.category || "other"), source: `invoice:${r.number}` });
         return;
       }
       regs.push(buildCostInvoice(r, r.tag, { shipmentNumber: r.shipmentNumber, poNumber: r.poNumber }, contact));
@@ -238,7 +241,9 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
         if (lineId != null) flips.push({ shipmentNumber: r.shipmentNumber, costLineId: lineId, invoiceNumber: r.number });
       }
     });
-    onPost({ regs, flips, opCosts, fixes });
+    // v7.33.1 (INV-PDF): the adopted ones — their Fakturownia id, NIP and address onto the registered invoice
+    const adopts = rows.filter((r: any) => r.include && r.adopt != null).map((r: any) => ({ invoiceId: r.adopt, fktId: r.fktId, taxNo: r.sellerTaxNo || "", addr: r.sellerAddr || null }));
+    onPost({ regs, flips, opCosts, fixes, adopts });
   }
 
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12 };
@@ -286,7 +291,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                     upd(r.key, { include: e.target.checked });
                   }} />
                   <div style={{ fontSize: 11, color: "#64748B" }}>{formatDMY(r.date)}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.vatFix && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#0E7490" }}>corrects the VAT of the invoice already registered ({r.vatFix.confirmZero ? "0 % confirmed" : `${Number(r.vatFix.vatRate).toFixed(2)} %`})</span>}{(!r.net || !r.gross) && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B45309" }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount — check it there before posting</span>}{r.dup && !r.vatFix && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.adopt != null && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#15803D" }}>already in the register — gets its Fakturownia link</span>}{r.vatFix && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#0E7490" }}>corrects the VAT of the invoice already registered ({r.vatFix.confirmZero ? "0 % confirmed" : `${Number(r.vatFix.vatRate).toFixed(2)} %`})</span>}{(!r.net || !r.gross) && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B45309" }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount — check it there before posting</span>}{r.dup && !r.vatFix && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
                   <div style={{ fontSize: 11, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.number || "—"}</div>
                   <div style={{ fontSize: 12 }}>{(r.net || r.gross).toLocaleString("pl-PL")} {r.currency}</div>
                   <select style={inp} value={r.tag} onChange={(e: any) => upd(r.key, { tag: e.target.value })}>
@@ -453,6 +458,28 @@ function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any
 
 /** v7.25.1 (FZ-17, owner 17 Oct): AN INVOICE NAMES ITS COMPANY BY ID. The ones that name it in text only are listed once — link each to
  *  its company (a company of the very same name is suggested), or open the Directory to add it; no free text. */
+/** v7.33.0 (FIN-1, owner 26 Oct): the credit / debit notes that name their party in text only, linked here — where notes are made —
+ *  by the same pick-and-link as the invoices (the Finance panel no longer mixes them with operational costs). */
+function UnlinkedNoteParties({ notes = [], contacts = [], setNotes = null }: any) {
+  const S = (v: any) => String(v ?? "").trim(); const norm = (v: any) => S(v).toLowerCase().replace(/\s+/g, " ");
+  const live = (contacts || []).filter((c: any) => c && c.status !== "Deleted" && !c.deleted && S(c.name));
+  const rows = (notes || []).filter((n: any) => n && n.partyId == null && S(n.partyName) && !/Cancelled/i.test(S(n.status)));
+  const [pick, setPick] = useState<Record<string, string>>({});
+  if (!rows.length || typeof setNotes !== "function") return null;
+  const suggest = (n: any) => { const hit = live.find((c: any) => norm(c.name) === norm(n.partyName)); return hit ? String(hit.id) : ""; };
+  const link = (n: any, cid: string) => { const c = live.find((x: any) => String(x.id) === String(cid)); if (!c) return;
+    setNotes((prev: any[]) => (prev || []).map((x: any) => x && x.id === n.id ? { ...x, partyId: c.id, partyName: c.name } : x));
+    recordAudit({ module: "Invoices", docType: "Note", docNumber: S(n.number || n.id), action: "updated", summary: `Party linked by id: ${c.name} (was named "${S(n.partyName)}" in text) — FIN-1` }); };
+  const btn: React.CSSProperties = { padding: "5px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" };
+  return <div data-note-parties="1" style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 10, padding: "10px 12px", margin: "0 0 12px" }}>
+    <b style={{ fontSize: 13 }}>{rows.length} credit / debit note{rows.length === 1 ? "" : "s"} name{rows.length === 1 ? "s" : ""} the party in text only</b>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 }}><tbody>{rows.map((n: any) => { const cur = pick[String(n.id)] ?? suggest(n);
+      return <tr key={n.id}><td style={{ padding: "5px 8px" }}>{S(n.noteType || n.direction) || "note"} · {n.date ? formatDMY(S(n.date).slice(0, 10)) : "—"} · {Number(n.amount || 0).toLocaleString("pl-PL")} {S(n.currency)}</td>
+        <td style={{ padding: "5px 8px" }}>{S(n.partyName)}</td>
+        <td style={{ padding: "5px 8px", minWidth: 220 }}><Sel value={cur} onChange={(e: any) => setPick(p => ({ ...p, [String(n.id)]: e.target.value }))}><option value="">Choose the company...</option>{live.map((c: any) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}</Sel></td>
+        <td style={{ padding: "5px 8px" }}><button type="button" disabled={!cur} onClick={() => link(n, cur)} style={{ ...btn, background: cur ? "#16A34A" : "#F1F5F9", color: cur ? "#fff" : "#94A3B8", borderColor: cur ? "#16A34A" : "#E5E7EB" }}>Link</button></td></tr>; })}</tbody></table>
+  </div>;
+}
 function UnlinkedCompanies({ invoices, contacts, setInvoices }: any) {
   const S = (v: any) => String(v ?? "").trim(); const norm = (v: any) => S(v).toLowerCase().replace(/\s+/g, " ");
   const live = (contacts || []).filter((c: any) => c && c.status !== "Deleted" && S(c.name));
@@ -528,19 +555,28 @@ export default function Invoices(props: any) {
     let folder = changeFolder ? null : await pdfFolder();
     if (!folder) { const r = await choosePdfFolder(); if (!r.ok) { await invAlert({ tone: "warn", title: "Invoice PDFs", message: r.message || "No folder chosen." }); return; } folder = await pdfFolder(); if (!folder) return; if (changeFolder) { await invAlert({ tone: "info", title: "Invoice PDFs", message: `PDFs will be saved in "${r.name}".` }); return; } }
     const fktIdOf = (i: any) => i?.fakturownia?.fktId ?? i?.fakturownia?.ref;   // v7.27.4: an invoice the ERP created there keeps the id as 'ref'
-    const todo = (invoices || []).filter((i: any) => i && fktIdOf(i) && i.paymentStatus !== "Cancelled" && !i.pdfSavedAs).slice(0, 40);
-    if (!todo.length) { await invAlert({ tone: "info", title: "Invoice PDFs", message: "Every invoice that came from or went to Fakturownia already has its PDF in the folder." }); return; }
+    const todo = (invoices || []).filter((i: any) => i && fktIdOf(i) && i.paymentStatus !== "Cancelled" && !i.pdfSavedAs && !(i.fakturownia && i.fakturownia.noPdf)).slice(0, 40);
+    // v7.33.1 (INV-PDF): what is not asked for, said — an invoice with no Fakturownia link yet
+    const noLink = (invoices || []).filter((i: any) => i && !fktIdOf(i) && i.paymentStatus !== "Cancelled" && !i.pdfSavedAs && !(i.fakturownia && i.fakturownia.noPdf)).length;
+    const plain = (msg: string) => /HTTP 404/.test(msg) ? "no longer in Fakturownia (deleted, or re-issued there under a new number) — paste the new one's link on the invoice page, or mark it 'No PDF in Fakturownia'" : /HTTP 422/.test(msg) ? "Fakturownia cannot print it yet (a draft, or still with KSeF) — it is tried again next time" : msg;
+    if (!todo.length) { await invAlert({ tone: "info", title: "Invoice PDFs", message: "Every invoice that came from or went to Fakturownia already has its PDF in the folder." + (noLink ? ` ${noLink} invoice(s) have no Fakturownia link yet — the next import links the Polish ones; a foreign one gets its PDF dropped on its page.` : "") }); return; }
     setPdfBusy(true); const saved: any[] = []; const failed: string[] = [];
     for (const inv of todo) {
       const r = await fetchInvoicePdf(fktIdOf(inv));
-      if (!r.ok || !r.blob) { failed.push(`${inv.number}: ${r.error || "no PDF"}`); continue; }
+      if (!r.ok || !r.blob) { failed.push(`${inv.number}: ${plain(r.error || "no PDF")}`); continue; }
       const name = pdfFileName(inv); try { await savePdfToFolder(folder, name, r.blob); saved.push({ id: inv.id, name }); } catch { failed.push(`${inv.number}: the folder refused the file`); }
     }
     setPdfBusy(false);
     if (saved.length) { setInvoices((prev: any[]) => (prev || []).map((i: any) => { const s = saved.find(x => x.id === i.id); return s ? { ...i, pdfSavedAs: s.name, pdfSavedAt: localTodayISO() } : i; })); recordAudit({ module: "Invoices", docType: "PDF", docNumber: `${saved.length} invoice(s)`, action: "updated", summary: `Invoice PDFs saved in the folder: ${saved.map(s => s.name).slice(0, 10).join(", ")}${saved.length > 10 ? ` +${saved.length - 10}` : ""} (A-INV-2)` }); }
-    await invAlert({ tone: failed.length ? "warn" : "info", title: "Invoice PDFs", message: `${saved.length} PDF(s) saved in the folder.${todo.length === 40 ? " Press again for the next ones." : ""}${failed.length ? `\n\nNot saved:\n${failed.slice(0, 8).join("\n")}` : ""}` });
+    await invAlert({ tone: failed.length ? "warn" : "info", title: "Invoice PDFs", message: `${saved.length} PDF(s) saved in the folder.${noLink ? `\n\n${noLink} invoice(s) have no Fakturownia link yet — typed by hand or made from an operational cost. The next "Import from Fakturownia" links the Polish ones; a foreign one gets its PDF dropped on its page.` : ""}${todo.length === 40 ? " Press again for the next ones." : ""}${failed.length ? `\n\nNot saved:\n${failed.slice(0, 8).join("\n")}` : ""}` });
   }
-  async function handleImportPost({ regs, flips, opCosts, fixes = [] }: any) {
+  async function handleImportPost({ regs, flips, opCosts, fixes = [], adopts = [] }: any) {
+  if (adopts.length) {   // v7.33.1 (INV-PDF): a registered invoice is given its Fakturownia id (its PDF can be saved), its NIP and address
+    const byId = new Map(adopts.map((a: any) => [String(a.invoiceId), a]));
+    setInvoices((prev: any[]) => (prev || []).map((i: any) => { const a: any = byId.get(String(i?.id)); if (!a) return i;
+      return { ...i, fakturownia: { ...(i.fakturownia || {}), fktId: a.fktId }, counterparty: { ...(i.counterparty || {}), ...(a.taxNo && !(i.counterparty || {}).taxNo ? { taxNo: a.taxNo } : {}), ...(a.addr && !(i.counterparty || {}).addr ? { addr: a.addr } : {}) } }; }));
+    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "updated", summary: `${adopts.length} registered invoice(s) linked to Fakturownia (their id, NIP and address) — INV-PDF` });
+  }
   if (regs.length) setInvoices((prev: any[]) => [...regs.map((r: any) => recomputeInvoiceMoney(r)), ...(prev || [])]);
   // v7.26.0 (A-INV-1): the old overhead invoices take the VAT Fakturownia's amounts say (and their operational cost keeps it too)
   if (fixes.length) {
@@ -614,6 +650,11 @@ export default function Invoices(props: any) {
     if (isLocked(inv)) { await invAlert({ tone: "warn", title: "Invoice locked", message: "This invoice has been sent / exported and is locked. To change it, issue a credit or debit note." }); return; }
     setForm({ ...inv }); setView("form");
   }
+  // v7.33.1 (INV-PDF): "record a foreign one as a cost invoice" from an operational cost — the form opens prefilled with what was typed there
+  useEffect(() => { let req: any = null; try { const r = window.sessionStorage.getItem("marianna:newCostInvoice"); window.sessionStorage.removeItem("marianna:newCostInvoice"); req = r ? JSON.parse(r) : null; } catch { req = null; }
+    if (!req) return; newInvoice("COST");
+    setForm((f: any) => recomputeInvoiceMoney({ ...f, number: String(req.number || ""), counterparty: req.supplierId != null || req.supplierName ? { ...(req.supplierId != null ? { id: req.supplierId } : {}), name: String(req.supplierName || "") } : null, issueDate: req.date || f.issueDate, saleDate: req.date || f.saleDate, currency: req.currency || f.currency, netAmount: Number(req.amount) || 0 }));
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   async function saveForm() {
     const rec = recomputeInvoiceMoney(form) as Invoice;
     // v6.99.0 (FN-1): the month is closed — refuse a document dated inside it.
@@ -806,7 +847,7 @@ export default function Invoices(props: any) {
   if (view === "note" && noteForm) return <NoteForm form={noteForm} setForm={setNoteForm} onSave={saveNote} onCancel={() => { setView(selected ? "detail" : "list"); setNoteForm(null); }} contacts={contacts} invoices={invoices} orders={orders} pos={pos} shipments={shipments} />;
   if (view === "detail" && selected) return (<>
       {invNode}
-    <InvoiceDetail
+    <InvoiceDetail setInvoices={setInvoices}
       inv={selected} notes={notes}
       onBack={() => { setView("list"); setSelId(null); }}
       onEdit={() => editInvoice(selected)}
@@ -858,6 +899,7 @@ export default function Invoices(props: any) {
 
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 28px" }}>
         <UnlinkedCompanies invoices={invoices} contacts={contacts} setInvoices={setInvoices} />
+        <UnlinkedNoteParties notes={notes} contacts={contacts} setNotes={setNotes} />   {/* v7.33.0 (FIN-1) */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
           {[
             { l: "RECEIVABLE · OPEN", v: money(recvOpen, "PLN"), c: "#16A34A" },
@@ -931,7 +973,7 @@ export default function Invoices(props: any) {
 }
 
 // ════════════════ DETAIL ════════════════
-function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState, onDeletePayment = null, shipments = [], onAllocate = null, allocatedLots = [] }: any) {
+function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState, onDeletePayment = null, shipments = [], onAllocate = null, allocatedLots = [], setInvoices = null }: any) {
   // v6.99.72 (A-CU-3): what customs says about this invoice — read from the shipments' clearance lines, no store of its own
   const customs = inv.kind === "SALES" ? customsForInvoice(inv.number, shipments) : [];
   const locked = isLocked(inv);
@@ -1001,6 +1043,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
               {inv.currency !== "PLN" && <Row k="Gross (PLN)" v={money(inv.grossPLN, "PLN")} />}
               {inv.kind === "COST" && <Row k="Charged to" v={CHARGED_TO[scopeOf(catKey(inv.category))] || "—"} />}
               {inv.pdfSavedAs && <Row k="PDF in the folder" v={`${inv.pdfSavedAs}${inv.pdfSavedAt ? ` · ${formatDMY(inv.pdfSavedAt)}` : ""}`} />}
+              {setInvoices && <InvoicePdfTools inv={inv} setInvoices={setInvoices} />}   {/* v7.33.1 (INV-PDF) */}
             </Card>
           </div>
 
@@ -1030,6 +1073,31 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
       </div>
     </div>
   );
+}
+/** v7.33.1 (INV-PDF, owner 26 Oct): on an invoice's page — paste the Fakturownia link of an invoice re-issued there (its id is kept and the
+ *  next "PDFs → folder" saves it), mark "No PDF in Fakturownia" (it is not asked for again), or drop the PDF received by e-mail (a foreign
+ *  invoice): it is saved in the PDF folder under the same name rule and the invoice marked saved. */
+function InvoicePdfTools({ inv, setInvoices }: any) {
+  const [link, setLink] = useState(""); const [msg, setMsg] = useState("");
+  const fid = inv?.fakturownia?.fktId ?? inv?.fakturownia?.ref;
+  const upd = (patch: any) => setInvoices((prev: any[]) => (prev || []).map((x: any) => x && x.id === inv.id ? { ...x, ...patch(x) } : x));
+  const useLink = () => { const m = String(link).match(/(\d{5,})/); if (!m) { setMsg("Paste the invoice's link from Fakturownia (…/invoices/123456) or its number there."); return; }
+    upd((x: any) => ({ fakturownia: { ...(x.fakturownia || {}), fktId: Number(m[1]), noPdf: false }, pdfSavedAs: x.pdfSavedAs || undefined })); setLink(""); setMsg("Linked — the next PDFs → folder saves it.");
+    recordAudit({ module: "Invoices", docType: "Invoice", docNumber: String(inv.number || ""), action: "updated", summary: `Fakturownia link set by hand: ${m[1]} — INV-PDF` }); };
+  const dropPdf = async (file: File | null) => { if (!file) return; if (!pdfFolderSupported()) { setMsg("This browser cannot write into a folder — use Chrome or Edge."); return; }
+    let folder = await pdfFolder(); if (!folder) { const r = await choosePdfFolder(); if (!r.ok) { setMsg(r.message || "No folder chosen."); return; } folder = await pdfFolder(); if (!folder) return; }
+    const name = pdfFileName(inv); try { await savePdfToFolder(folder, name, file); upd(() => ({ pdfSavedAs: name, pdfSavedAt: localTodayISO() })); setMsg(`Saved as ${name}.`); recordAudit({ module: "Invoices", docType: "Invoice", docNumber: String(inv.number || ""), action: "updated", summary: `PDF dropped and saved in the folder: ${name} — INV-PDF` }); } catch { setMsg("The folder refused the file."); } };
+  if (inv?.pdfSavedAs) return null;
+  return <div data-invoice-pdf-tools="1" style={{ marginTop: 8, padding: "8px 10px", border: "1px dashed #CBD5E1", borderRadius: 8, fontSize: 12 }}
+    onDragOver={(e: any) => e.preventDefault()} onDrop={(e: any) => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) dropPdf(f); }}>
+    <div style={{ fontWeight: 700, marginBottom: 4 }}>This invoice's PDF is not in the folder yet</div>
+    {!fid && <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}><input value={link} onChange={e => setLink(e.target.value)} placeholder="Fakturownia link of this invoice (…/invoices/123456)" style={{ flex: 1, padding: "5px 8px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12 }} /><button type="button" onClick={useLink} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Use</button></div>}
+    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+      <label style={{ cursor: "pointer", color: "#1D4ED8", textDecoration: "underline" }}>Drop or choose the PDF received<input type="file" accept="application/pdf" style={{ display: "none" }} onChange={e => dropPdf((e.target.files || [])[0] || null)} /></label>
+      {fid != null && !(inv.fakturownia && inv.fakturownia.noPdf) && <button type="button" onClick={() => { upd((x: any) => ({ fakturownia: { ...(x.fakturownia || {}), noPdf: true } })); setMsg("It will not be asked of Fakturownia again."); }} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, cursor: "pointer" }}>No PDF in Fakturownia</button>}
+    </div>
+    {msg && <div style={{ marginTop: 4, color: "#475569" }}>{msg}</div>}
+  </div>;
 }
 function Row({ k, v, bold }: any) { return <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #F7F7F7" }}><span style={{ fontSize: 12, color: "#666" }}>{k}</span><span style={{ fontSize: 13, fontWeight: bold ? 700 : 500 }}>{v}</span></div>; }
 

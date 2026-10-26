@@ -1,5 +1,5 @@
 {
- "version": "7.32.2",
+ "version": "7.33.2",
  "files": [
   ".npmrc",
   "HOW_TO_DEPLOY.md",
@@ -43,6 +43,7 @@
   "src/PurchaseOrderForm.tsx",
   "src/PurchaseOrders.tsx",
   "src/QualityReportDoc.tsx",
+  "src/RatesToReviewPanel.tsx",
   "src/RecoveryPanel.tsx",
   "src/SOMarginCard.tsx",
   "src/SalesOrderDetail.tsx",
@@ -128,6 +129,7 @@
   "src/pricingUnit.domain.ts",
   "src/productCatalog.ts",
   "src/purchaseOrderGuards.ts",
+  "src/rateReview.domain.ts",
   "src/receipts.domain.ts",
   "src/recovery.domain.ts",
   "src/referenceGuards.ts",

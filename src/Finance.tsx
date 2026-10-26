@@ -27,6 +27,7 @@ import { nbpRateBefore } from "./fx";   // v7.18.6 (A-AU-12)
 import { parseNum } from "./numbers";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
 import { buildLedger } from "./ledger";
+import { RatesToReviewPanel } from "./RatesToReviewPanel";   // v7.33.2 (FX-1)
 import { CompanyPicker, newCompanyRecord } from "./CompanyPicker";   // v7.27.15 (A-RV-26 / A-AU-8)
 import { fxDifferences } from "./fxDifferences.domain";   // v7.27.16 (FZ-06)
 import {
@@ -840,7 +841,7 @@ function TypedCompaniesPanel({ contacts = [], operationalCosts = [], setOperatio
   const S1 = (v: any) => String(v ?? "").trim(); const key = (v: any) => S1(v).toLowerCase();
   const rows = new Map<string, { name: string; costs: number; notes: number }>();
   (operationalCosts || []).forEach((c: any) => { if (c && c.supplierId == null && S1(c.supplierName)) { const k = key(c.supplierName); const r = rows.get(k) || { name: S1(c.supplierName), costs: 0, notes: 0 }; r.costs++; rows.set(k, r); } });
-  (financeNotes || []).forEach((n: any) => { if (n && n.partyId == null && S1(n.partyName)) { const k = key(n.partyName); const r = rows.get(k) || { name: S1(n.partyName), costs: 0, notes: 0 }; r.notes++; rows.set(k, r); } });
+  // v7.33.0 (FIN-1, owner 26 Oct: "why is FruVerde an operational cost here?"): the credit / debit notes are linked in Invoices, where they are made
   if (!rows.size) return null;
   const directory = contacts || [];   // a SUGGESTION by the same name, linked only when the person clicks (never silently)
   const exactOf = (nm: string) => directory.find((c: any) => c && !c.deleted && key(c.name) === key(nm)) || null;
@@ -855,7 +856,7 @@ function TypedCompaniesPanel({ contacts = [], operationalCosts = [], setOperatio
   return (
     <Card style={{ marginBottom: 14, border: "1px solid #FDE68A", background: "#FFFBEB" }}>
       <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", marginBottom: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>Typed companies to link — {total} record(s), {list.length} name(s)</div>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>Operational costs with a typed supplier — {total} cost(s), {list.length} name(s)</div>
         <div style={{ fontSize: 12, color: "#64748B", flex: 1 }}>Saved before companies were picked from the directory. Linked once, they count under their company everywhere.</div>
         {exact.length > 0 && <SmallButton onClick={() => exact.forEach(r => link(r.name, exactOf(r.name)))}>Link the {exact.reduce((a, r) => a + r.costs + r.notes, 0)} exact matches</SmallButton>}
       </div>
@@ -1240,18 +1241,19 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
           </>
         ) : (
         <>
-        <TypedCompaniesPanel contacts={contacts} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />{/* v7.27.15 (A-RV-26 / A-AU-8) */}
+        <TypedCompaniesPanel contacts={contacts} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />
+        <RatesToReviewPanel operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} />{/* v7.27.15 (A-RV-26 / A-AU-8) */}
         <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1.1fr", gap: 14, alignItems: "start" }}>
         <Card style={{ order: 2 }}>
                 <SectionTitle>{form.id && (operationalCosts || []).some(c => c.id === form.id) ? "EDIT OPERATIONAL COST" : "ADD OPERATIONAL COST"}</SectionTitle>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 10 }}>   {/* v7.33.0 (FIN-3): equal columns, never squeezed */}
                   <Field label="Period"><Inp value={form.period} onChange={(e: any) => setForm({ ...form, period: e.target.value })} placeholder="2026-05" /></Field>
                   <Field label="Date"><Inp type="date" value={form.date} onChange={(e: any) => setForm({ ...form, date: e.target.value })} /></Field>
                   <Field label="Category"><Sel value={form.category} onChange={(e: any) => setForm({ ...form, category: e.target.value })}>{OPERATIONAL_COST_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</Sel></Field>
                   <Field label="Cost center"><Sel value={form.costCenter} onChange={(e: any) => setForm({ ...form, costCenter: e.target.value })}>{["admin", "sales", "operations", "logistics", "finance", "general"].map(c => <option key={c} value={c}>{c}</option>)}</Sel></Field>
-                  <Field label="Description"><Inp value={form.description} onChange={(e: any) => setForm({ ...form, description: e.target.value })} placeholder="Office rent - May" /></Field>
-                  <Field label="Supplier / payee"><CompanyPicker contacts={contacts} value={(form as any).supplierId ?? null} typedName={(form as any).supplierId != null ? "" : (form.supplierName || "")} onPick={(c: any) => setForm({ ...form, supplierId: c ? c.id : null, supplierName: c ? c.name : "" } as any)} onAdd={typeof setContacts === "function" ? (nm: string) => { const c = newCompanyRecord(nm, "Other", nextId); setContacts((prev: any[]) => [...(prev || []), c]); return c; } : null} /></Field>{/* v7.27.15 (A-AU-8, owner approved 17 Oct): picked from Counterparties, stored by id */}
-                  <Field label="Invoice no. (received)"><Inp value={(form as any).invoiceNo || ""} onChange={(e: any) => setForm({ ...form, invoiceNo: e.target.value } as any)} placeholder="FV/2026/06/123 — from Fakturownia/KSeF" /></Field>
+                  <div style={{ gridColumn: "1 / -1" }}><Field label="Description"><Inp value={form.description} onChange={(e: any) => setForm({ ...form, description: e.target.value })} placeholder="Office rent - May" /></Field></div>
+                  <div style={{ gridColumn: "1 / -1" }}><Field label="Supplier / payee"><CompanyPicker contacts={contacts} value={(form as any).supplierId ?? null} typedName={(form as any).supplierId != null ? "" : (form.supplierName || "")} onPick={(c: any) => setForm({ ...form, supplierId: c ? c.id : null, supplierName: c ? c.name : "" } as any)} onAdd={typeof setContacts === "function" ? (nm: string) => { const c = newCompanyRecord(nm, "Other", nextId); setContacts((prev: any[]) => [...(prev || []), c]); return c; } : null} /></Field></div>{/* v7.27.15 (A-AU-8, owner approved 17 Oct): picked from Counterparties, stored by id */}
+<div><Field label="Invoice no. (received)"><Inp value={(form as any).invoiceNo || ""} onChange={(e: any) => setForm({ ...form, invoiceNo: e.target.value } as any)} placeholder="FV/2026/06/123 — from Fakturownia/KSeF" /></Field>{String((form as any).invoiceNo || "").trim() && <div data-op-has-invoice="1" style={{ marginTop: 4, fontSize: 11, color: "#92400E", lineHeight: 1.4 }}>This cost has an invoice — invoices live in Invoices: a Polish one arrives from Fakturownia by itself; <button type="button" onClick={() => { try { window.sessionStorage.setItem("marianna:newCostInvoice", JSON.stringify({ number: (form as any).invoiceNo, supplierId: (form as any).supplierId ?? null, supplierName: form.supplierName || "", date: form.date, amount: form.amount, currency: form.currency })); } catch { /* the form opens empty */ } window.dispatchEvent(new CustomEvent("marianna:navigate", { detail: { module: "invoices" } })); }} style={{ border: "none", background: "none", color: "#1D4ED8", textDecoration: "underline", cursor: "pointer", padding: 0, fontSize: 11 }}>record a foreign one as a cost invoice</button>.</div>}</div>   {/* v7.33.1 (INV-PDF) */}
                   <Field label="Amount"><Inp type="number" value={form.amount} onChange={(e: any) => setForm({ ...form, amount: safe(e.target.value), amountPLN: Math.round(safe(e.target.value) * (String(form.currency || "PLN").toUpperCase() === "PLN" ? 1 : safe(form.fxRate)) * 100) / 100 })} /></Field>
                   <Field label="Currency"><Sel value={form.currency} onChange={(e: any) => setForm({ ...form, currency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c} value={c}>{c}</option>)}</Sel></Field>
                   <Field label="FX → PLN (NBP)"><div data-op-rate="1" title={opFx.note} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#F9FAFB", color: "#374151" }}>{String(form.currency || "PLN").toUpperCase() === "PLN" ? "1" : (safe(form.fxRate) > 0 ? String(form.fxRate) : "—")}<span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6 }}>{opFx.note}</span></div></Field>{/* v7.21.11 (A-RV-34): shown, not typed */}
@@ -1261,7 +1263,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
                   <Field label="Cost invoice no. (actual)"><Inp value={(form as any).invoiceRef || ""} onChange={(e: any) => setForm({ ...form, invoiceRef: e.target.value } as any)} placeholder="e.g. FS 106/2026 — links this line to the real invoice" /></Field>
                 </div>
                 <div style={{ marginTop: 10 }}>
-                  <Field label="Notes"><Inp value={form.notes || ""} onChange={(e: any) => setForm({ ...form, notes: e.target.value })} placeholder="Internal note" /></Field>
+                  <div style={{ gridColumn: "1 / -1" }}><Field label="Notes"><Inp value={form.notes || ""} onChange={(e: any) => setForm({ ...form, notes: e.target.value })} placeholder="Internal note" /></Field></div>
                 </div>
                 <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                   <Button variant="primary" onClick={saveCost}>Save cost</Button>

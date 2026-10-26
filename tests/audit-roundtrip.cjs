@@ -3989,7 +3989,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ["v7.12.2-trade-direction", "v7.18.2-doc-types", "v7.13.1-closed-months", "foldWarehouseInvoiceStore(", "migrateAddressOn(", "foldLegacyClaimFields(", "migrateSaleLinesToLots(", "normaliseStoredSoStatus(", "convertSettledRefsToEvents(", "stripPendingInvoices("].forEach(k => ok(!app.includes(k), "App still runs " + k));
     const all = fsx.readdirSync(px.join(__dirname, "../src")).filter(f => /\.(ts|tsx)$/.test(f)).map(rd).join("\n");
     ["function foldWarehouseInvoiceStore", "function migrateAddressOn", "function foldLegacyClaimFields", "function migrateSaleLinesToLots", "function normaliseStoredSoStatus", "function convertSettledRefsToEvents", "function stripPendingInvoices", "function mapDocTypes"].forEach(k => ok(!all.includes(k), k + " is still in the code"));
-    ["migrateLegacyInvoices(", "normaliseCounterparty(", "normalisePO(", "normaliseSO(", "normaliseLot(", "normaliseInvoiceCategory(", "stampSiteIds(", "fxFillInvoice("].forEach(k => ok(app.includes(k), "a live routine went: " + k));
+    ["normaliseCounterparty(",   /* v7.33.1 (INV-PDF / FZ-11, owner 26 Oct): migrateLegacyInvoices retired — an invoice enters through its own door */ "normalisePO(", "normaliseSO(", "normaliseLot(", "normaliseInvoiceCategory(", "stampSiteIds(", "fxFillInvoice("].forEach(k => ok(app.includes(k), "a live routine went: " + k));
   });
   t("A-ST-10 / A-RV-30 (kept): Finance → Warehouse charges reads and writes the register — no store of its own; the import posts warehouse invoices to the register", () => {
     const fin = rd("Finance.tsx"), inv = rd("Invoices.tsx");
@@ -4903,6 +4903,40 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const pc = require("fs").readFileSync(require("path").join(__dirname, "../src/Contacts.tsx"), "utf8"); ok(/marianna:contactsNewCompany/.test(pc) && /marianna:companyCreated/.test(pc), "Parties does not open its own form for the request, or does not say it was saved");
     eq(CP.newCompanyFromInvoice({ kind: "COST", number: "X", counterparty: { name: "Stacja", taxNo: "ZZ123", addr: { country: "Atlantis" } } }, () => null).countryIso, "", "an unknown country was typed into the record");
     ok(!("id" in CP.newCompanyFromInvoice({ counterparty: { name: "Y" } }, () => null)), "the prefill carries an id");
+  });
+})();
+
+// ══ v7.33.0–2 — the held batch: FIN-1…3, INV-PDF, FX-1 ══
+(function v73302(){
+  console.log("\n══ v7.33 — FIN, INV-PDF, FX-1 ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  const RR = B("rateReview.domain.js"), FX = B("fx.js");
+  t("FIN-1/2/3 (v7.33.0): Finance's panel lists operational costs only; the notes' typed parties are linked in Invoices; the App hands Finance the notes' setter; the cost form's columns never squeeze", () => {
+    const fin = rd("Finance.tsx"); ok(/Operational costs with a typed supplier/.test(fin) && !/\(financeNotes \|\| \[\]\)\.forEach\(\(n: any\) => \{ if \(n && n\.partyId == null/.test(fin), "the panel still lists notes");
+    ok(/gridTemplateColumns: "minmax\(0, 1fr\) minmax\(0, 1fr\)"/.test(fin), "the form's columns can still be squeezed");
+    ok(/setFinanceNotes=\{setFinanceNotes\}/.test(rd("App.tsx").split("\n").find(l => l.includes("<Finance packagingTypes")) || ""), "the App does not hand Finance the notes' setter");
+    ok(/function UnlinkedNoteParties/.test(rd("Invoices.tsx")), "no notes' panel in Invoices");
+  });
+  t("INV-PDF (v7.33.1): the import writes an overhead invoice itself (its Fakturownia id kept) and adopts a registered twin without an id; no operational cost is copied into the register at start; plain PDF reasons, the skipped counted, the link field, 'No PDF in Fakturownia', a dropped PDF", () => {
+    const inv = rd("Invoices.tsx"), app = rd("App.tsx");
+    ok(/regs\.push\(buildCostInvoice\(r, r\.tag, \{\}, contact\)\);\n\s+opCosts\.push\(\{ \.\.\.operationalCostFromRow\(r, r\.category \|\| "other"\), source: `invoice:\$\{r\.number\}` \}\);/.test(inv), "the overhead branch does not write the register invoice");
+    ok(/const adopt = twin && /.test(inv) && /fakturownia: \{ \.\.\.\(i\.fakturownia \|\| \{\}\), fktId: a\.fktId \}/.test(inv), "no adoption");
+    ok(!/migrateLegacyInvoices\(/.test(app), "the start-up copy still runs");
+    ok(/no longer in Fakturownia/.test(inv) && /cannot print it yet/.test(inv) && /have no Fakturownia link yet/.test(inv), "the PDF window's plain reasons are missing");
+    ok(/function InvoicePdfTools/.test(inv) && /No PDF in Fakturownia/.test(inv) && /Drop or choose the PDF received/.test(inv), "the invoice page's PDF tools are missing");
+    ok(/const target = String\(e\?\.detail\?\.module \|\| "contacts"\); navigateRef\.current\(target\);/.test(app), "the jump still always goes to Parties");
+  });
+  t("FX-1 (v7.33.2): one rule — a foreign-currency record takes the NBP rate of the last working day before its own date; the review lists a missing or different rate (unless kept as agreed) and sets the NBP rate with the PLN amount", () => {
+    FX.__setNbpStore({ days: { "2026-10-05": { EUR: 4.25 }, "2026-10-06": { EUR: 4.3228 }, "2026-10-23": { EUR: 4.24 } }, covered: {} });
+    eq(FX.fxRateFor("EUR", "2026-10-07"), 4.3228); eq(FX.fxRateFor("EUR", "2026-10-06"), 4.25, "the record's own day was used"); eq(FX.fxRateFor("PLN"), 1);
+    const sh = [{ id: 1, number: "S", status: "Booked", costs: [{ id: 9, type: "freight", amount: 1000, currency: "EUR", fxRate: 4.2, date: "2026-10-07", amountPLN: 4200 }], legs: [{ vehicles: [{ costAmount: 500, priceCurrency: "EUR", costFxRate: 1, plannedLoadingDate: "2026-10-24" }, { costAmount: 300, priceCurrency: "EUR", costFxRate: 4.24, plannedLoadingDate: "2026-10-24" }] }] }];
+    const ops = [{ id: 5, amount: 100, currency: "EUR", fxRate: 4.3228, date: "2026-10-07", amountPLN: 432.28 }, { id: 6, amount: 50, currency: "EUR", fxRate: 4.1, date: "2026-10-07", fxAgreed: true }];
+    const items = RR.ratesToReview({ shipments: sh, operationalCosts: ops }, (c, d) => FX.fxRateFor(c, d));
+    eq(items.map(i => `${i.kind}:${i.rate}>${i.nbp}`).join(), "cost line:4.2>4.3228,unit price:1>4.24", "the review list");
+    const r = RR.applyRates({ shipments: sh, operationalCosts: ops }, items, "nbp");
+    eq(r.shipments[0].costs[0].fxRate, 4.3228); eq(r.shipments[0].costs[0].amountPLN, 4322.8); eq(r.shipments[0].legs[0].vehicles[0].costFxRate, 4.24); ok(r.operationalCosts[0] === ops[0], "an untouched record was copied");
+    eq(RR.applyRates({ shipments: sh }, [items[0]], "agreed").shipments[0].costs[0].fxAgreed, true);
+    FX.__setNbpStore({ days: {}, covered: {} });
   });
 })();
 

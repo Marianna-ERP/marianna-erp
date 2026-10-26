@@ -34,6 +34,7 @@ import { clientReportKg } from "./seasonOps.domain";   // v6.99.87   // v6.99.72
 import { CreateShipmentModal } from "./ShipmentCreate";
 import { ShipmentDetail } from "./ShipmentDetail";
 import { TransportOrderPrintModal, TransportOrderEmailModal } from "./ShipmentDocuments";
+import { RatesToReviewPanel } from "./RatesToReviewPanel";   // v7.33.2 (FX-1)
 import { PlaceRepairPanel } from "./PlaceRepairPanel";   // v7.28.8 (FZ-36)
 import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { peopleOf, rolesOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 (Batch L)
@@ -1752,7 +1753,8 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
               setToast(`${spawned.length} onward shipment(s) created from the de-vanning report: ${spawned.map((s: any) => s.number).join(", ")}.`);
             }} />
       </>) : (<>
-      <PlaceRepairPanel shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} orders={orders} />{/* v7.28.8 (FZ-36): until no route place is left to repair */}
+      <PlaceRepairPanel shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} orders={orders} />
+      <RatesToReviewPanel shipments={shipments} setShipments={setShipments} />{/* v7.28.8 (FZ-36): until no route place is left to repair */}
       <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) 160px 200px", gap: 8, marginBottom: 12 }}>
           <Inp value={query} onChange={e => setQuery(e.target.value)} placeholder="Search shipment, PO, SO, lot, provider..." />
           <Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}<option value={CUSTOMS_OPEN}>{CUSTOMS_OPEN} ({customsOpenSet.size})</option><option value={TERMS_REVIEW}>{TERMS_REVIEW} ({termsAll.length})</option></Sel>

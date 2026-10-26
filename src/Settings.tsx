@@ -24,6 +24,7 @@ import { recordAudit } from "./audit";
 import { localTodayISO , formatDMY } from "./dates";
 import { packagingUsers, catalogUsers, namedList, softDeleteCatalogItem, restoreCatalogItem, softDeleteVariety, catalogValueUsers, softDeleteCatalogValue, valuesInUse } from "./masterData.domain";   // v7.17.1 (A-RV-07) · v7.18.3 (A-AU-5)
 import { parseNum } from "./numbers";
+import { nbpHeld, refreshNbp, fxRateFor } from "./fx";
 import { typedPackagingSpellings } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { readCountries } from "./Contacts";   // v7.19.6 (A-TD-5): the company's country from the one country list
 import { counterInstalled } from "./numbering";   // v7.27.8 (A-W5)
@@ -586,6 +587,7 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles:
 
 // ── v6.99.0 (FN-7): REFERENCE FX RATES — the season's rates, set by the owner; documents still lock their own rate ──
 function FxSettingsPanel({ fxSettings = {}, setFxSettings = null }: any) {
+  const [, setNbpTick] = useState(0);   // v7.33.2 (FX-1): re-drawn after "Refresh now"
   // v7.13.0 / v7.13.4 (A-AU-2, owner 9 Oct): the rates are NBP's, read automatically — nothing typed. Documents take the NBP rate of the
   // last working day before their own date. The one choice here is the safety buffer on ORDERS, saved with an explicit Save (A-SET-1).
   const [buf, setBuf] = React.useState<string>(String(fxSettings?._bufferPct ?? fxSettings?._BUFFERPCT ?? ""));
@@ -594,9 +596,9 @@ function FxSettingsPanel({ fxSettings = {}, setFxSettings = null }: any) {
   const n = parseNum(buf); const valid = buf === "" || (isFinite(n) && n >= 0 && n < 50);
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
-      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Exchange rates — NBP{fxSettings?._nbp ? <span style={{ fontSize: 11, fontWeight: 500, color: "#16A34A", marginLeft: 8 }}>table A of {String(fxSettings._nbp).replace(/(\d{4})(\d{2})(\d{2})/, "$3/$2/$1")} read</span> : <span style={{ fontSize: 11, fontWeight: 500, color: "#92400E", marginLeft: 8 }}>NBP not reached yet</span>}</div>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Exchange rates — NBP{(() => { const h = nbpHeld(); return h.latest ? <span data-nbp-held="1" style={{ fontSize: 11, fontWeight: 500, color: "#16A34A", marginLeft: 8 }}>tables of {h.days} working day(s) held, the newest of {h.latest.split("-").reverse().join("/")}</span> : <span style={{ fontSize: 11, fontWeight: 500, color: "#B45309", marginLeft: 8 }}>no NBP table read yet</span>; })()} <button type="button" onClick={() => { refreshNbp().then(() => setNbpTick((x: number) => x + 1)); }} style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer" }}>Refresh now</button></div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Read from NBP automatically. Every invoice, payment and order takes the NBP rate of the last working day <b>before</b> its own date; these are today's, for reference.</div>
-      <div data-fx-reference="1" style={{ display: "flex", gap: 16, fontSize: 12, marginBottom: 12 }}>{["EUR", "USD", "GBP"].map(c => <span key={c}>{c} <b>{fxSettings?.[c] ? Number(fxSettings[c]).toFixed(4) : "—"}</b></span>)}</div>
+      <div data-fx-reference="1" style={{ display: "flex", gap: 16, fontSize: 12, marginBottom: 12 }}>{["EUR", "USD", "GBP"].map(c => { const r = fxRateFor(c); return <span key={c}>{c} <b>{r ? Number(r).toFixed(4) : "-"}</b></span>; })}</div>
       <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Safety buffer on orders (%)</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>A sale is priced at the NBP rate <b>less</b> this %, a purchase at the rate <b>plus</b> it — the margin you see already allows for a weaker euro at payment. Invoices and payments never take it.</div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

@@ -23,7 +23,7 @@ import { normaliseCounterparty } from "./counterparty.domain";
    // v6.99.127
 import { useSingleTab } from "./useSingleTab";   // v6.99.114 (AUD-02)
 import { useSharedStore, SharedStoreStatus, EnvironmentStrip } from "./SharedStoreGate";   // v6.99.148–149
-import { setFxSettings as applyFxSettings, fetchNbpRates, ensureNbpRange } from "./fx";   // v7.13.x (A-AU-2)
+import { setFxSettings as applyFxSettings, ensureNbpRange, refreshNbp } from "./fx";   // v7.13.x (A-AU-2)
 import { poDirectFromSOs, directSync } from "./tradeFlow.domain";
 import Claims from "./Claims";
 import { localTodayISO, addDaysISO } from "./dates";
@@ -42,7 +42,6 @@ import { periodGuard } from "./periodClose.domain";   // v7.13.1 (A-AU-11): clos
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
 import Invoices from "./Invoices";
-import { migrateLegacyInvoices } from "./invoicing";   // v7.21.4 (A-ST-10)
 import { syncOverheadOpCosts } from "./operationalCosts";
 
 import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn, hasOwner } from "./permissions.domain";
@@ -226,7 +225,16 @@ export default function App() {
   setOurCountry(String((company as any)?.country || "").trim() || COMPANY_DEFAULTS.country);   // v7.19.6 (A-TD-5): the trade-direction rule reads Settings → Company
   const [numbering, setNumbering] = useLocalStoredState("numbering", {});
   // FX auto (owner): NBP table A on load — sets the reference rates when reachable; manual values win when typed.
-  useEffect(() => { fetchNbpRates().then(r => { if (r) setFxSettings((prev: any) => ({ ...(prev || {}), ...(r as any), _nbp: (r as any)._date })); });   /* v7.13.0 (A-AU-2): today's NBP wins over old typed rates */ // eslint-disable-next-line react-hooks/exhaustive-deps
+  // v7.33.2 (FX-1, owner 26 Oct): the NBP tables of the last fortnight are read at start, when the day changes and when the window comes back
+  // into view -- no copy of a "latest table" is written into the shared settings any more (it went stale while a window stayed open)
+  const [, setNbpTick] = useState(0);
+  useEffect(() => {
+    let day = localTodayISO(); const refresh = () => { refreshNbp().then(() => setNbpTick(x => x + 1)); };
+    refresh();
+    const onShow = () => { if (document.visibilityState === "visible") refresh(); };
+    const timer = window.setInterval(() => { const now = localTodayISO(); if (now !== day) { day = now; refresh(); } }, 60000);
+    document.addEventListener("visibilitychange", onShow);
+    return () => { document.removeEventListener("visibilitychange", onShow); window.clearInterval(timer); };
   }, []);
   useEffect(() => { applyFxSettings(fxSettings || {}); }, [fxSettings]);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
@@ -304,17 +312,9 @@ export default function App() {
 
   // v7.21.13 (FZ-15): the id counter is primed by every store as it is read or pulled (useLocalStoredState) — no longer seven of them here
 
-  // Fold the four legacy invoice representations (SO pendingInvoices, warehouse
-  // invoices, invoice-backed operational costs) into the unified Invoicing model.
-  // Idempotent by source tag — safe to run on every relevant change; never duplicates.
-  useEffect(() => {
-    setInvoices((prev: any[]) => {
-      const merged = migrateLegacyInvoices({ existing: prev || [], operationalCosts });   // v7.22.1 (FZ-12): no purchase invoice is invented from an order
-      return merged.length !== (prev || []).length ? merged : prev;
-    });
-    // v7.24.1 (FZ-01): the pending invoices of the orders were stripped long ago — the strip went (no change on either copy, 15 Oct)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [operationalCosts]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // v7.33.1 (INV-PDF / FZ-11, owner 26 Oct): no operational cost is copied into the register at start any more — an invoice enters through
+  // its own door: a Polish one from Fakturownia (with its id, NIP, address and PDF), a foreign one with + Cost invoice and its PDF;
+  // an operational cost is a cost without an invoice (the form says so when an invoice number is typed)
 
   // v6.82.0 (Round 6): packaging types saved before v6.46 lack boxesPerPallet/palletTareKg —
   // backfill from the seed by id/label so pallet tables split correctly.
@@ -335,7 +335,7 @@ export default function App() {
 
   // v6.99.11: pickers may ask to open the Directory ("＋ Add it in the Directory…") — never free text.
   const navigateRef = useRef<(m: string) => void>(() => {});   // v6.99.58 (A-US-2)
-  useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); if (e?.detail?.newLocationFor) window.sessionStorage.setItem("marianna:contactsNewLocFor", JSON.stringify(e.detail.newLocationFor)); if (e?.detail?.newCompany) window.sessionStorage.setItem("marianna:contactsNewCompany", JSON.stringify(e.detail.newCompany)); } catch {} };   /* v7.32.2 (INV-QC) */   /* v7.18.1 (A-AU-3): "+ Add a site for this client" from a sale */ window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
+  useEffect(() => { const h = (e: any) => { const target = String(e?.detail?.module || "contacts"); navigateRef.current(target);   /* v6.99.58 (A-US-2): guarded like every other jump · v7.33.1: to the module asked for */ if (target !== "contacts") return; try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); if (e?.detail?.newLocationFor) window.sessionStorage.setItem("marianna:contactsNewLocFor", JSON.stringify(e.detail.newLocationFor)); if (e?.detail?.newCompany) window.sessionStorage.setItem("marianna:contactsNewCompany", JSON.stringify(e.detail.newCompany)); } catch {} };   /* v7.32.2 (INV-QC) */   /* v7.18.1 (A-AU-3): "+ Add a site for this client" from a sale */ window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
 
   // v6.68.0 (D-34): SINGLE-ENTRY OVERHEAD — every register invoice with cost
   // scope OVERHEAD mirrors into exactly one operational cost (replace-by-ref
@@ -434,7 +434,7 @@ export default function App() {
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
-        return <Finance packagingTypes={packagingTypes} focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
+        return <Finance packagingTypes={packagingTypes} focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
         return <Contacts onLinkSaleDestination={linkSaleDestination} contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims}  users={users} userName={who}  lots={lots} setPOs={setPOs} setOrders={setOrders} setLots={setLots} setShipments={setShipments} />;
       case "pos":
