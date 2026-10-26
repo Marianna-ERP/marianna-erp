@@ -25,57 +25,70 @@ function mount(tabs0) {
 const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set;
 
 (async () => {
-  console.log("PLANNING SHEET — TYPING (jsdom, real DOM events)");
-  const fx = FX.fixture("marianna-erp_v6.99.79_schema-v2_2026-09-29T11-01-43.json");
-  const tabs0 = fx ? JSON.parse(fs.readFileSync(fx, "utf8")).planningSheets : [{ id: "t1", name: "week 40", order: 1, createdAt: "x", rows: [{ id: "r1", createdAt: "x", cells: { client: "Al Baraka", supplier: "Pavamane Owoc" } }] }];
-  const m = mount(tabs0); await m.render();
-
-  await t("clicking a cell keeps THAT input: still in the document, still focused, after the sheet re-draws the outline", async () => {
-    const cell = Array.from(m.host.querySelectorAll("table input")).find(i => i.value === "Al Baraka"); ok(cell, "a client cell");
-    await act(async () => { cell.focus(); cell.dispatchEvent(new dom.window.FocusEvent("focusin", { bubbles: true })); });
-    ok(document.contains(cell), "the input was replaced by a new one (the v6.99.81 fault)"); ok(document.activeElement === cell, "focus lost");
-  });
-  await t("what is typed stays in the cell, and leaving the cell stores it", async () => {
-    const cell = Array.from(m.host.querySelectorAll("table input")).find(i => i.value === "Al Baraka"); ok(cell);
-    await act(async () => { cell.focus(); cell.dispatchEvent(new dom.window.FocusEvent("focusin", { bubbles: true })); });
-    await act(async () => { setter.call(cell, "Al Baraka TEST"); cell.dispatchEvent(new dom.window.Event("input", { bubbles: true })); });
-    ok(document.contains(cell) && cell.value === "Al Baraka TEST", "the typed text vanished");
-    await act(async () => { cell.dispatchEvent(new dom.window.FocusEvent("focusout", { bubbles: true })); cell.blur(); });
-    ok(m.latest().flatMap(x => x.rows).some(r => r.cells.client === "Al Baraka TEST"), "not stored on leaving the cell");
-  });
-  await t("Enter stores the cell and moves down; Escape puts the stored value back", async () => {
-    const cells = Array.from(m.host.querySelectorAll("table input")).filter(i => i.value === "Al Baraka TEST" || i.value === "Al Baraka"); const cell = cells[0]; ok(cell);
-    await act(async () => { cell.focus(); cell.dispatchEvent(new dom.window.FocusEvent("focusin", { bubbles: true })); });
-    await act(async () => { setter.call(cell, "Al Baraka ENTER"); cell.dispatchEvent(new dom.window.Event("input", { bubbles: true })); cell.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
-    ok(m.latest().flatMap(x => x.rows).some(r => r.cells.client === "Al Baraka ENTER"), "Enter did not store");
-    const c2 = Array.from(m.host.querySelectorAll("table input")).find(i => i.value === "Al Baraka ENTER"); ok(c2);
-    await act(async () => { c2.focus(); c2.dispatchEvent(new dom.window.FocusEvent("focusin", { bubbles: true })); setter.call(c2, "typo"); c2.dispatchEvent(new dom.window.Event("input", { bubbles: true })); c2.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-    ok(!m.latest().flatMap(x => x.rows).some(r => r.cells.client === "typo"), "Escape stored the typo");
-  });
-  // ══ v7.30.17 (owner test 21 Oct): like an Excel sheet — several lines in a cell, sizes, bold and colours ══
+  console.log("PLANNING SHEET — AS IN EXCEL (jsdom, real DOM events)");
+  // v7.31.0 (WB-1…6, owner 21 Oct): the board behaves as Excel — a click selects, Ctrl+C / Ctrl+V / Delete act on the whole cell,
+  // typing replaces, double-click or F2 edits, Alt+Enter is a new line; the content bar; the product as three columns; dated ranges
   const SD = require(path.resolve("./src/sheet.domain"));
-  await t("v7.30.17: a text cell is a text box — Alt+Enter starts a new line in the same cell, leaving it stores both lines", async () => {
-    const box = m.host.querySelector("table textarea[data-sheet-text='1']"); ok(box, "no multi-line text cell");
+  const tabs0 = [{ id: "t1", name: "week 43", order: 1, createdAt: "x", rows: [
+    { id: "r1", createdAt: "x", cells: { client: "Al Baraka", comments: "first", product: { item: "Apples", variety: "Golden", size: "70+" } } },
+    { id: "r2", createdAt: "x", cells: { client: "", comments: "" } }, { id: "r3", createdAt: "x", cells: {} }] }];
+  const m = mount(tabs0); await m.render();
+  const gridEl = () => m.host.querySelector("[data-sheet-grid='1']");
+  const colIx = label => SD.SHOWN_COLUMNS.findIndex(c => c.label === label);
+  const cellEl = (r, label) => m.host.querySelector(`[data-sheet-cell='${r}:${colIx(label)}']`);
+  const rowOf = id => m.latest()[0].rows.find(r => r.id === id);
+  const key = async (k, extra = {}) => { await act(async () => { gridEl().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true, ...extra })); }); };
+  const click = async el => { await act(async () => { el.dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true })); }); await act(async () => { gridEl().focus(); }); };
+  const clip = async (type, text) => { const store = { "text/plain": text || "" }; const ev = new dom.window.Event(type, { bubbles: true, cancelable: true }); ev.clipboardData = { setData: (k2, v) => { store[k2] = v; }, getData: k2 => store[k2] || "" }; await act(async () => { gridEl().dispatchEvent(ev); }); return store["text/plain"]; };
+
+  await t("WB-6: a click SELECTS a cell (no text box opens); typing replaces its content; Enter stores it and moves down", async () => {
+    await click(cellEl(0, "Comments")); ok(!m.host.querySelector("[data-sheet-editor]"), "a click opened the cell for typing");
+    await key("x"); const ed = m.host.querySelector("[data-sheet-editor]"); ok(ed && ed.value === "x", "typing did not replace the content: " + (ed && ed.value));
     const tset = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value").set;
-    await act(async () => { box.focus(); box.dispatchEvent(new dom.window.FocusEvent("focusin", { bubbles: true })); tset.call(box, "first line"); box.selectionStart = box.selectionEnd = box.value.length; });
-    await act(async () => { box.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", altKey: true, bubbles: true })); });
-    ok(box.value === "first line\n", "Alt+Enter did not start a new line: " + JSON.stringify(box.value));
-    await act(async () => { tset.call(box, box.value + "second line"); box.blur(); box.dispatchEvent(new dom.window.FocusEvent("focusout", { bubbles: true })); });
-    const stored = m.latest().flatMap(x => x.rows).some(r => Object.values(r.cells || {}).some(v => v === "first line\nsecond line")); ok(stored, "the two lines were not stored together");
+    await act(async () => { tset.call(ed, "xyz"); ed.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    ok(rowOf("r1").cells.comments === "xyz", "not stored: " + rowOf("r1").cells.comments);
   });
-  await t("v7.30.17: the selected cell's look — bold, a text colour, a fill — kept with the sheet (not logged); a row's height and a column's width kept as dragged", async () => {
-    const bar = m.host.querySelector("[data-sheet-format='1']"); ok(bar, "no formatting bar for the selected cell");
-    const bold = Array.from(bar.querySelectorAll("button")).find(b => b.textContent === "B");
-    await act(async () => { bold.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-    ok(m.latest().flatMap(x => x.rows).some(r => Object.values(r.styles || {}).some(s => s && s.b)), "bold was not kept");
-    const fill = bar.querySelector("button[title='fill " + SD.FILL_COLOURS[0] + "']");
-    await act(async () => { fill.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-    ok(m.latest().flatMap(x => x.rows).some(r => Object.values(r.styles || {}).some(s => s && s.fill === SD.FILL_COLOURS[0])), "the fill was not kept");
-    ok(m.host.querySelector("[data-col-resize]") && m.host.querySelector("[data-row-resize]"), "no handles to drag the width or the height");
-    const tab0 = { id: "t", name: "w", order: 1, createdAt: "x", rows: [{ id: "r", createdAt: "x", cells: {} }] };
-    ok(SD.setColWidth(tab0, "client", 900).widths.client === 600 && SD.setRowHeight(tab0, "r", 10).rows[0].height === 24, "the sizes are not kept within 50–600 / 24–400");
-    const styled = SD.setCellStyle(SD.setCellStyle(tab0, "r", "client", { b: true, color: "#B91C1C" }), "r", "client", { b: null });
-    ok(JSON.stringify(styled.rows[0].styles) === JSON.stringify({ client: { color: "#B91C1C" } }), "a part of the look is not cleared alone"); ok(!("styles" in SD.setCellStyle(styled, "r", "client", null).rows[0]), "clearing leaves an empty look");
+  await t("WB-6: Ctrl+C copies the whole selected cell; Ctrl+V on another selected cell REPLACES its content (nothing to clear first); Delete clears", async () => {
+    await click(cellEl(0, "Client")); const copied = await clip("copy"); ok(copied === "Al Baraka", "copied: " + copied);
+    await act(async () => { m.latest(); }); await click(cellEl(1, "Comments"));
+    await clip("paste", "Al Baraka"); ok(rowOf("r2").cells.comments === "Al Baraka", "the paste did not replace the cell: " + rowOf("r2").cells.comments);
+    await clip("paste", "second paste"); ok(rowOf("r2").cells.comments === "second paste", "a second paste was added to what was there: " + rowOf("r2").cells.comments);
+    await key("Delete"); ok(!rowOf("r2").cells.comments, "Delete did not clear the cell");
   });
-  console.log(`SHEET TYPING: ${passed} passed, ${failed} failed`); process.exit(failed ? 1 : 0);
+  await t("WB-6 / WB-3: Alt+Enter is a new line in the same cell; a cell of several lines copies as ONE cell; the content bar shows the whole text and edits it", async () => {
+    await click(cellEl(0, "Comments")); await key("F2"); const ed = m.host.querySelector("[data-sheet-editor]"); ok(ed, "F2 did not open the cell"); ok(ed.value === "xyz", "F2 did not keep the content");
+    await act(async () => { ed.selectionStart = ed.selectionEnd = ed.value.length; ed.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", altKey: true, bubbles: true })); });
+    const tset = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value").set;
+    await act(async () => { tset.call(ed, ed.value + "line 2"); ed.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    ok(rowOf("r1").cells.comments === "xyz\nline 2", "two lines not stored: " + JSON.stringify(rowOf("r1").cells.comments));
+    await click(cellEl(0, "Comments")); const copied = await clip("copy"); ok(copied === '"xyz\nline 2"', "not copied as one Excel cell: " + JSON.stringify(copied));
+    ok(JSON.stringify(SD.parseClipboard(copied)) === JSON.stringify([["xyz\nline 2"]]), "the quoted cell does not paste back as one cell");
+    const bar = m.host.querySelector("[data-sheet-bar='1']"); ok(bar && bar.value === "xyz\nline 2", "the content bar does not show the whole text");
+    await act(async () => { tset.call(bar, "edited in the bar"); bar.dispatchEvent(new dom.window.FocusEvent("blur", { bubbles: false })); bar.dispatchEvent(new dom.window.FocusEvent("focusout", { bubbles: true })); });
+    ok(rowOf("r1").cells.comments === "edited in the bar", "the bar did not store: " + rowOf("r1").cells.comments);
+  });
+  await t("WB-2: the product shows as three columns — Item, Variety, Size — each with its own width; writing the variety keeps the item and the size (one product stored)", async () => {
+    ok(["Item", "Variety", "Size"].every(l => colIx(l) >= 0), "not three columns"); ok(cellEl(0, "Variety").textContent === "Golden");
+    await click(cellEl(0, "Variety")); await key("R"); const ed = m.host.querySelector("[data-sheet-editor]");
+    const iset = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set;
+    await act(async () => { iset.call(ed, "Red Delicious"); ed.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    ok(JSON.stringify(rowOf("r1").cells.product) === JSON.stringify({ item: "Apples", variety: "Red Delicious", size: "70+" }), "the product: " + JSON.stringify(rowOf("r1").cells.product));
+    ok(m.host.querySelectorAll("[data-col-resize]").length === SD.SHOWN_COLUMNS.length + 1, "the first column (or another) cannot be resized (WB-1)");
+  });
+  await t("WB-5: a date cell takes free text in dd/mm/yyyy — one date is stored as a date and shown dd/mm/yyyy, a range '20-21/10' stays as written and its first day is the date read", async () => {
+    const write = async text => { await click(cellEl(2, "Production date")); await key("2"); const ed = m.host.querySelector("[data-sheet-editor]"); const iset = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set;
+      await act(async () => { iset.call(ed, text); ed.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); }); };
+    await write("20/10/2026"); ok(rowOf("r3").cells.productionDate === "2026-10-20" && cellEl(2, "Production date").textContent === "20/10/2026", "one date: " + rowOf("r3").cells.productionDate);
+    await write("20-21/10"); ok(rowOf("r3").cells.productionDate === "20-21/10", "the range was changed: " + rowOf("r3").cells.productionDate);
+    ok(SD.readSheetDate("20-21/10", 2026).iso === "2026-10-20" && SD.readSheetDate("20/10-22/10", 2026).iso === "2026-10-20" && SD.readSheetDate("soon", 2026).iso === null, "the first day of a range is not the date read");
+  });
+  await t("WB-4 + the look: the places are offered with their addresses; bold and fill still apply to the selected cell", async () => {
+    const PS2 = require(path.resolve("./src/PlanningSheet")).default; ok(PS2);
+    await click(cellEl(0, "Client")); const bar = m.host.querySelector("[data-sheet-format='1']"); ok(bar, "no formatting bar");
+    const bold = Array.from(bar.querySelectorAll("button")).find(b => b.textContent === "B"); await act(async () => { bold.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+    ok(rowOf("r1").styles && rowOf("r1").styles.client && rowOf("r1").styles.client.b, "bold was not kept");
+    const src = fs.readFileSync(path.resolve("./src/PlanningSheet.tsx"), "utf8"); ok(/places: Array\.from\(new Set\(locs\.map\(\(l: any\) => \[S\(l\.name\), S\(l\.address\)/.test(src), "the places are offered by name only");
+  });
+  console.log(`SHEET TYPING: ${passed} passed, ${failed} failed`); if (warned.length) console.log("  (react warnings:", warned.slice(0, 2).join(" | "), ")");
+  process.exit(failed ? 1 : 0);
 })();

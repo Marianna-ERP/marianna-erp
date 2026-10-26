@@ -9,11 +9,12 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Lbl, useConfirm, ActionButton, notifySaved } from "./ui";
 import { nextId } from "./ids";
 import { parseAddress, formatAddress } from "./address.domain";
-import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, writeLocationOverride, newSiteId, typedSaleDestinations } from "./locations";   // v7.18.1 (A-AU-3): typedSaleDestinations
+import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, newSiteId, typedSaleDestinations , isWarehouseContact } from "./locations";   // v7.18.1 (A-AU-3): typedSaleDestinations
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
 import { useUnsavedGuard } from "./unsaved";
+import { OldPlacesPanel } from "./OldPlacesPanel";   // v7.32.0 (FZ-04a)
 import { companyProfile } from "./useLocalStoredState";   // v7.30.4
 import { AddressCompletion } from "./AddressCompletion";   // v7.28.10 (Batch L)
 import { parseNum } from "./numbers";   // v7.28.1
@@ -283,6 +284,10 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                 <input type="checkbox" checked={form.isPlace !== undefined ? !!form.isPlace : (() => { const t = rolesOf(form); return t.includes("Supplier") || t.includes("Client") || t.includes("Warehouse"); })()} onChange={e => setForm((f: any) => ({ ...f, isPlace: e.target.checked }))} />
                 <span><b>Goods are loaded / delivered at this address</b> <span style={{ color: "#94A3B8" }}>— offered in the location pickers as this company's place (on for producers, suppliers, clients and warehouses unless you untick it)</span></span>
               </label>
+              {isWarehouseContact(form) && <label data-main-warehouse="1" style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#334155", margin: "0 0 8px" }}>   {/* v7.32.0 (FZ-04a): our main warehouse comes from Parties, never from the code */}
+                <input type="checkbox" checked={!!form.isMainWarehouse} onChange={e => sf("isMainWarehouse", e.target.checked)} />
+                <span><b>Our main warehouse</b> <span style={{ color: "#94A3B8" }}>— the delivery address a DAP / DDP purchase and a journey "into our stock" use by default</span></span>
+              </label>}
               <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: "2fr 0.8fr 1.2fr", gap: 8 }}>
                 <div><Lbl>Street and number</Lbl><Inp value={form.addr?.street ?? ""} onChange={e => setAddr("street", e.target.value)} placeholder="ul. Piękna 13" /></div>
                 <div><Lbl>Postcode</Lbl><Inp value={form.addr?.postcode ?? ""} onChange={e => setAddr("postcode", e.target.value)} placeholder="05-555" /></div>
@@ -1418,7 +1423,8 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
 // ── v6.99.11 (owner, 13 Sept): PORTS TAB — ports · border crossings · customs points. Everything with an owner
 // (warehouses, port warehouses like Silvertech, supplier / client sites) lives on its COUNTERPARTY; these are the
 // places nobody invoices us for. Edited here, read everywhere through the one LocationPicker.
-export function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [], onOpenCompany = null, prefillOwner = null, onPrefillUsed = null, onLinkSaleDestination = null }: any) {
+export function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [], onOpenCompany = null, prefillOwner = null, onPrefillUsed = null, onLinkSaleDestination = null, setPOs = null, setOrders = null, setLots = null, setShipments = null }: any) {
+  const [, setRefresh] = useState(0);   // v7.32.0: redraw after the old-places panel changes the store
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's   // v7.18.1: exported for the screen check
   // v7.6.1 (A-PT-5, owner 7 Oct): the LOCATIONS tab works like Companies and People — search, filter chips, one table with actions, "+ New location" in a window
   const [q, setQ] = useState(""); const [chip, setChip] = useState("all"); const [winOpen, setWinOpen] = useState(false);
@@ -1454,8 +1460,8 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
     if (!String(form.name).trim()) return;
     const addr = { street: form.street || "", postcode: form.postcode || "", city: form.city || "", country: form.country || "" };
     const oneLine = formatAddress(addr, { oneLine: true, withCountry: false });   // the legacy text mirrors the parts until the DDL
-    if (editId != null && form.__builtin) { writeLocationOverride(Number(editId), { name: form.name, country: form.country, address: oneLine, unlocode: form.unlocode } as any); }   // v6.99.45 (PL-3): built-ins are edited through the override layer
-    else if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type, ownerId: form.ownerId ?? undefined });
+    // v7.32.0 (FZ-04a): no built-in places any more — every entry is an ordinary record
+    if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type, ownerId: form.ownerId ?? undefined });
     else addCustomLocation({ name: form.name, country: form.country, type: form.type, address: oneLine, addr, ownerId: form.ownerId ?? undefined });
     setWinOpen(false);   // v7.6.1
     recordAudit({ module: "Counterparties", docType: "Place", docNumber: form.name, action: editId != null ? "status" : "created", summary: `${form.type} ${editId != null ? "updated" : "added"} in the Directory` });
@@ -1476,6 +1482,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
   const openEdit = (l: any) => { setEditId(l.id); const a = (l as any).addr && ((l as any).addr.street || (l as any).addr.city) ? (l as any).addr : parseAddress(l.address || ""); setForm({ name: l.name, country: l.country || "", type: l.type || "Port", street: a.street || "", postcode: a.postcode || "", city: a.city || "", unlocode: (l as any).unlocode || "", ownerId: (l as any).ownerId ?? null, __builtin: sourceOf(l) === "built-in" }); setWinOpen(true); };
   return (
     <div>{dialogNode}
+      <OldPlacesPanel contacts={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} setPOs={setPOs} setOrders={setOrders} setLots={setLots} setShipments={setShipments} onDone={() => setRefresh((x: number) => x + 1)} />   {/* v7.32.0 (FZ-04a) */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         {CHIPS.map(([k, label]) => <button key={k} onClick={() => setChip(k)} style={{ padding: "6px 14px", borderRadius: 20, border: "1px solid", borderColor: chip === k ? "#111" : "#E5E7EB", background: chip === k ? "#111" : "#fff", color: chip === k ? "#fff" : "#374151", fontSize: 12, cursor: "pointer" }}>{label} <span style={{ opacity: 0.6, marginLeft: 4 }}>{count(k)}</span></button>)}
         <button onClick={() => { setEditId(null); setForm({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "", ownerId: null }); setWinOpen(true); }} style={{ marginLeft: "auto", padding: "8px 16px", borderRadius: 8, border: "none", background: "#16A34A", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>+ New location</button>
@@ -1515,7 +1522,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
               {src === "counterparty site" && onOpenCompany && <button onClick={() => onOpenCompany(owner)} title="the legal address is edited on its company" style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>open company →</button>}
               {(mine || src === "built-in") && !(l as any).__hidden && <button onClick={() => openEdit(l)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #BFDBFE", background: "#fff", color: "#1D4ED8", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Edit</button>}
               {mine && <button onClick={async () => { if (used > 0) { const docs = usersOf(l.id); (await uiAlert({ message: `${l.name} is used by ${docs.length} document(s): ${docs.slice(0, 12).join(", ")}${docs.length > 12 ? ` and ${docs.length - 12} more` : ""} — it cannot be deleted while they use it.` })); return; } if ((await uiConfirm({ title: "Please confirm", message: `Delete ${l.name}?` }))) { removeCustomLocation(Number(l.id)); force(x => x + 1); } }} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 12, cursor: "pointer" }}>Delete</button>}
-              {(l as any).__hidden && <button onClick={() => { writeLocationOverride(Number(l.id), { hidden: false } as any); setTimeout(() => window.location.reload(), 150); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Show again</button>}
+              
             </div>
           </div>); })}
       </div>
@@ -1575,7 +1582,7 @@ function CountriesView() {
   );
 }
 
-export default function Contacts({ lots = [], contacts: extContacts, setContacts: extSetContacts, pos = [], orders = [], shipments = [], invoices = [], claims = [], users = [], userName = "", onLinkSaleDestination = null }: any = {}) {
+export default function Contacts({ lots = [], contacts: extContacts, setContacts: extSetContacts, pos = [], orders = [], shipments = [], invoices = [], claims = [], users = [], userName = "", onLinkSaleDestination = null, setPOs = null, setOrders = null, setLots = null, setShipments = null }: any = {}) {
   // v6.81.0 (D-57): commission terms visible to the owner and the finance role (finance.pl) only; with no users defined, everyone.
   const _cu = currentUser(users, userName);
   const canSeeCommission = _cu === null ? true : !!(_cu && (_cu.isOwner || _cu.finance?.pl === true));
@@ -1923,7 +1930,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
           {/* Table */}
           <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 24px" }}>
             {viewMode === "ports" ? (
-              <PortsView counterparties={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} onOpenCompany={(id: any) => { if (id == null) return; setSelectedId(id); setViewMode("companies"); }} prefillOwner={newLocFor} onPrefillUsed={() => setNewLocFor(null)} onLinkSaleDestination={onLinkSaleDestination} />
+              <PortsView counterparties={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} setPOs={setPOs} setOrders={setOrders} setLots={setLots} setShipments={setShipments} onOpenCompany={(id: any) => { if (id == null) return; setSelectedId(id); setViewMode("companies"); }} prefillOwner={newLocFor} onPrefillUsed={() => setNewLocFor(null)} onLinkSaleDestination={onLinkSaleDestination} />
             ) : viewMode === "countries" ? (
               <CountriesView />
             ) : (<>

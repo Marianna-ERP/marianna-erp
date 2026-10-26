@@ -2646,13 +2646,10 @@ T("A LOT CANNOT BE RECEIVED TWICE — whichever leg posts first", () => {
   assert.equal(a[0].physicalKg, 0, "pass-through nets to zero either way");
 });
 
-T("locations sort A-Z and a built-in can be hidden", () => {
+T("locations sort A-Z; v7.32.0 (FZ-04a): no built-in place exists, so nothing is hidden or renamed over a list in the code", () => {
   const list = [{ id: 1, name: "Zebra port" }, { id: 2, name: "Alpha warehouse" }, { id: 3, name: "Middle" }];
   assert.deepEqual(LOC.sortLocations(list).map(l => l.name), ["Alpha warehouse", "Middle", "Zebra port"]);
-  // Owner ruling: no built-in data that cannot be edited or removed.
-  assert.deepEqual(LOC.applyLocationOverrides(list, { "1": { hidden: true } }).map(l => l.id), [2, 3]);
-  assert.equal(LOC.applyLocationOverrides(list, { "2": { name: "Renamed" } })[1].name, "Renamed");
-  assert.deepEqual(LOC.applyLocationOverrides(list, {}).map(l => l.id), [1, 2, 3], "no overrides changes nothing");
+  assert.equal(LOC.applyLocationOverrides, undefined); assert.equal(LOC.LOCATIONS_ALL_BUILTIN, undefined);
 });
 
 console.log("");

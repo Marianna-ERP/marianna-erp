@@ -1,6 +1,6 @@
 import { isEU } from "./counterparty.domain";   // v7.12.0 (A-TD-1): the one country table
 import { isReceiptOfPO } from "./receipts.domain";
-import { ruleOf } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
+import { ruleOf, salesCarried } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table · v7.31.1: the sales a shipment carries
 
 // ═══ Batch 6b: PURCHASE TERMS collapse + 4-class movement + Phase B core ═══
 
@@ -139,4 +139,14 @@ export function shipmentEndPlaceId(sh: any): any {
 }
 export function shipmentTradeDirection(sh: any, ctx: { pos?: any[]; orders?: any[]; countryOf?: (id: any) => string } = {}): string {
   return shipmentTradeEnds(sh, ctx).direction;
+}
+
+/** v7.31.1 (owner 26 Oct, the adviser's wording for the carrier order): THE GOODS OF THIS SHIPMENT LEAVE THE EU — the shipment crosses
+ *  the border itself, or it is a leg on the way out: a sale it carries is delivered outside the EU, or its booking's port of discharge
+ *  is outside the EU (a truck to Koper with apples sold to Damietta). */
+export function goodsLeaveTheEU(sh: any, ctx: { pos?: any[]; orders?: any[]; countryOf: (id: any) => string }): boolean {
+  const outside = (id: any) => id != null && String(id) !== "" && isEU(ctx.countryOf(id)) === false;
+  return shipmentTradeDirection(sh, { pos: ctx.pos, orders: ctx.orders, countryOf: ctx.countryOf }) === "EXPORT"
+    || salesCarried(sh, ctx.orders || []).some((o: any) => outside(o?.destinationLocationId))
+    || (sh?.bookings || []).some((b: any) => outside(b?.podId ?? b?.pod));
 }

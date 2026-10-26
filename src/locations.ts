@@ -48,84 +48,6 @@ export interface Location {
 
 // Helper to keep the table compact
 
-// v6.86.0 (owner ruling): the built-in list is REFERENCE DATA = PORTS ONLY. The demo
-// warehouses / supplier / client / broker sites that used to sit here appeared in some
-// pickers and not others. Any still referenced by stored documents is migrated into the
-// user's custom locations on load (migrateReferencedSeeds); the rest disappear.
-function L(id: number, type: LocationType, legacyType: string, name: string, country: string, address?: string, aliasOf?: number): Location {
-  return { id, type, legacyType, name, country, address, aliasOf };
-}
-
-// v6.86.0 (owner ruling): the built-in list is REFERENCE DATA = PORTS ONLY. The demo
-// warehouses / supplier / client / broker sites that used to sit here appeared in some
-// pickers and not others. Any still referenced by stored documents is migrated into the
-// user's custom locations on load (migrateReferencedSeeds); the rest disappear.
-// v7.27.17 (A-RV-39 · SC-14, owner 19 Oct: "remove now"): the producers', clients' and brokers' places are gone from the code —
-// real partners' names and addresses, and the first version's test places.
-// Your real copy and TEST hold their own copy of every place they use; only public places stay here (ports, cargo airports) and
-// our own warehouses, until the places table of the database step (FZ-04).
-const BUILTIN_ALL: Location[] = [
-  // ── Our storage (rented today; will include OwnWarehouse when Marianna opens one) ──
-  L(1, "RentedWarehouse", "OWN", "WH-01 Poznań (Logipark)", "Poland", "Poznań / Logipark"),
-  L(2, "RentedWarehouse", "OWN", "WH-02 Warszawa (ColdStore)", "Poland", "Warszawa cold storage"),
-
-  // ── Supplier facilities ──
-
-  // ── Ports (base set) ──
-  L(6, "Port", "PORT", "Gdańsk Port", "Poland", "Gdańsk port"),
-  L(7, "Port", "PORT", "Hamburg Port", "Germany", "Hamburg port"),
-
-  // ── Client facilities (base set) ──
-  // different modules referenced different ids. We keep both as aliases so no
-  // seed reference breaks; id 10 is the canonical one.
-
-  // ── Additional clients / mixed (from Shipments) ──
-  L(23, "Port", "PORT", "Agadir / Casablanca port area", "Morocco", "Morocco port warehouse"),
-
-  // ── Expanded port list (v5.8 added these consistently; IDs preserved) ──
-  L(108, "Port", "PORT", "Algeciras Port", "Spain"),
-  L(109, "Port", "PORT", "Jeddah Islamic Port", "Saudi Arabia"),
-  L(110, "Port", "PORT", "Venice / Marghera Port", "Italy"),
-  L(111, "Port", "PORT", "Rotterdam Port", "Netherlands"),
-  L(112, "Port", "PORT", "Antwerp-Bruges Port", "Belgium"),
-  L(113, "Port", "PORT", "Koper Port", "Slovenia"),
-  L(114, "Port", "PORT", "Trieste Port", "Italy"),
-  L(115, "Port", "PORT", "Genoa Port", "Italy"),
-  L(116, "Port", "PORT", "Salerno Port", "Italy"),
-  L(117, "Port", "PORT", "Valencia Port", "Spain"),
-  L(118, "Port", "PORT", "Barcelona Port", "Spain"),
-  L(119, "Port", "PORT", "Alexandria Port", "Egypt"),
-  L(120, "Port", "PORT", "Port Said", "Egypt"),
-  L(121, "Port", "PORT", "Agadir / Casablanca port area", "Morocco"),
-  L(122, "Port", "PORT", "Ravenna Port", "Italy"),
-  L(123, "Port", "PORT", "Rijeka Port", "Croatia"),
-  L(124, "Port", "PORT", "Bremerhaven Port", "Germany"),
-  L(125, "Port", "PORT", "Gdynia Port", "Poland"),
-  L(126, "Port", "PORT", "Damietta Port", "Egypt"),
-
-  // ── Airports (NEW — for the air-export flow, e.g. blueberries) ──
-  L(201, "Airport", "PORT", "Warsaw Chopin Airport — Cargo", "Poland"),
-  L(202, "Airport", "PORT", "Frankfurt Cargo Airport", "Germany"),
-];   // v6.99.45 (PL-3): the hidden view needs the whole list
-// v7.3.4 (A-LOC-2, owner 7 Oct: "no built-in locations — real data only"): the list written in the code is no longer offered anywhere.
-// It survives ONLY as a translation table: a built-in id still used by a real document is copied once into the ordinary
-// locations (same id, the browser's renames applied) by ensureUsedBuiltinsAreOrdinary(), and from then on it is an ordinary,
-// editable location. Unused built-ins simply disappear.
-/** The whole built-in list, hidden places included — read by the suites to resolve any place a fixture names (kept as their seam, v7.22.0). */
-export const LOCATIONS_ALL_BUILTIN: Location[] = BUILTIN_ALL;
-export const LOCATIONS: Location[] = [];
-/** Copy into the ordinary locations every built-in id the documents still use (idempotent; returns how many were added). */
-export function ensureUsedBuiltinsAreOrdinary(usedIds: Set<string>): number {
-  const list = readCustomLocations(); const have = new Set(list.map(l => String(l.id))); const ov = readLocationOverrides(); let added = 0;
-  BUILTIN_ALL.forEach(b => {
-    const k = String(b.id); if (!usedIds.has(k) || have.has(k)) return;
-    const o: any = (ov as any)[k] || {};
-    list.push({ ...b, name: o.name || b.name, country: o.country || b.country, address: o.address || b.address, ...(o.unlocode ? { unlocode: o.unlocode } : {}), aliasOf: undefined, fromBuiltIn: true } as any);
-    added++;
-  });
-  if (added) { writeSharedStoreValue("customLocations", list); list.forEach(cl => { if (!LOCATIONS.find(l => String(l.id) === String(cl.id))) LOCATIONS.push(cl); }); }
-  return added;
-}
 /** Every location id the documents use (POs, SOs, lots and movements, shipments). */
 export function usedLocationIds(data: { pos?: any[]; orders?: any[]; lots?: any[]; shipments?: any[] }): Set<string> {
   const out = new Set<string>(); const keyRe = /^(.*LocationId|locationId|toId|fromId|polId|podId|originId|destinationId|loadingPlaceId|unloadingPlaceId|placeId)$/;
@@ -273,141 +195,15 @@ export function updateCustomLocation(id: number, patch: { name?: string; country
 // at module load, before any module snapshots LOCATIONS.
 // locationOverrides is NOT in DATA_KEYS (never migrated) — its "v1" name is just
 // its permanent, version-independent name. Deliberately left as-is.
-const LOCATION_OVERRIDES_KEY = "marianna-erp:v1:locationOverrides";
-export function readLocationOverrides(): Record<string, { name?: string; country?: string; address?: string }> {
-  if (typeof window === "undefined" || !window.localStorage) return {};
-  try { const raw = window.localStorage.getItem(LOCATION_OVERRIDES_KEY); const p = raw ? JSON.parse(raw) : {}; return p && typeof p === "object" ? p : {}; }
-  catch { return {}; }
-}
-export function writeLocationOverride(id: number, patch: { name?: string; country?: string; address?: string; unlocode?: string; hidden?: boolean }): void {
-  if (typeof window === "undefined" || !window.localStorage) return;
-  const all = readLocationOverrides();
-  all[String(id)] = { ...(all[String(id)] || {}), ...patch };
-  try { window.localStorage.setItem(LOCATION_OVERRIDES_KEY, JSON.stringify(all)); } catch {}
-}
-export function clearLocationOverride(id: number): void {
-  if (typeof window === "undefined" || !window.localStorage) return;
-  const all = readLocationOverrides(); delete all[String(id)];
-  try { window.localStorage.setItem(LOCATION_OVERRIDES_KEY, JSON.stringify(all)); } catch {}
-}
-
-// Merge custom locations into the canonical list at module load. Modules that
-// snapshot LOCATIONS at import time therefore see customs too; Settings reloads
-// the page after add/remove so every module picks up changes consistently.
-readCustomLocations().forEach(cl => {
-  if (!LOCATIONS.find(l => String(l.id) === String(cl.id))) LOCATIONS.push(cl);
-});
-
-// v6.36.0: apply user overrides to built-ins (e.g. the real transshipment
-// warehouse address on Koper) before any module snapshots LOCATIONS.
-(() => {
-  const ov = readLocationOverrides();
-  Object.keys(ov).forEach(id => {
-    const l = LOCATIONS.find(x => String(x.id) === String(id));
-    if (!l) return;
-    const p = ov[id] || {};
-    if (p.name) l.name = p.name;
-    if (p.country !== undefined) l.country = p.country || l.country;
-    if (p.address !== undefined) (l as any).address = p.address || undefined;
-  });
-})();
-
-// ─── LOGISTICS POINTS (v6.12) ───────────────────────────────────────────────
-// The places that are NOT a counterparty's own premises: ports of loading and
-// discharge, relay points, and cross-dock warehouses named by a forwarder
-// (which are third-party sites, NOT the forwarder's address). They are managed
-// in Counterparties → Logistics points and stored in localStorage. We register
-// them into LOCATIONS at module load — before any module snapshots LOCATIONS —
-// so every From/To/Destination picker and the (frozen) transport confirmation
-// resolve them by id with no further wiring. Adding one reloads the app so this
-// bootstrap re-runs, exactly like the legacy custom-locations did.
-
-export const LOGISTICS_POINT_BASE = 800000;
-const logisticsPointsKey = () => dataKey("logisticsPoints");
-
-export const LOGISTICS_POINT_KINDS: { key: string; label: string; type: LocationType; legacyType: string }[] = [
-  { key: "PortLoading",   label: "Port of loading",       type: "Port",       legacyType: "PORT" },
-  { key: "PortDischarge", label: "Port of discharge",     type: "Port",       legacyType: "PORT" },
-  { key: "Relay",         label: "Relay point",           type: "RelayPoint", legacyType: "PORT" },
-  { key: "CrossDock",     label: "Cross-dock warehouse",  type: "RelayPoint", legacyType: "PORT" },
-];
-
-export function logisticsPointLocId(id: any): number {
-  return LOGISTICS_POINT_BASE + Number(id || 0);
-}
-
-export function readLogisticsPoints(): any[] {
-  if (typeof window === "undefined" || !window.localStorage) return [];
-  try {
-    const raw = window.localStorage.getItem(logisticsPointsKey());
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.warn("[locations] Could not read logistics points:", err);
-    return [];
-  }
-}
-
-
-// Register (idempotently) logistics points as Location entries so locById/locText
-// resolve them everywhere — including the transport confirmation snapshot.
-export function registerLogisticsPoints(points: any[]): void {
-  (points || []).forEach((p: any) => {
-    if (!p || !p.name) return;
-    const kind = LOGISTICS_POINT_KINDS.find(k => k.key === p.kind) || LOGISTICS_POINT_KINDS[0];
-    const id = logisticsPointLocId(p.id);
-    const loc: Location = {
-      id,
-      type: kind.type,
-      legacyType: kind.legacyType,
-      name: String(p.name),
-      country: String(p.country || ""),
-      address: (p.address || "").trim() || undefined,
-    };
-    const existing = LOCATIONS.find(l => String(l.id) === String(id));
-    if (!existing) LOCATIONS.push(loc);
-    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; }
-  });
-}
-
-// Bootstrap at module load (mirrors the custom-locations merge above) so every
-// consumer that snapshots LOCATIONS at import sees logistics points too.
-registerLogisticsPoints(readLogisticsPoints());
-
-// ─── Lookups ────────────────────────────────────────────────────────────────
-
-export function locById(id: any): Location | null {
-  if (id === null || id === undefined || id === "") return null;
-  return LOCATIONS.find(l => String(l.id) === String(id)) || null;
-}
-
-export function locText(id: any, fallback = ""): string {
-  const l = locById(id);
-  if (!l) return fallback || "—";
-  return l.address ? `${l.name}, ${l.address}` : l.name;
-}
-
-/** Pure form, for tests: apply an override map to a location list. */
-export function applyLocationOverrides(list: Location[], overrides: Record<string, any>): Location[] {
-  return (list || [])
-    .filter(l => !(overrides || {})[String(l.id)]?.hidden)
-    .map(l => {
-      const o = (overrides || {})[String(l.id)];
-      if (!o) return l;
-      return { ...l, ...(o.name ? { name: o.name } : {}), ...(o.country ? { country: o.country } : {}), ...(o.unlocode ? { unlocode: o.unlocode } : {}), ...(o.address ? { address: o.address } : {}) };
-    });
-}
-
+/** The old names of the lookups, kept for their callers — v7.32.0: they read the Parties the App handed over, never a copy. */
+export function locById(id: any): Location | null { return locationById(id); }
+export function locText(id: any, fallback = ""): string { const l = locById(id); if (!l) return fallback || "—"; return l.address ? `${l.name}, ${l.address}` : l.name; }
 /** v6.73.0: A→Z by name. New entries used to land at the bottom of every
  *  dropdown in entry order, which makes a list of eighty places unusable. */
 export function sortLocations(list: Location[]): Location[] {
   return [...(list || [])].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pl"));
 }
 
-export function allLocations(): Location[] {
-  return sortLocations(applyLocationOverrides(LOCATIONS.filter(l => !l.aliasOf && (l as any).pickable !== false), readLocationOverrides()));   // v7.3.5: unticked company addresses are not offered
-}
 
 // ─── v6.10: WAREHOUSE COUNTERPARTIES AS LOCATIONS ───────────────────────────
 // Warehouses are counterparties (we receive invoices from them) and one
@@ -479,37 +275,6 @@ export function newSiteId(contactId: any, addressIndex: number): number {
   return (Number(addressIndex || 0) === 0 || exactSiteId(contactId, addressIndex)) ? warehouseCpLocId(contactId, addressIndex) : nextId();
 }
 
-// Build (and register) Location entries for warehouse counterparties' addresses.
-// Registration is idempotent and additive so locById/locText resolve them in
-// every module without each module having to know about contacts.
-export function warehouseAddressLocations(contacts: any[]): Location[] {
-  const out: Location[] = [];
-  (contacts || []).filter(isWarehouseContact).forEach((c: any) => {
-    contactAddresses(c).forEach(({ address, index, siteId }) => {
-      const id = siteId ?? warehouseCpLocId(c.id, index);   // v6.99.97 (A-ID-1): the stored id owns it
-      const name = index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`;
-      out.push({ id, type: "RentedWarehouse", legacyType: "OWN", name, country: companyCountryName(c), address: address || undefined });
-    });
-  });
-  out.forEach(loc => {
-  const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
-  if (!existing) LOCATIONS.push({ ...loc, fromDirectory: true } as any);   // v7.30.14: the Directory's, kept fresh
-  else { (existing as any).fromDirectory = true; existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; }
-  });
-  return out;
-  }
-
-// ─── COUNTERPARTY ADDRESSES AS LOCATIONS (v6.15, #6) ────────────────────────
-// From / To / Destination must offer the supplier, client and warehouse
-// addresses entered in the Counterparties module — not a separate list. We
-// register every such address into LOCATIONS with a stable id (the same
-// 900000 + contactId*100 + addressIndex scheme the warehouse helper already
-// uses) and the right legacyType, so the pickers (which filter LOCATIONS by
-// legacyType) and the transport confirmation (which resolves by id) both see
-// them. Bootstrapped at module load from localStorage BEFORE any module
-// snapshots LOCATIONS — mirroring the logistics-points bootstrap. A reload is
-// what propagates newly added counterparties (same pattern used elsewhere).
-
 function counterpartyLocationRole(c: any): { legacyType: string; type: LocationType } | null {
   if (isWarehouseContact(c)) return { legacyType: "OWN", type: "RentedWarehouse" };
   const types = rolesOf(c);
@@ -543,37 +308,6 @@ export function counterpartyLocations(contacts: any[]): Location[] {
   return out;
 }
 
-// Register (idempotently) supplier / client / warehouse counterparty addresses.
-// v7.30.14 (owner test 21 Oct: "the destination dropdown picks still old data … we may have 2 sources"): the module kept a COPY of
-// the companies' addresses taken once, when the app started, and that copy won over the live Directory in every place picker — so an
-// address completed, renamed or unticked afterwards still showed the old way. Now the copy is marked, refreshed whenever the Directory
-// changes (App calls this), loses the addresses that are gone, and the pickers read the live Directory first.
-export function registerCounterpartyLocations(contacts: any[]): void {
-const live = counterpartyLocations(contacts);
-const keep = new Set(live.map((l: Location) => String(l.id)));
-for (let i = LOCATIONS.length - 1; i >= 0; i--) { const l: any = LOCATIONS[i]; if (l && l.fromDirectory && !keep.has(String(l.id))) LOCATIONS.splice(i, 1); }
-live.forEach((loc: Location) => {
-    const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
-    if (!existing) LOCATIONS.push({ ...loc, fromDirectory: true } as any);
-    else { (existing as any).fromDirectory = true; existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; (existing as any).pickable = (loc as any).pickable; (existing as any).ownerId = (loc as any).ownerId; }   // v7.3.5
-  });
-}
-
-function readContactsFromStorage(): any[] {
-  if (typeof window === "undefined" || !window.localStorage) return [];
-  try {
-    const raw = window.localStorage.getItem(dataKey("contacts")); // v6.38.0: current version, not the frozen v1 safety copy
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.warn("[locations] Could not read contacts for location bootstrap:", err);
-    return [];
-  }
-}
-
-// Bootstrap at module load — runs to completion before importers snapshot LOCATIONS.
-registerCounterpartyLocations(readContactsFromStorage());
 
 
 // ── v6.86.0: ONE SOURCE FOR EVERY LOCATION PICKER ─────────────────────────────
@@ -590,18 +324,36 @@ export function isPortType(l: any, opts: { airports?: boolean } = {}): boolean {
   if (!l) return false; const t = placeTypeOf(l);
   return PORT_TYPES.includes(t) || (!!opts.airports && t === "Airport");   // v7.27.3 (FZ-26): the type only — the old word "PORT" no longer makes a port
 }
-export function unifiedLocations(contacts: any[] = []): Location[] {
-// v7.30.14: ONE SOURCE for a company's address — the live Directory first; the module's own list adds only the places that are not a
-// company's (ports, airports, borders, own and custom places). Without a Directory at hand (an old caller), the kept copy still answers.
-const byId = new Map<string, Location>(); const live = counterpartyLocations(contacts || []); const haveDirectory = (contacts || []).length > 0;
-live.forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
-allLocations().forEach((l: any) => { if (!l || byId.has(String(l.id))) return; if (haveDirectory && l.fromDirectory) return; byId.set(String(l.id), l); });
-return sortLocations(Array.from(byId.values()));
-}
 /** Resolve any location id — built-in, custom or counterparty site. */
+// ── v7.32.0 (FZ-04a, owner 26 Oct: "we should not have the old built-in warehouse anywhere … check location fields in every module and from where they read")
+// ONE RULE: A PLACE IS AN ADDRESS WITH ONE OWNER — a company's address lives on its record in Parties › Companies; a public place
+// (a port, a cargo airport, a border crossing, a port terminal) lives in Parties › Locations. Nothing else holds a place: no list in
+// the code, no copy taken at start, no copy-back of old numbers. Every picker, list and print reads allPlaces(parties). ──
+/** The public-place types Parties › Locations holds; anything else found in that store is an old company-like entry to replace. */
+export const PUBLIC_PLACE_TYPES: string[] = ["Port", "PortWarehouse", "Airport", "BorderCrossing", "CustomsOffice", "RelayPoint"];
+export function isPublicPlaceType(type: any): boolean { return PUBLIC_PLACE_TYPES.includes(String(type || "")); }
+/** The Parties the App hands over (its live list, not a copy) for the few callers that resolve a place without passing them. */
+let PARTIES_FOR_PLACES: any[] = [];
+export function setPartiesForPlaces(parties: any[]): void { PARTIES_FOR_PLACES = Array.isArray(parties) ? parties : []; }
+/** Every place: the companies' addresses (Parties › Companies) and the public places (Parties › Locations), A→Z. */
+export function allPlaces(parties?: any[]): Location[] {
+  const byId = new Map<string, Location>();
+  counterpartyLocations(parties ?? PARTIES_FOR_PLACES).forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
+  readCustomLocations().forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
+  return sortLocations(Array.from(byId.values()));
+}
+/** The older name of allPlaces, kept for the callers. */
+export function unifiedLocations(contacts: any[] = []): Location[] { return allPlaces(contacts && contacts.length ? contacts : undefined); }
+/** v7.32.0: OUR MAIN WAREHOUSE — the warehouse company ticked "our main warehouse" in Parties (its first address); without a tick, the
+ *  first warehouse company; without one, null. Read by the PO form's DAP / DDP delivery address and the journey's "into our stock". */
+export function ourMainWarehouse(parties?: any[]): Location | null {
+  const list = (parties ?? PARTIES_FOR_PLACES).filter((c: any) => c && !c.archived && !c.deleted && isWarehouseContact(c));
+  const pick = list.find((c: any) => c.isMainWarehouse) || list[0]; if (!pick) return null;
+  return counterpartyLocations([pick])[0] || null;
+}
 export function locationById(id: any, contacts: any[] = []): Location | null {
   if (id === null || id === undefined || id === "") return null;
-  return unifiedLocations(contacts).find(l => String(l.id) === String(id)) || null;   // v7.7.1 (A-RET-1): no demo fallback — used demo ids became ordinary locations (v7.3.4)
+  return allPlaces(contacts && contacts.length ? contacts : undefined).find(l => String(l.id) === String(id)) || null;   // v7.32.0: the Parties, or the live list the App handed over
 }
 
 // ── v6.99.39 (D-1, owner 18 Sept): ONE resolver for how a place is PRINTED ──

@@ -989,13 +989,13 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v686(){
   console.log("\n══ 31. v6.86.0: one location source, demo seeds gone, referenced seeds migrate ══");
   const loc = B("locations.js");
-  t("the reference list holds PORTS only; demo warehouses/suppliers/clients are not in any picker", () => {
-    ok(loc.LOCATIONS.every(l => l.legacyType === "PORT" || l.aliasOf), "ports only");
+  t("v7.32.0 (FZ-04a): the places module keeps no list of its own — ports, warehouses, suppliers and clients all come from Parties or the public-places store", () => {
+    ok(loc.LOCATIONS === undefined, "a module-level list is back");
   });
   t("unifiedLocations = ports + counterparty sites, deduped and sorted; a client's address is a CLIENT site", () => {
     const contacts = [{ id: 70, name: "Al Baraka", type: "Client", address: "Damietta Free Zone", country: "Egypt" }];
     const all = loc.unifiedLocations(contacts);
-    ok(!all.some(l => l.legacyType === "PORT"), "v7.3.4 (A-LOC-2): no built-in port is offered any more"); loc.ensureUsedBuiltinsAreOrdinary(new Set(["126"])); ok(loc.allLocations().some(l => String(l.id) === "126" && /Damietta/.test(l.name)), "a port a document uses becomes an ordinary location (same id)");
+    ok(!all.some(l => l.legacyType === "PORT"), "v7.3.4 (A-LOC-2): no built-in port is offered any more"); ok(!loc.ensureUsedBuiltinsAreOrdinary && !loc.LOCATIONS_ALL_BUILTIN, "v7.32.0 (FZ-04a): the code holds no list of places and copies nothing back");
     ok(all.some(l => String(l.name).includes("Al Baraka")), "client site derived from the counterparty");
     ok(!all.some(l => String(l.name).startsWith("WH-0")), "no demo warehouse");
   });
@@ -2662,7 +2662,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(new Set(ids.map(String)).size, 3, "three distinct: " + ids.join(", ")); eq(String(c1.siteId), String(L.warehouseCpLocId(wh.id, 0)));
     const r2 = L.stampSiteIds(r1.contacts); eq(r2.changed, false, "stable"); eq(r2.contacts[0].extraAddresses.map(a => a.siteId).join(","), c1.extraAddresses.map(a => a.siteId).join(","));
     const locs = L.counterpartyLocations ? L.counterpartyLocations(r1.contacts) : []; if (locs.length) eq(new Set(locs.map(l => String(l.id))).size, locs.length, "no two locations share an id");
-    const wl = L.warehouseAddressLocations(r1.contacts); eq(new Set(wl.map(l => String(l.id))).size, 3, "the warehouse list has three places");
+    const wl = L.counterpartyLocations(r1.contacts).filter(l => L.placeGroup(l) === "OWN"); eq(new Set(wl.map(l => String(l.id))).size, 3, "the warehouse list has three places");   // v7.32.0: from the Parties, no copy
   });
   console.log("v6.99.97 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -3154,14 +3154,14 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const Lm = B("locations.js"); const I = B("integrityCheck.js");
   t("A-LOC-1: an unticked company's address still RESOLVES (prints, old documents) but is not OFFERED; ticked carriers become places", () => {
     const cs = [{ id: 501, name: "Prod A", type: "Supplier", address: "Farm 1, 05-555 X", country: "Poland" }, { id: 502, name: "Client Office", type: "Client", isPlace: false, address: "Office 2", country: "Poland" }, { id: 503, name: "Carrier Yard", type: "Carrier", isPlace: true, address: "Yard 3", country: "Poland" }, { id: 504, name: "Forwarder", type: "Forwarder", address: "Office 4", country: "Poland" }];
-    Lm.registerCounterpartyLocations(cs); const all = Lm.allLocations(); const has = n => all.some(l => l.name === n);
+    Lm.setPartiesForPlaces(cs); const all = Lm.allPlaces().filter(l => l.pickable !== false); const has = n => all.some(l => l.name === n);   // v7.32.0: the Parties handed over
     ok(has("Prod A"), "a producer is offered"); ok(!has("Client Office"), "unticked → not offered"); ok(has("Carrier Yard"), "a ticked carrier is offered"); ok(!has("Forwarder"), "a forwarder by default is not");
     const off = Lm.counterpartyLocations([cs[1]])[0]; ok(Lm.locationById(off.id, cs), "the unticked address still resolves for documents and prints");
   });
-  t("A-LOC-2: no built-in place is offered; the ones documents use become ordinary locations, once (idempotent)", () => {
-    const used = new Set(["113", "999999999"]); const n1 = Lm.ensureUsedBuiltinsAreOrdinary(used); const n2 = Lm.ensureUsedBuiltinsAreOrdinary(used);
-    ok(n1 <= 1 && n2 === 0, `added ${n1} then ${n2}`); ok(Lm.allLocations().some(l => String(l.id) === "113" && /Koper/.test(l.name)));
+  t("A-LOC-2 · v7.32.0 (FZ-04a): no built-in place exists — a place is an address in Parties (a company's) or a public place in Parties › Locations; the places a document uses are counted by one helper", () => {
+    ok(!Lm.LOCATIONS_ALL_BUILTIN && !Lm.ensureUsedBuiltinsAreOrdinary && !Lm.registerCounterpartyLocations && !Lm.readLogisticsPoints && !Lm.readLocationOverrides, "a legacy place mechanism is back");
     eq(Lm.usedLocationIds({ pos: [{ destinationLocationId: 5 }], shipments: [{ legs: [{ fromId: 7, toId: 8 }] }] }).size, 3);
+    Lm.setPartiesForPlaces([]);
   });
   t("A-LOC-3: a PO whose named place is no location any more is listed with the text it read", () => {
     const r = I.checkIntegrity({ contacts: [], pos: [{ number: "PO-T", status: "Confirmed", destinationLocationId: "178456227978300", destinationText: "ul. Sitarot 47, Mogielnica" }], lots: [], orders: [], shipments: [], invoices: [], financeNotes: [], warehouseInvoices: [], operationalCosts: [] });
@@ -3539,7 +3539,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const IC = B("incoterms.domain.js"), SM = B("shipmentModel.domain.js"), L = B("locations.js");
   const load = n => { const p = FX.needFixture(n, "an owner's file"); return p ? JSON.parse(require("fs").readFileSync(p, "utf8")) : null; };
   const d = load("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json");
-  const ctxOf = x => { const all = [...L.LOCATIONS_ALL_BUILTIN, ...(x.customLocations || []), ...L.counterpartyLocations(x.contacts || [])]; return { pos: x.pos, orders: x.orders, shipments: x.shipments, claims: x.claims || [], contacts: x.contacts, lots: x.lots, placeOf: id => all.find(l => String(l.id) === String(id)) || null }; };
+  // v7.32.0: the checks' own seam stands in for the old list in the code
+  const ctxOf = x => { const all = [...require("./public-places.cjs").OLD_LIST, ...(x.customLocations || []), ...L.counterpartyLocations(x.contacts || [])]; return { pos: x.pos, orders: x.orders, shipments: x.shipments, claims: x.claims || [], contacts: x.contacts, lots: x.lots, placeOf: id => all.find(l => String(l.id) === String(id)) || null }; };
   const P = { 1: { name: "Farm", type: "SupplierFacility" }, 2: { name: "Our warehouse", type: "RentedWarehouse" }, 3: { name: "Damietta Port", type: "Port", legacyType: "PORT" }, 4: { name: "Client site", type: "ClientFacility" }, 5: { name: "Koper Port", type: "Port", legacyType: "PORT" }, 6: { name: "Port Said", type: "Port" } };
   const placeOf = id => P[id] || null;
   const kinds = fs => fs.map(f => f.kind).join(",");
@@ -4459,10 +4460,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v72717(){
   console.log("\n══ v7.27.17 — SC-14: no partner's place in the code ══");
   const L = B("locations.js");
-  t("SC-14 (v7.27.17, owner 19 Oct 'remove now'): the built-in list holds only public places and our own warehouses — no producer, client or broker place", () => {
-    const kinds = new Set(L.LOCATIONS_ALL_BUILTIN.map(x => x.type));
-    ok(!kinds.has("SupplierFacility") && !kinds.has("ClientFacility") && !kinds.has("Customs"), "a company's place is still in the code: " + Array.from(kinds).join(","));
-    ok(L.LOCATIONS_ALL_BUILTIN.every(x => ["Port", "PortWarehouse", "Airport", "RentedWarehouse", "OwnWarehouse"].includes(x.type)), "an unexpected kind of place");
+  t("SC-14 (v7.27.17) · v7.32.0 (FZ-04a): no place of any kind is written in the code any more — not a partner's, not a port's, not our own warehouse's", () => {
+    ok(L.LOCATIONS_ALL_BUILTIN === undefined, "a built-in list is back");
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/locations.ts"), "utf8");
+    ok(!/WH-01|Logipark|ColdStore|Koper Port|Damietta Port/.test(src), "a place's name is still written in the places module");
   });
 })();
 
@@ -4817,7 +4818,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("v7.30.11–13: the booking's POD shows the sale's port; the unit's price comes before its currency; the carrier order asks for 0% VAT on an export outside the EU (owner's wording)", () => {
     const e = rd("ShipmentEditor.tsx"); ok(/value=\{b\?\.podId \?\? b\?\.pod \?\? \(bp\.podDoc\?\.id \?\? ""\)\}/.test(e), "the POD does not show the sale's port");
     const g = e.split("\n").findIndex(l => l.includes('gridTemplateColumns: "160px 90px 1fr", gap: 9, marginTop: 9')); ok(g > 0 && /Price for this unit/.test(e.split("\n")[g + 1]), "the price is not first");
-    const d = rd("ShipmentDocuments.tsx"); ok(/Prosimy o zastosowanie stawki VAT 0% na wystawianych przez Państwa fakturach, zgodnie z art\. 41 ust\. 4 ustawy o VAT, w związku z wywozem towaru poza UE, potwierdzonym dokumentem celnym IE-599/.test(d) && /=== "EXPORT"/.test(d), "the VAT clause is missing or not tied to exports");
+    const d = rd("ShipmentDocuments.tsx"); ok(/Transport objęty niniejszym zleceniem stanowi część usługi transportu międzynarodowego \(eksport towarów poza UE\) i podlega stawce VAT 0% na podstawie art\. 83 ust\. 1 pkt 23 ustawy o VAT/.test(d) && /goodsLeaveTheEU\(shipment,/.test(d), "the VAT clause (v7.31.1 wording) is missing or not tied to goods leaving the EU");   // v7.31.1: the adviser's wording
   });
 })();
 
@@ -4825,16 +4826,15 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v73014(){
   console.log("\n══ v7.30.14 — the place pickers read the live Directory ══");
   const L = B("locations.js");
-  t("v7.30.14: the companies' addresses copied at start never win over the live Directory — an address changed, removed or unticked afterwards shows the new way in every picker; the copy follows the Directory when re-registered", () => {
+  t("v7.30.14 · v7.32.0 (FZ-04a): every picker reads the Parties' live list — an address changed, removed or unticked shows the new way at once; the callers without the Parties at hand read the list the App handed over, never a copy", () => {
     const mk = (street, extra = {}) => [{ id: 4242, name: "Fresh Client Sp. z o.o.", roles: ["Client"], type: "Client", countryIso: "PL", addr: { street, postcode: "00-001", city: "Warszawa" }, people: [], ...extra }];
-    L.registerCounterpartyLocations(mk("Old Street 1"));
-    const before = L.unifiedLocations([]).filter(l => String(l.name).startsWith("Fresh Client"));
-    ok(before.length >= 1 && /Old Street 1/.test(String(before[0].address || "")), "the copy was not taken (test set-up)");
-    const fresh = mk("New Street 9");
-    const now = L.unifiedLocations(fresh).filter(l => String(l.name).startsWith("Fresh Client"));
+    const parties = mk("Old Street 1"); L.setPartiesForPlaces(parties);
+    ok(/Old Street 1/.test(String((L.locById(L.allPlaces().find(l => String(l.name).startsWith("Fresh Client")).id) || {}).address || "")), "the handed-over list is not read");
+    parties[0] = { ...parties[0], addr: { ...parties[0].addr, street: "New Street 9" } };   // the Parties' live list changes in place
+    const now = L.unifiedLocations(parties).filter(l => String(l.name).startsWith("Fresh Client"));
     eq(now.length, 1, "the company's address offered twice"); ok(/New Street 9/.test(String(now[0].address || "")), "the picker shows the old address: " + now[0].address);
-    L.registerCounterpartyLocations(fresh); ok(/New Street 9/.test(String((L.unifiedLocations([]).find(l => String(l.name).startsWith("Fresh Client")) || {}).address || "")), "the copy did not follow the Directory");
-    L.registerCounterpartyLocations([]); eq(L.unifiedLocations([]).filter(l => String(l.name).startsWith("Fresh Client")).length, 0, "an address that is gone is still offered");
+    ok(/New Street 9/.test(String((L.locById(now[0].id) || {}).address || "")), "a lookup without the Parties shows the old address");
+    L.setPartiesForPlaces([]); eq(L.unifiedLocations([]).filter(l => String(l.name).startsWith("Fresh Client")).length, 0, "an address that is gone is still offered");
   });
 })();
 
@@ -4853,6 +4853,37 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const e = fsx.readFileSync(px.join(__dirname, "../src/ShipmentEditor.tsx"), "utf8");
     ok(/function cutOffFarFromEtd\(b: any\): boolean \{[^}]*e - c > 30 \* 86400000/.test(e) && /check the year/.test(e), "no wrong-year check");
     ok(!/Optional — set this when each truck/.test(e) && /data-unit-currency-warning="1"/.test(e) && /invoices in \{uc\.currency\}; this unit is priced in \{cur\}/.test(e), "the guide line stayed or no currency warning");
+  });
+})();
+
+// ══ v7.31.1 — the carrier order's VAT clause: the adviser's wording, on every carrier order of goods leaving the EU ══
+(function v73101(){
+  console.log("\n══ v7.31.1 — goods leaving the EU ══");
+  const TF = B("tradeFlow.domain.js");
+  t("v7.31.1: the goods leave the EU when the shipment crosses the border, or when it is a leg on the way out (its sale delivered outside the EU, or its booking's POD outside the EU); a shipment inside the EU with an EU sale does not", () => {
+    const C = { WH: "Poland", KOP: "Slovenia", DAM: "Egypt", BER: "Germany", AMM: "Jordan" }; const countryOf = id => C[id] || "";
+    const truckToKoper = { status: "Booked", purpose: "OUTBOUND", soRefs: ["SO-EG"], legs: [{ mode: "Road", fromLocationId: "WH", toLocationId: "KOP" }] };
+    ok(TF.goodsLeaveTheEU(truckToKoper, { orders: [{ number: "SO-EG", status: "Confirmed", destinationLocationId: "DAM" }], countryOf }), "a truck to Koper with goods sold to Damietta");
+    ok(TF.goodsLeaveTheEU({ ...truckToKoper, soRefs: [], bookings: [{ podId: "DAM" }] }, { orders: [], countryOf }), "a booking discharging at Damietta");
+    ok(TF.goodsLeaveTheEU({ status: "Booked", purpose: "OUTBOUND", soRefs: [], legs: [{ mode: "Road", fromLocationId: "WH", toLocationId: "AMM" }] }, { orders: [], countryOf }), "a truck to Amman");
+    ok(!TF.goodsLeaveTheEU({ ...truckToKoper, soRefs: ["SO-DE"], legs: [{ mode: "Road", fromLocationId: "WH", toLocationId: "BER" }] }, { orders: [{ number: "SO-DE", status: "Confirmed", destinationLocationId: "BER" }], countryOf }), "a truck to Berlin");
+  });
+})();
+
+// ══ v7.32.0 — FZ-04a: a place is an address with one owner ══
+(function v73200(){
+  console.log("\n══ v7.32.0 — FZ-04a: places ══");
+  const L = B("locations.js"), PR = B("placeReplace.domain.js");
+  t("FZ-04a (v7.32.0): our main warehouse is the warehouse company ticked in Parties (else the first), never a built-in; the old company-like entries of the places store are listed with their uses and replaced in every field of every record", () => {
+    const wh = (id, name, extra = {}) => ({ id, name, roles: ["Warehouse"], type: "Warehouse", countryIso: "PL", addr: { street: "Magazynowa 1", postcode: "00-001", city: "Poznań" }, people: [], ...extra });
+    eq(L.ourMainWarehouse([]), null); eq((L.ourMainWarehouse([wh(1, "A"), wh(2, "B")]) || {}).name, "A"); eq((L.ourMainWarehouse([wh(1, "A"), wh(2, "B", { isMainWarehouse: true })]) || {}).name, "B");
+    const store = [{ id: 1, name: "WH-01 Poznań (Logipark)", type: "RentedWarehouse" }, { id: 113, name: "Koper Port", type: "Port" }, { id: 10, name: "Biedronka DC", type: "ClientFacility" }];
+    const data = { pos: [{ number: "PO-1", destinationLocationId: 1 }], orders: [], lots: [{ number: "LOT-1", locationId: 10, movements: [{ toId: 10 }] }], shipments: [{ number: "S-1", legs: [{ fromLocationId: 1, toLocationId: 113, vehicles: [{ loadingPlaceId: 1 }] }], bookings: [{ podId: 113 }] }] };
+    const old = PR.oldPlacesToReplace(data, store); eq(old.map(o => o.place.id).join(), "1,10", "the port counted as old, or an old entry missed");
+    eq(old[0].total, 2); eq(old[0].uses.shipments.join(), "S-1"); eq(old[1].uses.lots.join(), "LOT-1");
+    const r = PR.replacePlaceEverywhere(data, 1, 777);
+    eq(r.pos[0].destinationLocationId, 777); eq(r.shipments[0].legs[0].fromLocationId, 777); eq(r.shipments[0].legs[0].vehicles[0].loadingPlaceId, 777); eq(r.shipments[0].legs[0].toLocationId, 113, "a field holding another place changed");
+    eq(r.changed.map(c => `${c.store}:${c.number}:${c.fields}`).join(), "pos:PO-1:1,shipments:S-1:2"); ok(r.lots[0] === data.lots[0], "an untouched record was copied");
   });
 })();
 

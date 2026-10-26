@@ -1,5 +1,5 @@
 {
- "version": "7.30.17",
+ "version": "7.32.0",
  "files": [
   ".npmrc",
   "HOW_TO_DEPLOY.md",
@@ -34,6 +34,7 @@
   "src/JourneyProposalCard.tsx",
   "src/LoadingProtocolModal.tsx",
   "src/LocationPicker.tsx",
+  "src/OldPlacesPanel.tsx",
   "src/PlaceRepairPanel.tsx",
   "src/PlanningSheet.tsx",
   "src/ProductPicker.tsx",
@@ -121,6 +122,7 @@
   "src/periodClose.domain.ts",
   "src/permissions.domain.ts",
   "src/placeRepair.domain.ts",
+  "src/placeReplace.domain.ts",
   "src/po.domain.ts",
   "src/poSettlement.domain.ts",
   "src/pricingUnit.domain.ts",
@@ -184,6 +186,7 @@
   "tests/ledger-drift.cjs",
   "tests/npm-audit.cjs",
   "tests/phase3-matrix.cjs",
+  "tests/public-places.cjs",
   "tests/render-smoke.cjs",
   "tests/run-engines.cjs",
   "tests/security-sql.cjs",

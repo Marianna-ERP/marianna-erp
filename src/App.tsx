@@ -11,7 +11,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
-import { stampSiteIds, ensureUsedBuiltinsAreOrdinary, usedLocationIds , registerCounterpartyLocations } from "./locations";
+import { stampSiteIds, setPartiesForPlaces } from "./locations";
 import { normaliseLot } from "./seasonOps.domain";
 import { normalisePO } from "./po.domain";
 import { normaliseSO } from "./so.domain";
@@ -164,7 +164,7 @@ export default function App() {
   const [packagingTypes, setPackagingTypes] = useLocalStoredState("packagingTypes", PACKAGING_SEED);
   const [claims, setClaimsRaw] = useLocalStoredState("claims", []);
   // v7.30.14 (owner test 21 Oct): the place module's copy of the companies' addresses follows the Directory as it changes
-  useEffect(() => { try { registerCounterpartyLocations(contacts || []); } catch { /* the pickers read the Directory anyway */ } }, [contacts]);
+  setPartiesForPlaces(contacts || []);   // v7.32.0 (FZ-04a): the places read the Parties' live list — no copy anywhere
   // v7.30.2 (Batch M · M-3): a save that asked for a number the shared counter could not give stops before writing anything; say so
   useEffect(() => {
     const onRefusal = (ev: PromiseRejectionEvent) => { const r: any = ev && ev.reason; if (r && r.name === "NumberingUnavailable") { ev.preventDefault(); uiAlert({ tone: "warn", title: "Not saved", message: String(r.message) }); } };   // the app's own window (A-RV-17)
@@ -349,7 +349,7 @@ export default function App() {
   const shared = useSharedStore(userName || "");   // v6.99.148: the shared store — login + pull when configured, otherwise nothing
   // v7.3.4 (A-LOC-2): a built-in place still used by a document becomes an ordinary location (same id) — re-checked whenever the
   // data changes (idempotent), so it also lands after the shared data has been pulled and reaches everyone
-  useEffect(() => { try { const n = ensureUsedBuiltinsAreOrdinary(usedLocationIds({ pos, orders, lots, shipments })); if (n) recordAudit({ module: "Parties", docType: "Locations", docNumber: "built-in", action: "updated", summary: `${n} built-in place(s) used by documents became ordinary locations (same ids)` }); } catch { /* never blocks the start */ } }, [shared.ready, (pos || []).length, (orders || []).length, (lots || []).length, (shipments || []).length]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // v7.32.0 (FZ-04a): nothing is copied back from a list in the code any more — every place is an address in Parties
   // v7.1.0 (A-USR-1, owner 6 Oct): on the shared copy the SIGNED-IN e-mail decides who you are — the typed "Your name" is ignored there
   const signInEmail = readSession()?.email || "";   // v7.21.0 (A-RV-19): the app runs only on the shared data
   const who = effectiveUserName(users, userName, signInEmail);
@@ -428,7 +428,7 @@ export default function App() {
       case "finance":
         return <Finance packagingTypes={packagingTypes} focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
-        return <Contacts onLinkSaleDestination={linkSaleDestination} contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims}  users={users} userName={who}  lots={lots} />;
+        return <Contacts onLinkSaleDestination={linkSaleDestination} contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims}  users={users} userName={who}  lots={lots} setPOs={setPOs} setOrders={setOrders} setLots={setLots} setShipments={setShipments} />;
       case "pos":
         return <PurchaseOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={() => navigate("finance")} key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={liveCatalog} setProductCatalog={setProductCatalog}  packagingTypes={livePackaging} setPackagingTypes={setPackagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} financeNotes={financeNotes} setInvoices={setInvoices}  users={users} userName={who}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
       case "lots":

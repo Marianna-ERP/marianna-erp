@@ -7,7 +7,7 @@ import { formatDMY } from "./dates";
 import { printHtmlNode } from "./documentService";
 import { placeForPrint, locationById } from "./locations";
 import { COMPANY, Card, FieldPrint, Inp, LOGO_DATA_URL, Lbl, SectionTitle, Sel, blankTransportUnit, cargoVariance, fmtMoney, fmtNum, locationTextFromFields, parseNum, providerById, providerCosts, providerIdsForShipment, providerLegs, providerRoleForLeg, providerRolePL, providerUnitsForLeg, shipmentCostPLN, todayISO } from "./Shipments";
-import { shipmentStartPlaceId, shipmentEndPlaceId, shipmentTradeDirection } from "./tradeFlow.domain";   // v7.28.7 (Batch L)
+import { shipmentStartPlaceId, shipmentEndPlaceId, goodsLeaveTheEU } from "./tradeFlow.domain";   // v7.28.7 (Batch L)
 
 export function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders = [], customTerms = "", pos = [], packagingTypes = [], lots = [] }: any) {
   const docNo = shipment.transportOrderNo || shipment.number;
@@ -139,8 +139,11 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
   ];
   const manualTermsLines = String(customTerms || shipment.customOrderTerms || "").split("\n").map(s => s.trim()).filter(Boolean);
   // v7.30.13 (owner 21 Oct): on a shipment taking the goods out of the EU, the carrier is asked to invoice at 0% VAT — the owner's wording
-  const exportOutsideEU = shipmentTradeDirection(shipment, { pos, orders, countryOf: (id: any) => String((locationById(id, contacts || []) || {}).country || "") }) === "EXPORT";
-  const VAT_EXPORT_TERM = ["Please apply the 0% VAT rate on the invoices you issue, in accordance with Art. 41(4) of the VAT Act, as the goods are exported outside the EU, confirmed by the customs document IE-599.", "Prosimy o zastosowanie stawki VAT 0% na wystawianych przez Państwa fakturach, zgodnie z art. 41 ust. 4 ustawy o VAT, w związku z wywozem towaru poza UE, potwierdzonym dokumentem celnym IE-599"];
+  // v7.31.1 (owner 26 Oct, the adviser's wording): the 0% request goes on every carrier order of goods leaving the EU — a truck crossing
+  // the border, and a truck whose leg ends in an EU port on the way out (its sale is delivered outside the EU, or its booking's port of
+  // discharge is outside the EU)
+  const exportOutsideEU = goodsLeaveTheEU(shipment, { pos, orders, countryOf: (id: any) => String((locationById(id, contacts || []) || {}).country || "") });
+  const VAT_EXPORT_TERM = ["The transport covered by this order is part of an international transport service (export of goods outside the EU) and is subject to the 0% VAT rate under Art. 83(1)(23) of the VAT Act or — for a leg ending in an EU port — § 4(1)(2) of the Minister of Finance Regulation of 9 December 2023 on reduced VAT rates. The Principal will provide the Carrier with the IE-599 message and a copy of the bill of lading (the documents of Art. 83(5)(1) of the VAT Act). Please issue the invoice at the 0% VAT rate.", "Transport objęty niniejszym zleceniem stanowi część usługi transportu międzynarodowego (eksport towarów poza UE) i podlega stawce VAT 0% na podstawie art. 83 ust. 1 pkt 23 ustawy o VAT lub – dla odcinka kończącego się w porcie UE – § 4 ust. 1 pkt 2 rozporządzenia MF z 9.12.2023 r. w sprawie obniżonych stawek VAT. Zleceniodawca dostarczy Przewoźnikowi komunikat IE-599 i kopię konosamentu (dokumenty z art. 83 ust. 5 pkt 1 ustawy o VAT). Prosimy o wystawienie faktury ze stawką VAT 0%."];   // v7.31.1: the adviser's wording (owner 26 Oct)
   const termsForRoad = exportOutsideEU ? [...ROAD_TERMS, VAT_EXPORT_TERM] : ROAD_TERMS;
 
   return (

@@ -21,7 +21,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
   const pf = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the owner's 2 Oct file");
   if (!pf) { console.log("CONNECTIONS: skipped"); return; }
   const d = JSON.parse(fs.readFileSync(pf, "utf8"));
-  try { localStorage.setItem("marianna-erp:v2:customLocations", JSON.stringify(d.customLocations || [])); const Lm = require(path.resolve("./src/locations")); Lm.ensureUsedBuiltinsAreOrdinary(Lm.usedLocationIds(d)); } catch (e) { /* as the app does at start */ }
+  try { localStorage.setItem("marianna-erp:v2:customLocations", JSON.stringify(d.customLocations || [])); require("./public-places.cjs").seed(localStorage, d); } catch (e) { /* as the app does at start */ }
   const noop = () => {};
 
   // ── CL-5 + CL-8 on the Claims screen: a recovery claim on LOT-2026-0127 (sold on SO, delivered by SHP-2026-0039) ──

@@ -123,3 +123,28 @@ select public.take_store_snapshot();
 ```
 It should finish without an error. Settings → **Recover from a backup** then lists the snapshots ("7 Oct 13:00 …") beside backup files.
 If Supabase says the extension is not available, open **Database → Extensions**, switch on **pg_cron**, and run the block again.
+
+## What is installed in a Supabase project — the seven-row check (v7.31.1, DOC-2110)
+
+The one-time scripts, in this order, in EACH project (TEST and the real copy):
+1. **Step 2** — the shared table and its access (this guide).
+2. **Step 6** — the twice-daily snapshots. Before running it, switch **pg_cron** on in Supabase → Database → Extensions.
+3. **supabase/numbering.sql** — the shared document numbers (without it, new documents cannot be saved on that copy).
+4. **supabase/security.sql** — the owner-only lists and the audit trail that only grows.
+
+**Warning:** never run the old Step 2 query again after security.sql — it sets the shared lists' rules back to open. If it ever
+happens, run security.sql again straight after.
+
+To see what a project has, run this in its SQL Editor (it only reads; every row should say **true**):
+
+```sql
+select 'Shared data table (setup step 2)' as item, to_regclass('public.stores') is not null as installed
+union all select 'Access for signed-in users (v7.29.5 grant)', case when to_regclass('public.stores') is null then false else has_table_privilege('authenticated', 'public.stores', 'select') end
+union all select 'Snapshots table (setup step 6)', to_regclass('public.store_snapshots') is not null
+union all select 'Snapshot function (setup step 6)', exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'take_store_snapshot')
+union all select 'Snapshot scheduler pg_cron (setup step 6)', exists (select 1 from pg_extension where extname = 'pg_cron')
+union all select 'Numbering counter (numbering.sql)', to_regclass('public.doc_counters') is not null and exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'next_doc_numbers')
+union all select 'Security rules (security.sql)', exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'marianna_is_owner') and exists (select 1 from pg_trigger where tgname = 'marianna_audit_only_grows');
+```
+
+And whether the owner is recognised (after security.sql): `select public.marianna_has_owner() as owner_linked;` — it should say **true**.
