@@ -43,6 +43,7 @@ export interface StagedRow {
   number: string;
   seller: string;
   sellerTaxNo?: string;
+  sellerAddr?: { street?: string; postcode?: string; city?: string; country?: string };   // v7.32.1 (INV-QC): kept for "New company from this invoice"
   date: string;        // issue date
   dueDate?: string;
   net: number;
@@ -59,12 +60,12 @@ export interface StagedRow {
  *  invoice show Marianna as its own supplier. Whichever side's tax number (or,
  *  failing that, name) matches OUR company is us; the counterparty is the other. */
 function normTax(v: any): string { return String(v ?? "").toLowerCase().replace(/[^0-9a-z]/g, ""); }
-export function counterpartySideOfMapped(m: any, myTaxNo?: string, myName?: string): { name: string; taxNo: string } {
+export function counterpartySideOfMapped(m: any, myTaxNo?: string, myName?: string): { name: string; taxNo: string; addr?: any } {
   const sellerIsUs =
     (!!myTaxNo && normTax(m.sellerTaxNo) !== "" && normTax(m.sellerTaxNo) === normTax(myTaxNo)) ||
     (!!myName && String(m.sellerName || "").toLowerCase().includes(String(myName).toLowerCase()));
-  if (sellerIsUs) return { name: String(m.buyerName || ""), taxNo: String(m.buyerTaxNo || "") };
-  return { name: String(m.sellerName || ""), taxNo: String(m.sellerTaxNo || "") };
+  if (sellerIsUs) return { name: String(m.buyerName || ""), taxNo: String(m.buyerTaxNo || ""), addr: m.buyerAddr };
+  return { name: String(m.sellerName || ""), taxNo: String(m.sellerTaxNo || ""), addr: m.sellerAddr };
 }
 
 export function stagedRowFromMapped(m: any, idx: number, myTaxNo?: string, myName?: string): StagedRow {
@@ -75,6 +76,7 @@ export function stagedRowFromMapped(m: any, idx: number, myTaxNo?: string, myNam
     number: String(m.number || ""),
     seller: party.name,
     sellerTaxNo: party.taxNo,
+    ...(party.addr && Object.values(party.addr).some((v: any) => String(v || "").trim()) ? { sellerAddr: party.addr } : {}),   // v7.32.1 (INV-QC)
     date: m.issueDate || m.sellDate || localTodayISO(),
     dueDate: m.dueDate || "",
     net: num(m.netTotal),
@@ -226,7 +228,7 @@ const vatRate = vatRateOf(row.net, row.gross);
     category: (tag === "FREIGHT" ? "FREIGHT" : tag === "CUSTOMS" ? "CUSTOMS" : tag === "WAREHOUSE" ? "WAREHOUSE" : tag === "GOODS" ? "PURCHASE" : "OTHER") as any,   // v6.99.120 (AUD-18): the tag names the category
     costScope: scopeOf(tag === "FREIGHT" ? "FREIGHT" : tag === "CUSTOMS" ? "CUSTOMS" : tag === "WAREHOUSE" ? "WAREHOUSE" : tag === "GOODS" ? "PURCHASE" : "OTHER"),   // v7.26.1 (A-INV-6)
     number: row.number,
-    counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller },
+    counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller, ...(row.sellerTaxNo ? { taxNo: row.sellerTaxNo } : {}), ...(row.sellerAddr ? { addr: row.sellerAddr } : {}) },   // v7.32.1 (INV-QC): what the invoice knows, for a company created from it
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "",
     paymentMethod: "Transfer",
     currency: row.currency, fxRate: resolveFxRate(row.fxRate, row.currency),

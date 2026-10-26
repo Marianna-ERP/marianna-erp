@@ -4887,6 +4887,21 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.32.1 — INV-QC: a company from an invoice ══
+(function v73201(){
+  console.log("\n══ v7.32.1 — INV-QC: new company from this invoice ══");
+  const CP = B("counterparty.domain.js"), FI = B("fakturowniaImport.domain.js");
+  t("INV-QC (v7.32.1): the import keeps the counterparty's tax number and address parts on the invoice's own copy; a company built from an invoice carries name, NIP (prefix stripped), address parts, the country code and the role from the invoice's side", () => {
+    const m = { fktId: 9, number: "FV/6/10/2026", sellerName: "BW-TRANS Bartosz Walo", sellerTaxNo: "PL1234567890", sellerAddr: { street: "Polna 3", postcode: "05-500", city: "Piaseczno", country: "Polska" }, buyerName: "MARIANNA", buyerTaxNo: "PL5252842787", currency: "PLN", netTotal: 100, grossTotal: 123, issueDate: "2026-10-22" };
+    const row = FI.stagedRowFromMapped(m, 0, "PL5252842787", "MARIANNA"); eq(row.seller, "BW-TRANS Bartosz Walo"); eq(row.sellerAddr && row.sellerAddr.city, "Piaseczno", "the address is not kept on the row");
+    const inv = FI.buildCostInvoice(row, "TRANSPORT", {}, null); eq(inv.counterparty.taxNo, "PL1234567890"); eq(inv.counterparty.addr.street, "Polna 3", "the address is not kept on the invoice's copy");
+    let n = 500; const rec = CP.newCompanyFromInvoice(inv, () => ++n);
+    eq(rec.name, "BW-TRANS Bartosz Walo"); eq(rec.nip, "1234567890", "the PL prefix stayed in the NIP"); eq(rec.countryIso, "PL"); eq(rec.roles.join(), "Supplier"); eq(rec.addr.postcode, "05-500"); eq(rec.isPlace, false);
+    const sale = CP.newCompanyFromInvoice({ kind: "SALES", number: "FS 1/2026", counterparty: { name: "Al Baraka", taxNo: "EG123" } }, () => ++n); eq(sale.roles.join(), "Client"); eq(sale.countryIso, "EG");
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8"); ok(/data-new-company-from-invoice="1"/.test(src) && /data-create-and-link="1"/.test(src) && /startCreate\(i\)/.test(src), "the window is not in the Invoices panel");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

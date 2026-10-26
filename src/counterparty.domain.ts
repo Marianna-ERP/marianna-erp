@@ -169,3 +169,17 @@ export function withLiveCompanies(docs: any[], fields: string[], contacts: any[]
   });
   return any ? out : (docs || []);
 }
+
+/** v7.32.1 (INV-QC, owner 26 Oct): A COMPANY FROM AN INVOICE — the record the Invoices panel creates for a company the register
+ *  names in text only (a petrol station, a one-off carrier): name, tax number, address parts and country as the invoice carries them,
+ *  the role from the invoice's side (Supplier for a cost invoice, Client for a sales invoice); the common address base, the country
+ *  code; not a loading place by default. The same tidy-up as any company applies on save. */
+export function newCompanyFromInvoice(inv: any, nextId: () => any, role?: "Supplier" | "Client"): any {
+  const cp = inv?.counterparty || {}; const r = role || (S(inv?.kind).toUpperCase() === "SALES" ? "Client" : "Supplier");
+  const taxRaw = S(cp.taxNo || cp.nip); const prefix = (taxRaw.match(/^([A-Za-z]{2})/) || [])[1]; const digits = taxRaw.replace(/[^0-9A-Za-z]/g, "");
+  const addr = cp.addr || {}; const iso = countryIso(addr.country) || (prefix ? prefix.toUpperCase() : "") || "";
+  const nip = digits ? (prefix ? digits.slice(2) : digits) : "";
+  return { id: nextId(), name: S(cp.name), roles: [r], type: r, countryIso: iso,
+    addr: { street: S(addr.street), postcode: S(addr.postcode), city: S(addr.city) },
+    nip, vatEuId: prefix && prefix.toUpperCase() !== "PL" ? taxRaw : "", terms: { defaultCurrency: S(inv?.currency) || "PLN", paymentDays: 30 }, services: [], notes: `Created from invoice ${S(inv?.number)}`, people: [], isPlace: false, createdFromInvoice: S(inv?.number) };
+}
