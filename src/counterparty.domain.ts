@@ -177,9 +177,10 @@ export function withLiveCompanies(docs: any[], fields: string[], contacts: any[]
 export function newCompanyFromInvoice(inv: any, nextId: () => any, role?: "Supplier" | "Client"): any {
   const cp = inv?.counterparty || {}; const r = role || (S(inv?.kind).toUpperCase() === "SALES" ? "Client" : "Supplier");
   const taxRaw = S(cp.taxNo || cp.nip); const prefix = (taxRaw.match(/^([A-Za-z]{2})/) || [])[1]; const digits = taxRaw.replace(/[^0-9A-Za-z]/g, "");
-  const addr = cp.addr || {}; const iso = countryIso(addr.country) || (prefix ? prefix.toUpperCase() : "") || "";
+  const addr = cp.addr || {}; const fromPrefix = prefix && countryNameOf(prefix.toUpperCase()) !== prefix.toUpperCase() ? prefix.toUpperCase() : "";
+  const iso = countryIso(addr.country) || fromPrefix || "";   // v7.32.2: only a country the list knows — else left to the form's Countries list
   const nip = digits ? (prefix ? digits.slice(2) : digits) : "";
-  return { id: nextId(), name: S(cp.name), roles: [r], type: r, countryIso: iso,
+  const id = nextId(); return { ...(id != null ? { id } : {}), name: S(cp.name), roles: [r], type: r, countryIso: iso,
     addr: { street: S(addr.street), postcode: S(addr.postcode), city: S(addr.city) },
     nip, vatEuId: prefix && prefix.toUpperCase() !== "PL" ? taxRaw : "", terms: { defaultCurrency: S(inv?.currency) || "PLN", paymentDays: 30 }, services: [], notes: `Created from invoice ${S(inv?.number)}`, people: [], isPlace: false, createdFromInvoice: S(inv?.number) };
 }

@@ -453,12 +453,11 @@ function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any
 
 /** v7.25.1 (FZ-17, owner 17 Oct): AN INVOICE NAMES ITS COMPANY BY ID. The ones that name it in text only are listed once — link each to
  *  its company (a company of the very same name is suggested), or open the Directory to add it; no free text. */
-function UnlinkedCompanies({ invoices, contacts, setInvoices, setContacts = null }: any) {
+function UnlinkedCompanies({ invoices, contacts, setInvoices }: any) {
   const S = (v: any) => String(v ?? "").trim(); const norm = (v: any) => S(v).toLowerCase().replace(/\s+/g, " ");
   const live = (contacts || []).filter((c: any) => c && c.status !== "Deleted" && S(c.name));
   const rows = (invoices || []).filter((i: any) => i && !S(i.counterparty?.id) && !/Cancelled/i.test(S(i.status) + S(i.paymentStatus)));
   const [open, setOpen] = useState(false); const [pick, setPick] = useState<Record<string, string>>({});
-  const [creating, setCreating] = useState<any>(null); const [draft, setDraft] = useState<any>(null);   // v7.32.1 (INV-QC)
   if (!rows.length || !setInvoices) return null;
   const suggest = (i: any) => { const n = norm(i.counterparty?.name); const hit = n ? live.find((c: any) => norm(c.name) === n) : null; return hit ? String(hit.id) : ""; };
   const link = (i: any, cid: string) => {
@@ -467,44 +466,17 @@ function UnlinkedCompanies({ invoices, contacts, setInvoices, setContacts = null
     recordAudit({ module: "Invoices", docType: "Invoice", docNumber: S(i.number), action: "updated", summary: `Company linked by id: ${c.name} (was named "${S(i.counterparty?.name) || "—"}" in text) — FZ-17` });
   };
   const btn: React.CSSProperties = { padding: "5px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" };
-  // v7.32.1 (INV-QC, owner 26 Oct): "New company from this invoice" — a window here, prefilled with what the invoice knows; one click
-  // creates the company (the same rule as Parties) and links this invoice and every other in the list with the same NIP (or name)
+  // v7.32.2 (INV-QC, owner 26 Oct: "why all of this if we already have the counterparty module?"): ONE FORM — "+ New company" opens the
+  // Parties module's own New Counterparty form, prefilled with what the invoice carries (its country chosen from the Countries list, never
+  // typed); the module's duplicate check and audit apply; once saved, this invoice and every other listed with the same NIP (or name) are
+  // linked to the new company and the app comes back here.
   const taxKey = (x: any) => S(x?.counterparty?.taxNo || x?.counterparty?.nip).replace(/[^0-9A-Za-z]/g, "").toLowerCase();
   const sameCompany = (i: any) => rows.filter((x: any) => x && (taxKey(i) ? taxKey(x) === taxKey(i) : (!taxKey(x) && norm(x.counterparty?.name) === norm(i.counterparty?.name))));
-  const startCreate = (i: any) => { const rec = newCompanyFromInvoice(i, nextId); setDraft(rec); setCreating(i); };
-  const createAndLink = () => {
-    if (!creating || !draft || typeof setContacts !== "function" || !S(draft.name)) return;
-    const rec = { ...draft, name: S(draft.name) }; setContacts((prev: any[]) => [...(prev || []), rec]);
-    const targets = sameCompany(creating); const ids = new Set(targets.map((x: any) => x.id));
-    setInvoices((prev: any[]) => (prev || []).map((x: any) => x && ids.has(x.id) ? { ...x, counterparty: { ...(x.counterparty || {}), id: rec.id, name: rec.name } } : x));
-    recordAudit({ module: "Parties", docType: "Company", docNumber: rec.name, action: "created", summary: `Created from invoice ${S(creating.number)} (${rec.roles[0]}${rec.nip ? ", NIP " + rec.nip : ""}) and linked to ${targets.length} invoice${targets.length === 1 ? "" : "s"}: ${targets.map((x: any) => S(x.number)).join(", ")} — INV-QC` });
-    targets.forEach((x: any) => recordAudit({ module: "Invoices", docType: "Invoice", docNumber: S(x.number), action: "updated", summary: `Company linked by id: ${rec.name} (created from invoice ${S(creating.number)}) — INV-QC` }));
-    setCreating(null); setDraft(null);
+  const startCreate = (i: any) => {
+    const prefill = newCompanyFromInvoice(i, () => null);
+    window.dispatchEvent(new CustomEvent("marianna:navigate", { detail: { module: "contacts", tab: "companies", newCompany: { prefill, linkInvoices: sameCompany(i).map((x: any) => x.id), fromInvoice: S(i.number), returnTo: "invoices" } } }));
   };
-  const dIn: React.CSSProperties = { width: "100%", padding: "6px 8px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12, boxSizing: "border-box" };
-  const createWindow = creating && draft ? (
-    <div data-new-company-from-invoice="1" style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9000 }} onMouseDown={e => { if (e.target === e.currentTarget) { setCreating(null); setDraft(null); } }}>
-      <div style={{ background: "#fff", borderRadius: 12, padding: 16, width: 520, maxWidth: "95vw", boxShadow: "0 10px 30px rgba(0,0,0,0.2)", fontSize: 12 }}>
-        <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 2 }}>New company from invoice {S(creating.number)}</div>
-        <div style={{ color: "#64748B", marginBottom: 10 }}>Prefilled with what the invoice carries — check it, then one click creates the company and links {sameCompany(creating).length} invoice{sameCompany(creating).length === 1 ? "" : "s"}.</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <label style={{ gridColumn: "1 / -1" }}><div style={{ fontSize: 11, color: "#64748B" }}>Name</div><input value={draft.name} onChange={e => setDraft((d: any) => ({ ...d, name: e.target.value }))} style={dIn} /></label>
-          <label><div style={{ fontSize: 11, color: "#64748B" }}>NIP / tax number</div><input value={draft.nip} onChange={e => setDraft((d: any) => ({ ...d, nip: e.target.value }))} style={dIn} /></label>
-          <label><div style={{ fontSize: 11, color: "#64748B" }}>Role</div><select value={draft.roles[0]} onChange={e => setDraft((d: any) => ({ ...d, roles: [e.target.value], type: e.target.value }))} style={dIn}>{["Supplier", "Client", "Carrier", "Forwarder", "Broker", "Warehouse", "Other"].map(r => <option key={r}>{r}</option>)}</select></label>
-          <label style={{ gridColumn: "1 / -1" }}><div style={{ fontSize: 11, color: "#64748B" }}>Street</div><input value={draft.addr.street} onChange={e => setDraft((d: any) => ({ ...d, addr: { ...d.addr, street: e.target.value } }))} style={dIn} /></label>
-          <label><div style={{ fontSize: 11, color: "#64748B" }}>Postcode</div><input value={draft.addr.postcode} onChange={e => setDraft((d: any) => ({ ...d, addr: { ...d.addr, postcode: e.target.value } }))} style={dIn} /></label>
-          <label><div style={{ fontSize: 11, color: "#64748B" }}>City</div><input value={draft.addr.city} onChange={e => setDraft((d: any) => ({ ...d, addr: { ...d.addr, city: e.target.value } }))} style={dIn} /></label>
-          <label><div style={{ fontSize: 11, color: "#64748B" }}>Country code</div><input value={draft.countryIso} onChange={e => setDraft((d: any) => ({ ...d, countryIso: e.target.value.toUpperCase() }))} placeholder="PL" style={dIn} /></label>
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-          <button type="button" onClick={() => { setCreating(null); setDraft(null); window.dispatchEvent(new CustomEvent("marianna:navigate", { detail: { module: "contacts", tab: "companies" } })); }} style={btn}>Open in Parties</button>
-          <button type="button" onClick={() => { setCreating(null); setDraft(null); }} style={btn}>Cancel</button>
-          <button type="button" data-create-and-link="1" disabled={!S(draft.name) || typeof setContacts !== "function"} onClick={createAndLink} style={{ ...btn, background: "#16A34A", color: "#fff", borderColor: "#16A34A" }}>Create & link {sameCompany(creating).length}</button>
-        </div>
-      </div>
-    </div>) : null;
   return <Card style={{ marginBottom: 14, borderColor: "#FDE68A", background: "#FFFBEB" }}>
-    {createWindow}
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
       <b style={{ fontSize: 13 }}>{rows.length} invoice{rows.length === 1 ? "" : "s"} name{rows.length === 1 ? "s" : ""} the company in text only</b>
       <span style={{ fontSize: 12, color: "#92400E" }}>Link each to its company once — the statements, the reports and the database then read it by id.</span>
@@ -520,7 +492,7 @@ function UnlinkedCompanies({ invoices, contacts, setInvoices, setContacts = null
           <td style={{ padding: "6px 8px", minWidth: 220 }}><Sel value={cur} onChange={(e: any) => setPick(p => ({ ...p, [String(i.id)]: e.target.value }))}><option value="">Choose the company…</option>{live.map((c: any) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}</Sel></td>
           <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
             <button type="button" disabled={!cur} onClick={() => link(i, cur)} style={{ ...btn, background: cur ? "#16A34A" : "#F1F5F9", color: cur ? "#fff" : "#94A3B8", borderColor: cur ? "#16A34A" : "#E5E7EB" }}>Link</button>{" "}
-            <button type="button" data-new-company={String(i.id)} onClick={() => startCreate(i)} style={btn}>＋ New company</button>   {/* v7.32.1 (INV-QC): prefilled, here */}
+            <button type="button" data-new-company={String(i.id)} onClick={() => startCreate(i)} style={btn}>＋ New company</button>   {/* v7.32.2 (INV-QC): the Parties form, prefilled */}
           </td></tr>; })}</tbody></table></div>}
   </Card>;
 }
@@ -544,7 +516,7 @@ export default function Invoices(props: any) {
   // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
   const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("invoice", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [],
-    setShipments = null, setOperationalCosts = null, setOrders = null, closedPeriods = [], setLots = null, setContacts = null } = props;   // v7.32.1 (INV-QC): the companies' setter, for a company created from an invoice
+    setShipments = null, setOperationalCosts = null, setOrders = null, closedPeriods = [], setLots = null } = props;
   const [allocFor, setAllocFor] = useState<any>(null);   // v6.99.109 (A-ST-7): the warehouse invoice being allocated to lots
   const [showImport, setShowImport] = useState(false); // v6.39.0
   const [showIssued, setShowIssued] = useState(false);   // v7.26.3 (A-INV-3)
@@ -885,7 +857,7 @@ export default function Invoices(props: any) {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 28px" }}>
-        <UnlinkedCompanies invoices={invoices} contacts={contacts} setInvoices={setInvoices} setContacts={setContacts} />
+        <UnlinkedCompanies invoices={invoices} contacts={contacts} setInvoices={setInvoices} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
           {[
             { l: "RECEIVABLE · OPEN", v: money(recvOpen, "PLN"), c: "#16A34A" },

@@ -1,5 +1,5 @@
 {
- "version": "7.32.1",
+ "version": "7.32.2",
  "files": [
   ".npmrc",
   "HOW_TO_DEPLOY.md",
@@ -185,6 +185,7 @@
   "tests/fixtures/sample_season_workbook.xlsx",
   "tests/ledger-drift.cjs",
   "tests/npm-audit.cjs",
+  "tests/parties-from-invoice.cjs",
   "tests/phase3-matrix.cjs",
   "tests/public-places.cjs",
   "tests/render-smoke.cjs",

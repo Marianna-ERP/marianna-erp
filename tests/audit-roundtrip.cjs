@@ -4895,10 +4895,14 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const m = { fktId: 9, number: "FV/6/10/2026", sellerName: "BW-TRANS Bartosz Walo", sellerTaxNo: "PL1234567890", sellerAddr: { street: "Polna 3", postcode: "05-500", city: "Piaseczno", country: "Polska" }, buyerName: "MARIANNA", buyerTaxNo: "PL5252842787", currency: "PLN", netTotal: 100, grossTotal: 123, issueDate: "2026-10-22" };
     const row = FI.stagedRowFromMapped(m, 0, "PL5252842787", "MARIANNA"); eq(row.seller, "BW-TRANS Bartosz Walo"); eq(row.sellerAddr && row.sellerAddr.city, "Piaseczno", "the address is not kept on the row");
     const inv = FI.buildCostInvoice(row, "TRANSPORT", {}, null); eq(inv.counterparty.taxNo, "PL1234567890"); eq(inv.counterparty.addr.street, "Polna 3", "the address is not kept on the invoice's copy");
-    let n = 500; const rec = CP.newCompanyFromInvoice(inv, () => ++n);
+    let n = 500; const rec = CP.newCompanyFromInvoice(inv, () => ++n);   // v7.32.2: the Parties form's prefill (an id only when one is given)
     eq(rec.name, "BW-TRANS Bartosz Walo"); eq(rec.nip, "1234567890", "the PL prefix stayed in the NIP"); eq(rec.countryIso, "PL"); eq(rec.roles.join(), "Supplier"); eq(rec.addr.postcode, "05-500"); eq(rec.isPlace, false);
     const sale = CP.newCompanyFromInvoice({ kind: "SALES", number: "FS 1/2026", counterparty: { name: "Al Baraka", taxNo: "EG123" } }, () => ++n); eq(sale.roles.join(), "Client"); eq(sale.countryIso, "EG");
-    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8"); ok(/data-new-company-from-invoice="1"/.test(src) && /data-create-and-link="1"/.test(src) && /startCreate\(i\)/.test(src), "the window is not in the Invoices panel");
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+    ok(!/data-new-company-from-invoice/.test(src) && /newCompany: \{ prefill, linkInvoices: sameCompany\(i\)/.test(src), "v7.32.2: a second company form is back in Invoices, or the request does not carry the prefill");
+    const pc = require("fs").readFileSync(require("path").join(__dirname, "../src/Contacts.tsx"), "utf8"); ok(/marianna:contactsNewCompany/.test(pc) && /marianna:companyCreated/.test(pc), "Parties does not open its own form for the request, or does not say it was saved");
+    eq(CP.newCompanyFromInvoice({ kind: "COST", number: "X", counterparty: { name: "Stacja", taxNo: "ZZ123", addr: { country: "Atlantis" } } }, () => null).countryIso, "", "an unknown country was typed into the record");
+    ok(!("id" in CP.newCompanyFromInvoice({ counterparty: { name: "Y" } }, () => null)), "the prefill carries an id");
   });
 })();
 

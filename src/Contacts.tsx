@@ -245,7 +245,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
       <div style={{ background: "#fff", borderRadius: 14, width: "min(640px, 96vw)", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,0.18)", overflow: "hidden" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{counterparty ? "Edit Counterparty" : "New Counterparty"}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{counterparty && counterparty.id != null ? "Edit Counterparty" : (counterparty && counterparty.notes ? `New Counterparty — ${String(counterparty.notes).replace(/^Created from /, "from ")}` : "New Counterparty")}</div>
             <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>Company-level details. Contact people are added on the next step.</div>
           </div>
           <ActionButton action="close" onClick={onClose} />
@@ -434,7 +434,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
           <button onClick={onClose} style={{ padding: "8px 20px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
           <button onClick={handleSave}
             style={{ padding: "8px 22px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: form.name ? "pointer" : "not-allowed", opacity: form.name ? 1 : 0.5 }}>
-            {counterparty ? "Save Changes" : "Add Counterparty"}
+            {counterparty && counterparty.id != null ? "Save Changes" : "Add Counterparty"}
           </button>
         </div>
       </div>
@@ -1597,7 +1597,10 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
   const [viewMode, setViewMode] = useState(() => { try { const t = window.sessionStorage.getItem("marianna:contactsTab"); window.sessionStorage.removeItem("marianna:contactsTab"); return t || "companies"; } catch { return "companies"; } }); // companies | people | ports (v6.99.11)
   const [selectedId, setSelectedId] = useState(null);
   const [newLocFor, setNewLocFor] = useState<any>(() => { try { const r = window.sessionStorage.getItem("marianna:contactsNewLocFor"); window.sessionStorage.removeItem("marianna:contactsNewLocFor"); return r ? JSON.parse(r) : null; } catch { return null; } });   // v7.6.2 (A-LOC-1) · v7.18.1 (A-AU-3): also from a sale
-  const [modal, setModal] = useState(null); // null | "new" | counterparty-to-edit
+  // v7.32.2 (INV-QC): a request from another module — "a new company, prefilled" — opens this module's own form (no second form anywhere)
+  const lastCreatedId = useRef<any>(null);   // v7.32.2 (INV-QC)
+  const newCompanyReq = useRef<any>((() => { try { const r = window.sessionStorage.getItem("marianna:contactsNewCompany"); window.sessionStorage.removeItem("marianna:contactsNewCompany"); return r ? JSON.parse(r) : null; } catch { return null; } })());
+  const [modal, setModal] = useState<any>(() => newCompanyReq.current && newCompanyReq.current.prefill ? { ...newCompanyReq.current.prefill, __prefilled: true } : null); // null | "new" | counterparty-to-edit | a prefilled new one
   const [emailTarget, setEmailTarget] = useState(null); // { counterparty, person } | null
   const [showImport, setShowImport] = useState(false);
   const [importSource, setImportSource] = useState("fakturownia"); // "fakturownia" | "csv"
@@ -1693,11 +1696,14 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
     setCounterparties(prev => {
       if (c.id) return prev.map(p => p.id === c.id ? { ...p, ...c } : p);
       const newC = { ...c, id: nextId(), people: [] };   // v7.28.2 (Batch L): no old persons list, no retired cache
+      delete (newC as any).__prefilled; lastCreatedId.current = newC.id;   // v7.32.2 (INV-QC)
       setSelectedId(newC.id);
       return [...prev, newC];
     });
     setModal(null);
     notifySaved(String((c as any)?.name || ""));   // v6.99.69 (A-CF-3)
+    // v7.32.2 (INV-QC): the company the request asked for exists — the App links the request's invoices and goes back
+    if (newCompanyReq.current && !c.id) { const req = newCompanyReq.current; newCompanyReq.current = null; setTimeout(() => { const id = lastCreatedId.current; if (id != null) window.dispatchEvent(new CustomEvent("marianna:companyCreated", { detail: { id, name: c.name, linkInvoices: req.linkInvoices || [], fromInvoice: req.fromInvoice, returnTo: req.returnTo } })); }, 0); }
     setDupReview(null);
   }
 
@@ -1839,7 +1845,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       {guardNode}
       {modal && (
         <CounterpartyModal
-          key={modal === "new" ? "new" : String((modal as any)?.id ?? "edit")}   /* v6.99.45 (CP-13): a fresh form per record */
+          key={modal === "new" ? "new" : (modal as any)?.__prefilled ? "new-prefilled" : String((modal as any)?.id ?? "edit")}   /* v6.99.45 (CP-13): a fresh form per record */
           counterparty={modal === "new" ? null : modal}
           contacts={counterparties}
           onSave={saveCounterparty}

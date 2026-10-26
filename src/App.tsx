@@ -165,6 +165,14 @@ export default function App() {
   const [claims, setClaimsRaw] = useLocalStoredState("claims", []);
   // v7.30.14 (owner test 21 Oct): the place module's copy of the companies' addresses follows the Directory as it changes
   setPartiesForPlaces(contacts || []);   // v7.32.0 (FZ-04a): the places read the Parties' live list — no copy anywhere
+  // v7.32.2 (INV-QC): a company created in Parties from an invoice — the invoices it came for are linked to it, then back to Invoices
+  useEffect(() => {
+    const h = (e: any) => { const d = e?.detail || {}; const ids = new Set((d.linkInvoices || []).map(String)); if (!d.id || !ids.size) return;
+      setInvoices((prev: any[]) => (prev || []).map((x: any) => x && ids.has(String(x.id)) && !(x.counterparty && x.counterparty.id) ? { ...x, counterparty: { ...(x.counterparty || {}), id: d.id, name: d.name } } : x));
+      (invoices || []).filter((x: any) => x && ids.has(String(x.id))).forEach((x: any) => recordAudit({ module: "Invoices", docType: "Invoice", docNumber: String(x.number || ""), action: "updated", summary: `Company linked by id: ${d.name} (created in Parties from invoice ${d.fromInvoice || ""}) — INV-QC` }));
+      if (d.returnTo) navigateRef.current(d.returnTo); };
+    window.addEventListener("marianna:companyCreated", h); return () => window.removeEventListener("marianna:companyCreated", h);
+  }, [invoices]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v7.30.2 (Batch M · M-3): a save that asked for a number the shared counter could not give stops before writing anything; say so
   useEffect(() => {
     const onRefusal = (ev: PromiseRejectionEvent) => { const r: any = ev && ev.reason; if (r && r.name === "NumberingUnavailable") { ev.preventDefault(); uiAlert({ tone: "warn", title: "Not saved", message: String(r.message) }); } };   // the app's own window (A-RV-17)
@@ -327,7 +335,7 @@ export default function App() {
 
   // v6.99.11: pickers may ask to open the Directory ("＋ Add it in the Directory…") — never free text.
   const navigateRef = useRef<(m: string) => void>(() => {});   // v6.99.58 (A-US-2)
-  useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); if (e?.detail?.newLocationFor) window.sessionStorage.setItem("marianna:contactsNewLocFor", JSON.stringify(e.detail.newLocationFor)); } catch {} };   /* v7.18.1 (A-AU-3): "+ Add a site for this client" from a sale */ window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
+  useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); if (e?.detail?.newLocationFor) window.sessionStorage.setItem("marianna:contactsNewLocFor", JSON.stringify(e.detail.newLocationFor)); if (e?.detail?.newCompany) window.sessionStorage.setItem("marianna:contactsNewCompany", JSON.stringify(e.detail.newCompany)); } catch {} };   /* v7.32.2 (INV-QC) */   /* v7.18.1 (A-AU-3): "+ Add a site for this client" from a sale */ window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
 
   // v6.68.0 (D-34): SINGLE-ENTRY OVERHEAD — every register invoice with cost
   // scope OVERHEAD mirrors into exactly one operational cost (replace-by-ref
@@ -438,7 +446,7 @@ export default function App() {
       case "shipments":
         return <Shipments key={"shp-" + (openShipmentNumber || shipmentsFilter || "list")} claims={claims} initialStatusFilter={shipmentsFilter} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={liveCatalog} userName={who} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={livePackaging} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":
-        return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} setContacts={setContactsCascade} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} setLots={setLots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts}  closedPeriods={closedPeriods} />;
+        return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} setLots={setLots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts}  closedPeriods={closedPeriods} />;
       case "settings":
         return <Settings roles={roles} setRoles={setRoles} seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userName={who} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} onLinkPackagingSpelling={linkPackagingSpelling}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
       default:
