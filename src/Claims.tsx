@@ -15,6 +15,7 @@ import { nbpRateBefore } from "./fx";   // v7.18.6 (A-AU-12)
 import { COST_TYPES } from "./Shipments";   // v7.18.5 (A-AU-10): the cost types a claim's cost line picks from
 import { nextId } from "./ids";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
+import { requestNoteInInvoices } from "./noteRequest";   // v7.34.0 (CN-2)
 import { RISK_CAUSES, journeyStages, claimRouting, claimShipment } from "./incoterms.domain";   // v7.19.4 (A-INC-1, 5/5)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 import { issueNumber } from "./numbering";   // v7.27.8 (A-W5)
@@ -218,8 +219,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
   // rulings — client → credit note we issue; supplier/carrier → their credit
   // note if received, otherwise a DEBIT note we issue (what we need to get).
   const finaliseNote = async (c: any) => {
-    if (typeof setFinanceNotes !== "function") return;
-    if (c.financeNoteId || (financeNotes || []).some((nt: any) => String(nt.source) === `claim:${c.number}`)) {
+    if ((c.financeNoteId && (financeNotes || []).some((nt: any) => String(nt.id) === String(c.financeNoteId))) || (financeNotes || []).some((nt: any) => String(nt.source) === `claim:${c.number}`)) {   // v7.34.0: a note asked for but never saved does not count
       await uiConfirm({ tone: "warn", title: "Already documented", message: `${c.number} already has its credit/debit note. Corrections go through a new note in Invoices.`, confirmLabel: "OK", cancelLabel: "Close" });
       return;
     }
@@ -238,7 +238,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
       mode = claimNoteMode(c, !!theyIssued);
     }
     const note = buildClaimFinanceNote(c, mode, { nextId, todayISO: () => today, invoices });
-    setFinanceNotes((prev: any[]) => [note, ...(prev || [])]);
+    requestNoteInInvoices(note);   // v7.34.0 (CN-2): created in Invoices, on its own form — the claim keeps its id
     patch(c.id, { financeNoteId: note.id, resolvedAt: c.resolvedAt || today, status: ["Settled", "Closed"].includes(String(c.status)) ? c.status : "Settled" });
   };
 
@@ -276,6 +276,9 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
     if (typeof setLots === "function") setLots((prev: any[]) => applyPostingsToLots(prev || [], postings));
     if (typeof setOrders === "function") setOrders((prev: any[]) => applyPostingsToOrders(prev || [], postings));
     patch(c.id, { status: c.status === "Settled" ? "Settled" : "Accepted", resolvedAt: c.resolvedAt || today });
+    // v7.34.0 (CLM-1, owner 26 Oct: "adding a claim should lead to a credit / debit note"): the agreed amount posted, its note follows
+    const hasNote = (c.financeNoteId && (financeNotes || []).some((nt: any) => String(nt.id) === String(c.financeNoteId))) || (financeNotes || []).some((nt: any) => String(nt.source) === `claim:${c.number}`);
+    if (!hasNote) await finaliseNote(c);
   };
 
   const unpostClaim = async (c: any) => {
@@ -358,7 +361,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: "auto", padding: "16px 28px 28px", display: "grid", gridTemplateColumns: selected ? "1.15fr 1fr" : "1fr", gap: 16, alignItems: "start" }}>
+      <div style={{ flex: 1, overflow: "auto", padding: "16px 28px 28px", display: "grid", gridTemplateColumns: "1fr", gap: 16, alignItems: "start" }}>   {/* v7.34.0 (CLM-2): the claim opens in its own window */}
 
         {/* ── register ── */}
         <Card>
@@ -439,7 +442,8 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
           const net = selected.parentClaimId ? incidentNet(claims, selected.parentClaimId) : incidentNet(claims, selected.id);
           const family = net.members.length > 1 ? net : null;
           return (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div data-claim-window="1" style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.35)", zIndex: 8000, display: "flex", justifyContent: "center", alignItems: "flex-start", overflow: "auto", padding: "32px 16px" }} onMouseDown={(e: any) => { if (e.target === e.currentTarget) setSelectedId(null); }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, width: "min(1040px, 96vw)", background: "#F8FAFC", borderRadius: 14, padding: 16, boxShadow: "0 12px 40px rgba(0,0,0,0.25)" }}>
               <Card>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
                   <div style={{ fontSize: 14, fontWeight: 800 }}>{selected.number}</div>
@@ -453,7 +457,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                 </div>
                 <div style={{ fontSize: 11, color: "#64748B", marginBottom: 12, lineHeight: 1.5 }}>{ds.hint}</div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 10 }}>
                   <div>
                     <Lbl>Direction</Lbl>
                     <select value={selected.direction} onChange={e => {
@@ -570,7 +574,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   </select>
                   {(selected.basis === "COSTS" || selected.basis === "MIXED") && (
                     <div style={{ marginTop: 10 }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 10 }}>
                         <div><Lbl>Cargo lost (kg)</Lbl><input type="number" value={selected.lostKg ?? ""} onChange={e => patch(selected.id, { lostKg: e.target.value })} style={INP} /></div>
                         <div><Lbl>Value of the lost cargo ({selected.currency || "EUR"})</Lbl><input type="number" value={selected.lostValue ?? ""} onChange={e => patch(selected.id, { lostValue: e.target.value })} style={INP} /></div>
                       </div>
@@ -839,6 +843,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   </div>
                 </Card>
               )}
+            </div>
             </div>
           );
         })()}

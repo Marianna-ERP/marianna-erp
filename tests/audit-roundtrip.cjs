@@ -4940,6 +4940,25 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.34.0 — IMP-1, BANK-1, CN-1, CN-2, CLM-1, CLM-2 ══
+(function v73400(){
+  console.log("\n══ v7.34.0 — notes, bank lines, claims ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  const BR = B("bankReconciliation.domain.js"), FI = B("fakturowniaImport.domain.js");
+  t("CN-1 (v7.34.0): an invoice's open amount is its gross less its credit notes plus its debit notes less what is paid — a payment of 'invoice − credit note' matches; a Fakturownia correction becomes a note on the invoice it corrects", () => {
+    const inv = { id: 7, grossAmount: 1000, paidAmount: 0, kind: "SALES" };
+    eq(BR.openAmountWithNotes(inv, [{ invoiceId: 7, noteType: "CREDIT", amount: 100, status: "Issued" }, { invoiceId: 7, noteType: "DEBIT", amount: 20 }, { invoiceId: 7, noteType: "CREDIT", amount: 50, status: "Cancelled" }, { invoiceId: 8, noteType: "CREDIT", amount: 999 }]), 920);
+    let n = 0; const note = FI.noteFromCorrection({ number: "FK 1/2026", date: "2026-10-20", gross: -123, currency: "PLN", fxRate: 1, correctedFktId: 555, fktId: 900, seller: "Supplier" }, "incoming", [{ id: 42, number: "FV 9/2026", fakturownia: { fktId: 555 }, counterparty: { id: 3, name: "Supplier" } }], null, () => ++n);
+    eq(note.noteType, "CREDIT"); eq(note.amount, 123); eq(note.invoiceId, 42); eq(note.partyId, 3); eq(note.status, "Issued"); eq(note.source, "fakturownia-correction:900");
+  });
+  t("IMP-1 / BANK-1 / CN-2 / CLM-1 / CLM-2 (v7.34.0): the import shows net, VAT and gross; the bank lines are kept in a shared store with Ignore; notes are requested in Invoices by the other modules; posting a claim leads to its note; a claim opens in its own window", () => {
+    const inv = rd("Invoices.tsx"), fin = rd("Finance.tsx"), cl = rd("Claims.tsx"), app = rd("App.tsx");
+    ok(/data-import-amounts="1">net /.test(inv), "IMP-1"); ok(/useLocalStoredState<any>\("bankLines"/.test(app) && /const keep = typeof setBankLines === "function";/.test(fin) && />Ignore<\/button>/.test(fin), "BANK-1");
+    ok(/takeNoteRequest\(\)/.test(inv) && /requestNoteInInvoices\(note\)/.test(cl) && /requestNoteInInvoices\(\{/.test(rd("SalesOrders.tsx")) && /requestNoteInInvoices\(\{/.test(rd("Inventory.tsx")), "CN-2");
+    ok(/if \(!hasNote\) await finaliseNote\(c\);/.test(cl), "CLM-1"); ok(/data-claim-window="1"/.test(cl) && !/gridTemplateColumns: selected \? "1\.15fr 1fr"/.test(cl), "CLM-2");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

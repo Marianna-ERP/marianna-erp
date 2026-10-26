@@ -66,6 +66,13 @@ if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the 
   fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && f !== "locations.ts").forEach(f => { const c = fs.readFileSync(path.join(src, f), "utf8"); if (/\bLOCATIONS_ALL_BUILTIN\b|\bensureUsedBuiltinsAreOrdinary\b|\bregisterCounterpartyLocations\b|\bwarehouseAddressLocations\b/.test(c)) off.push(`${f} reads a legacy place mechanism`); });
   if (off.length) { failed++; console.log(`  ✗ no place in the code: ${off.join("; ")}`); } else console.log("  ✓ no place in the code: the places module names no place and keeps no list of its own");
 }
+// v7.34.0 (CN-2, P-13): A NOTE IS CREATED ONLY IN INVOICES — no other module adds a credit / debit note to the store; they request one
+// (noteRequest.requestNoteInInvoices). The PO settlement's expected documents are the one rule-made exception (they appear in Invoices).
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["Invoices.tsx", "PurchaseOrders.tsx", "poSettlement.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\/\/|\*)/.test(l)) return; if (/[sS]etFinanceNotes\(\(prev: any\[\]\) => \[/.test(l)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ a note is created only in Invoices: ${off.slice(0, 4).join(", ")}`); } else console.log("  ✓ a note is created only in Invoices: the other modules request one");
+}
 // v7.28.11 (Batch L · FZ-03, P-13): A COMPANY'S COUNTRY IS ITS CODE — no file reads a company record's country name except the
 // helpers (companyCountryName / companyCountryIso) and the company tidy-up; the copies on documents keep the printed name
 {

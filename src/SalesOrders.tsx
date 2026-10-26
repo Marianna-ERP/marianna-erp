@@ -28,6 +28,7 @@ import { companyProfile } from "./useLocalStoredState";
 import { OrderForm } from "./SalesOrderForm";
 import { InvoiceCreationModal, OrderDetail } from "./SalesOrderDetail";
 import { SODoc } from "./SalesOrderDocument";
+import { requestNoteInInvoices } from "./noteRequest";   // v7.34.0 (CN-2)
 import { invoicesForCounterpartyDoc, shipmentsForSO } from "./documents.domain";   // v7.28.5 (Batch L)
 import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { peopleOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 (Batch L)
@@ -1046,13 +1047,13 @@ function SalesOrdersScreen({ archive = null,
       const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => String(lk.number) === String(soDoc.number)));
       const cur = cc.cur || inv?.currency || soDoc.currency || "PLN";
       const fx = defaultFxRate(cur);
-      extSetFinanceNotes((prev: any[]) => [...(prev || []), {
-        id: nextId(), noteType: "CREDIT", direction: "outgoing",
-        invoiceId: inv?.id ?? null, relatedRef: soDoc.number, partyName: inv?.counterparty?.name || soDoc.client?.name || "Client",
+      requestNoteInInvoices({   // v7.34.0 (CN-2): created in Invoices, on its own form
+        noteType: "CREDIT", direction: "outgoing",
+        invoiceId: inv?.id ?? null, relatedRef: soDoc.number, partyId: inv?.counterparty?.id ?? soDoc.client?.id ?? null, partyName: inv?.counterparty?.name || soDoc.client?.name || "",
         category: "Quality", amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
         status: "Draft", reason: `Client quality claim — ${qty ? qty + " kg " : ""}on ${lot.number} (${soDoc.number})`,
         date: today, source: mv.source,
-      }]);
+      });
     }
     recordAudit({ module: "Sales orders", docType: "SO", docNumber: soDoc.number, action: "claim", summary: `Client claim recorded on ${lot.number} — ${amt.toLocaleString("pl-PL")} ${cc.cur || "PLN"}; credit note drafted` });
     setClientClaimFor(null);

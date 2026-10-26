@@ -178,7 +178,7 @@ export const DATA_KEYS = [
   // v6.99.0: closed periods (FN-1) and FX settings (FN-7). settledRefs is DEPRECATED (FN-8) — kept importable only.
   "closedPeriods", "fxSettings",
   // v6.99.3: company settings, numbering prefixes.
-  "company", "numbering", "defectTolerances", "reportRegister", "archivedSeasons", "seasonSettings", "planningSheets", "planningSheetLog",
+  "company", "numbering", "defectTolerances", "reportRegister", "archivedSeasons", "seasonSettings", "planningSheets", "planningSheetLog", "bankLines",
   "auditLog", "auditArchive"];   // v7.17.4 (A-RV-12): the audit entries past the cap
 
 /** The "Export all data" file. v6.99.70 (A-BK-2): the automatic folder backup writes exactly this (pretty); the local

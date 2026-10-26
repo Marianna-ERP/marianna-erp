@@ -21,7 +21,7 @@ import {
   buildFakturowniaPayload, noteSignedPLN, pushBlockers } from "./invoicing";
 import * as XLSX from "xlsx";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice , fetchInvoicePdf } from "./fakturownia";
-import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister , vatFixFor , salesRowFromMapped, isRegisteredSale, soCandidatesForSale, buildIssuedSalesInvoice } from "./fakturowniaImport.domain";
+import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister , vatFixFor , salesRowFromMapped, isRegisteredSale, soCandidatesForSale, buildIssuedSalesInvoice , noteFromCorrection } from "./fakturowniaImport.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
@@ -33,6 +33,7 @@ import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6): where a 
 import { exportNotesForSale, isFromPoland } from "./invoiceNotes.domain";   // v7.26.4 (A-INV-4)
 import { destinationDisplay } from "./SalesOrders";
 import { locationById } from "./locations";
+import { takeNoteRequest } from "./noteRequest";   // v7.34.0 (CN-2)
 import { pdfFolderSupported, pdfFolder, choosePdfFolder, pdfFileName, savePdfToFolder } from "./invoicePdfFolder";   // v7.26.6 (A-INV-2)
 
 const COMPANY: any = companyProfile();   // v6.99.67 (A-AUD-1): the company block comes from Settings (defaults = the former literal)
@@ -214,8 +215,10 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     const fixes = all.filter(r => r.vatFix).map(r => ({ ...r.vatFix, number: r.number }));   // v7.26.0 (A-INV-1)
     const inc = all.filter(r => !r.vatFix);
     const regs: any[] = []; const flips: any[] = []; const opCosts: any[] = [];   /* v7.22.0 (A-RV-40): warehouse invoices go to the register (v7.21.4) — no list of their own */
+    const notesIn: any[] = [];   // v7.34.0 (CN-1)
     inc.forEach(r => {
       const contact = contactForSeller(r, contacts, { byName: false });   // v7.25.1 (FZ-17): linked by tax number only — the rest go to the review list
+      if ((r as any).isCorrection) { notesIn.push(noteFromCorrection(r, "incoming", invoices, contact, nextId)); return; }   // v7.34.0 (CN-1): a correction is a note
       if (r.tag === "WAREHOUSE") {
         const wh = warehouses.find((w: any) => String(w.id) === String(r.warehouseId)) || contact;
         // v7.21.4 (A-ST-10): a warehouse invoice goes into the register like any cost invoice — no separate store
@@ -243,7 +246,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     });
     // v7.33.1 (INV-PDF): the adopted ones — their Fakturownia id, NIP and address onto the registered invoice
     const adopts = rows.filter((r: any) => r.include && r.adopt != null).map((r: any) => ({ invoiceId: r.adopt, fktId: r.fktId, taxNo: r.sellerTaxNo || "", addr: r.sellerAddr || null }));
-    onPost({ regs, flips, opCosts, fixes, adopts });
+    onPost({ regs, flips, opCosts, fixes, adopts, notesIn });
   }
 
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12 };
@@ -293,7 +296,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                   <div style={{ fontSize: 11, color: "#64748B" }}>{formatDMY(r.date)}</div>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.adopt != null && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#15803D" }}>already in the register — gets its Fakturownia link</span>}{r.vatFix && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#0E7490" }}>corrects the VAT of the invoice already registered ({r.vatFix.confirmZero ? "0 % confirmed" : `${Number(r.vatFix.vatRate).toFixed(2)} %`})</span>}{(!r.net || !r.gross) && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B45309" }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount — check it there before posting</span>}{r.dup && !r.vatFix && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
                   <div style={{ fontSize: 11, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.number || "—"}</div>
-                  <div style={{ fontSize: 12 }}>{(r.net || r.gross).toLocaleString("pl-PL")} {r.currency}</div>
+                  <div style={{ fontSize: 12 }} data-import-amounts="1">net {(r.net || 0).toLocaleString("pl-PL")} · VAT {Math.round(((r.gross || 0) - (r.net || 0)) * 100 / 100).toLocaleString("pl-PL")} · <b>gross {(r.gross || r.net || 0).toLocaleString("pl-PL")} {r.currency}</b>{r.currency !== "PLN" ? <span style={{ color: "#64748B" }}> ({Math.round((r.gross || r.net || 0) * (r.fxRate || 1) * 100 / 100).toLocaleString("pl-PL")} PLN)</span> : null}</div>   {/* v7.34.0 (IMP-1) */}
                   <select style={inp} value={r.tag} onChange={(e: any) => upd(r.key, { tag: e.target.value })}>
                     {IMPORT_TAGS.map((t: string) => <option key={t} value={t}>{TAG_LABELS[t]}</option>)}
                   </select>
@@ -570,7 +573,12 @@ export default function Invoices(props: any) {
     if (saved.length) { setInvoices((prev: any[]) => (prev || []).map((i: any) => { const s = saved.find(x => x.id === i.id); return s ? { ...i, pdfSavedAs: s.name, pdfSavedAt: localTodayISO() } : i; })); recordAudit({ module: "Invoices", docType: "PDF", docNumber: `${saved.length} invoice(s)`, action: "updated", summary: `Invoice PDFs saved in the folder: ${saved.map(s => s.name).slice(0, 10).join(", ")}${saved.length > 10 ? ` +${saved.length - 10}` : ""} (A-INV-2)` }); }
     await invAlert({ tone: failed.length ? "warn" : "info", title: "Invoice PDFs", message: `${saved.length} PDF(s) saved in the folder.${noLink ? `\n\n${noLink} invoice(s) have no Fakturownia link yet — typed by hand or made from an operational cost. The next "Import from Fakturownia" links the Polish ones; a foreign one gets its PDF dropped on its page.` : ""}${todo.length === 40 ? " Press again for the next ones." : ""}${failed.length ? `\n\nNot saved:\n${failed.slice(0, 8).join("\n")}` : ""}` });
   }
-  async function handleImportPost({ regs, flips, opCosts, fixes = [], adopts = [] }: any) {
+  async function handleImportPost({ regs, flips, opCosts, fixes = [], adopts = [], notesIn = [] }: any) {
+  if (notesIn.length && typeof setNotes === "function") {   // v7.34.0 (CN-1): correcting invoices as notes, each once
+    setNotes((prev: any[]) => { const have = new Set((prev || []).map((n: any) => String(n.source || ""))); return [...(prev || []), ...notesIn.filter((n: any) => !have.has(String(n.source)))]; });
+    setInvoices((prev: any[]) => (prev || []).map((i: any) => { const mine = notesIn.filter((n: any) => n.invoiceId != null && String(n.invoiceId) === String(i?.id)); return mine.length ? { ...i, creditNoteIds: Array.from(new Set([...(i.creditNoteIds || []), ...mine.map((n: any) => n.id)])) } : i; }));
+    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "created", summary: `${notesIn.length} correcting invoice(s) recorded as notes — CN-1` });
+  }
   if (adopts.length) {   // v7.33.1 (INV-PDF): a registered invoice is given its Fakturownia id (its PDF can be saved), its NIP and address
     const byId = new Map(adopts.map((a: any) => [String(a.invoiceId), a]));
     setInvoices((prev: any[]) => (prev || []).map((i: any) => { const a: any = byId.get(String(i?.id)); if (!a) return i;
@@ -650,6 +658,8 @@ export default function Invoices(props: any) {
     if (isLocked(inv)) { await invAlert({ tone: "warn", title: "Invoice locked", message: "This invoice has been sent / exported and is locked. To change it, issue a credit or debit note." }); return; }
     setForm({ ...inv }); setView("form");
   }
+  // v7.34.0 (CN-2): a note requested by another module (a claim, a sale, a lot) opens this module's own note form, prefilled
+  useEffect(() => { const req = takeNoteRequest(); if (!req) return; setNoteForm({ id: undefined, noteType: "CREDIT", direction: "outgoing", invoiceId: null, relatedRef: "", partyId: null, partyName: "", category: "Quality complaint", amount: "", currency: "PLN", fxRate: 1, status: "Draft", reason: "", date: localTodayISO(), ...req }); setView("note"); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   // v7.33.1 (INV-PDF): "record a foreign one as a cost invoice" from an operational cost — the form opens prefilled with what was typed there
   useEffect(() => { let req: any = null; try { const r = window.sessionStorage.getItem("marianna:newCostInvoice"); window.sessionStorage.removeItem("marianna:newCostInvoice"); req = r ? JSON.parse(r) : null; } catch { req = null; }
     if (!req) return; newInvoice("COST");

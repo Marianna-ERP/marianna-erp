@@ -21,6 +21,7 @@ import { useUnsavedGuard } from "./unsaved";
 import { r0 } from "./format";
 import { LotDetail } from "./InventoryLot";
 import { MovementModal } from "./InventoryWindows";
+import { requestNoteInInvoices } from "./noteRequest";   // v7.34.0 (CN-2)
 import { unitLoadedAt, unitUnloadedAt } from "./shipmentModel.domain";   // v7.28.0 (Batch L)
 import { activeParties , rolesOf } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
@@ -1176,13 +1177,13 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
       const cur = claimCurrency || inv?.currency || so?.currency || "PLN";
       const fx = defaultFxRate(cur);
       const amt = parseNum(claimValue);
-      extSetFinanceNotes((prev: any[]) => [...(prev || []), {
-        id: nextId(), noteType: "CREDIT", direction: "outgoing",
+      requestNoteInInvoices({   // v7.34.0 (CN-2): created in Invoices, on its own form
+        noteType: "CREDIT", direction: "outgoing",
         invoiceId: inv?.id ?? null, relatedRef: soRef || selected.number, partyId: inv?.counterparty?.id ?? so?.client?.id ?? null, partyName: party,   // v7.27.15 (A-RV-26): by id
         category: "Quality", amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
         status: "Draft", reason: `Quality claim — ${qtyKg} kg defective on ${selected.number}${soRef ? ` (${soRef})` : ""}`,
         date: date || today, source: `claim:lot:${selected.id}:${Date.now()}`,
-      }]);
+      });
     }
     setShowMovement(false);
     setEditingMovement(null);

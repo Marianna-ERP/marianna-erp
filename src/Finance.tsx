@@ -412,20 +412,27 @@ function AdvancesPanel({ advancePayments = [], setAdvancePayments = null, invoic
 // auto-posted (the Confirm click is the act), tolerance ±0.05 in any currency.
 // A confirmed line becomes a standard payment event with source bank:{lineId} —
 // re-importing the same statement can never double-post.
-function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null }: any) {
-  const [parsed, setParsed] = React.useState<any>(null);
-  const [done, setDone] = React.useState<Record<string, string>>({});
+function BankImportPanel({ financeNotes = [], invoices = [], setInvoices = null, nextId, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, bankLines = null, setBankLines = null }: any) {
+  // v7.34.0 (BANK-1, owner 26 Oct: "the import is deleted when you change screen"): the lines read are KEPT in a shared store with their
+  // state — matched (to what), ignored (a fee, a transfer between own accounts) — until matched; the same file read again adds nothing
+  const store: any = bankLines && typeof bankLines === "object" && !Array.isArray(bankLines) ? bankLines : { lines: [], done: {} };
+  const keep = typeof setBankLines === "function";
+  const [localParsed, setLocalParsed] = React.useState<any>(null); const [localDone, setLocalDone] = React.useState<Record<string, string>>({});
+  const parsed: any = React.useMemo(() => keep ? (store.lines && store.lines.length ? { lines: store.lines, account: store.account || "" } : null) : localParsed, [keep, store.lines, store.account, localParsed]);
+  const done: Record<string, string> = keep ? (store.done || {}) : localDone;
+  const setParsed = (p: any) => { if (!keep) { setLocalParsed(p); return; } setBankLines((prev: any) => { const cur = prev && typeof prev === "object" && !Array.isArray(prev) ? prev : { lines: [], done: {} }; const have = new Set((cur.lines || []).map((l: any) => String(l.id))); return { ...cur, account: p?.account || cur.account || "", lines: [...(cur.lines || []), ...((p?.lines || []).filter((l: any) => !have.has(String(l.id))))] }; }); };
+  const setDone = (u: any) => { if (!keep) { setLocalDone(u); return; } setBankLines((prev: any) => { const cur = prev && typeof prev === "object" && !Array.isArray(prev) ? prev : { lines: [], done: {} }; const d = typeof u === "function" ? u(cur.done || {}) : u; return { ...cur, done: d }; }); };
   const [pick, setPick] = React.useState<Record<string, any>>({});
   const [split, setSplit] = React.useState<Record<string, Record<string, string>>>({});   // v7.26.5 (A-INV-5): line → invoice → amount typed
   const fileRef = React.useRef<any>(null);
-  const suggestions = React.useMemo(() => parsed ? matchBankLines(parsed.lines, invoices) : [], [parsed, invoices]);
+  const suggestions = React.useMemo(() => parsed ? matchBankLines(parsed.lines, invoices, { notes: financeNotes }) : [], [parsed, invoices, financeNotes]);   // v7.34.0 (CN-1)
 
   function onFile(f: any) {
     if (!f) return;
     const reader = new FileReader();
     reader.onload = () => {
       const p = parseBankCSV(String(reader.result || ""));
-      setParsed(p); setDone({}); setPick({});
+      setParsed(p); if (!keep) setDone({}); setPick({});   // v7.34.0 (BANK-1): kept lines and their states stay
       // v6.68.0 (F-4): every statement registers/refreshes its account.
       if (typeof setBankAccounts === "function") setBankAccounts((prev: any[]) => upsertBankAccountFromStatement(prev || [], p, { nextId, todayISO: () => localTodayISO() }));
     };
@@ -439,7 +446,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
     }
     // v7.26.5 (A-INV-5, owner 17 Oct): one bank line over several invoices — each gets its share as a payment from that line
     function openSplit(s: any) {
-    const sp = splitBankLine(s.line, invoices); const amounts: Record<string, string> = {};
+    const sp = splitBankLine(s.line, invoices, { notes: financeNotes }); const amounts: Record<string, string> = {};
     sp.open.forEach((i: any) => { const a = sp.allocations.find((x: any) => String(x.invoiceId) === String(i.id)); amounts[String(i.id)] = a ? String(a.amount) : ""; });
     setSplit(m => ({ ...m, [s.line.id]: amounts }));
     }
@@ -499,6 +506,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
                       ))}
                     </select>
                     <button disabled={chosen == null || chosen === ""} onClick={() => confirmLine(s, chosen)} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: chosen != null && chosen !== "" ? "#16A34A" : "#CBD5E1", color: "#fff", fontSize: 12, fontWeight: 800, cursor: chosen != null && chosen !== "" ? "pointer" : "not-allowed" }}>{s.line.amount > 0 ? "Confirm receipt" : "Confirm payment"}</button>
+                    <button type="button" onClick={() => setDone((d: any) => ({ ...d, [s.line.id]: "ignored" }))} title="a bank fee, a transfer between our own accounts — kept, not matched" style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Ignore</button>   {/* v7.34.0 (BANK-1) */}
                     <button onClick={() => split[s.line.id] ? setSplit(m => { const n = { ...m }; delete n[s.line.id]; return n; }) : openSplit(s)} title="v7.26.5 (A-INV-5): one transfer paying several invoices" style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{split[s.line.id] ? "Close split" : "Split over several invoices"}</button>
                     {typeof setAdvancePayments === "function" && (advanceSources(advancePayments).has(`bank:${s.line.id}`)
                       ? <span style={{ fontSize: 11, fontWeight: 800, color: "#7C3AED" }}>✓ advance</span>
@@ -528,7 +536,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
   );
 }
 
-function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], operationalCosts = [], advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
+function LedgerView({ bankLines = null, setBankLines = null, orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], operationalCosts = [], advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
   const { alert: lvAlert, dialogNode: lvNode } = useConfirm(); // P2-6
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
@@ -581,7 +589,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
           <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ color: "#94A3B8", textAlign: "left" }}><th>Counterparty</th><th>Side</th><th style={{ textAlign: "right" }}>Paid</th><th style={{ textAlign: "right" }}>Invoice rate (avg)</th><th style={{ textAlign: "right" }}>Payment rate (avg)</th><th style={{ textAlign: "right" }}>Gain / loss PLN</th></tr></thead>
           <tbody>{rows.map((r, i) => <tr key={i} style={{ borderTop: "1px solid #F1F5F9" }}><td>{r.counterparty}</td><td>{r.side === "receivable" ? "we receive" : "we pay"}</td><td style={{ textAlign: "right" }}>{fp(r.paid)} {r.currency} <span style={{ color: "#94A3B8" }}>({r.payments})</span></td><td style={{ textAlign: "right" }}>{f4(r.avgInvoiceRate)}</td><td style={{ textAlign: "right" }}>{f4(r.avgPaymentRate)}</td><td style={{ textAlign: "right", fontWeight: 700, color: r.gainPLN >= 0 ? "#065F46" : "#B91C1C" }}>{fp(r.gainPLN)}</td></tr>)}</tbody></table>
         </div>; })()}
-      <BankImportPanel invoices={invoices} setInvoices={setInvoices} nextId={nextId} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
+      <BankImportPanel financeNotes={financeNotes} bankLines={bankLines} setBankLines={setBankLines} invoices={invoices} setInvoices={setInvoices} nextId={nextId} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`ledger_${xlsStamp()}`, items, [{ key: "direction", label: "Direction" }, { key: "kind", label: "Kind" }, { key: "ref", label: "Reference" }, { key: "counterparty", label: "Counterparty" }, { key: "date", label: "Date" }, { key: "dueDate", label: "Due" }, { key: "currency", label: "Currency" }, { key: "amount", label: "Amount" }, { key: "amountPLN", label: "Open PLN" }, { key: "status", label: "Status" }, { key: "daysOverdue", label: "Days overdue" }], "Ledger")} title="v6.99.0: exports the open items as listed">Export file (Excel)</SmallButton></div>
       {canOpenFinance(users, userName, "clients") && <ClientRiskCard invoices={invoices} orders={orders} contacts={contacts} />}
       <StatementCard invoices={invoices} financeNotes={financeNotes} />
@@ -871,6 +879,7 @@ function TypedCompaniesPanel({ contacts = [], operationalCosts = [], setOperatio
 export default function Finance({
 setContacts = null,   /* v7.27.15 (A-AU-8): a payee not yet in the directory is added from the cost form */
 setFinanceNotes = null,   /* v7.27.15 (A-RV-26): the notes' typed parties are linked from the linking panel */
+bankLines = null, setBankLines = null,   /* v7.34.0 (BANK-1): the bank lines kept until matched */
 packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from its packaging */
   focusResultOf = null,
   claims = [],
@@ -921,7 +930,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
   userName?: string;
   closedPeriods?: any[];
   setClosedPeriods?: any;
-  setFinanceNotes?: any; setContacts?: any; poSettlements?: any[];
+  setFinanceNotes?: any; setContacts?: any; poSettlements?: any[]; bankLines?: any; setBankLines?: any;
 }) {
   const [plOpenSO, setPlOpenSO] = useState<any>(null);   // v7.1.3 (A-PL-1): which sale's breakdown is open in the P/L list
   useEffect(() => { if (focusResultOf?.number) { const o = (orders || []).find((x: any) => String(x.number) === String(focusResultOf.number)); if (o) { setTab("pl"); setPlOpenSO(o.id); } } }, [focusResultOf?.n]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -1061,7 +1070,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
       <div>
 
         {tab === "ledger" ? (
-          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} users={users} userName={userName} contacts={contacts} />
+          <LedgerView bankLines={bankLines} setBankLines={setBankLines} orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} users={users} userName={userName} contacts={contacts} />
         ) : tab === "warehouse" ? (
           <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} invoices={invoices} setInvoices={setInvoices} packagingTypes={packagingTypes} />
         ) : tab === "pl" ? (

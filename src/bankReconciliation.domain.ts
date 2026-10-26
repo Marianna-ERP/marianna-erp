@@ -169,11 +169,18 @@ export function appliedBankSources(invoices: any[]): Set<string> {
 
 /** Receivables-first matcher (owner ruling). Credit lines only; every match is a
  *  SUGGESTION — posting always takes the user's one-click confirm. */
-export function matchBankLines(lines: BankLine[], invoices: any[], opts?: { tolerance?: number; ownNames?: string[] }): MatchSuggestion[] {
+/** v7.34.0 (CN-1, owner 26 Oct): an invoice's OPEN amount — its gross, less its credit notes, plus its debit notes, less what is paid — so a
+ *  payment of "invoice − credit note" matches. Notes count when they are not cancelled. */
+export function openAmountWithNotes(i: any, notes: any[] = []): number {
+  const mine = (notes || []).filter((n: any) => n && n.invoiceId != null && String(n.invoiceId) === String(i?.id) && !/Cancelled/i.test(String(n.status || "")));
+  const adj = mine.reduce((s: number, n: any) => s + (String(n.noteType).toUpperCase() === "DEBIT" ? 1 : -1) * (Number(n.amount) || 0), 0);
+  return Math.round(((Number(i?.grossAmount) || 0) + adj - (Number(i?.paidAmount) || 0)) * 100) / 100;
+}
+export function matchBankLines(lines: BankLine[], invoices: any[], opts?: { tolerance?: number; ownNames?: string[]; notes?: any[] }): MatchSuggestion[] {
   const tol = opts?.tolerance ?? 0.05;   // owner ruling: ±0.05 in ANY currency
   const ownNames = (opts?.ownNames || ["MARIANNA", "HAZEM OSMAN"]).map(squash);
   const applied = appliedBankSources(invoices);
-  const outstandingOf = (i: any) => Math.round(((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)) * 100) / 100;
+  const outstandingOf = (i: any) => openAmountWithNotes(i, opts?.notes || []);   // v7.34.0 (CN-1): net of the invoice's notes
   // v6.87.0 (owner ruling, 5 Sept): BOTH directions. A credit line settles a
   // RECEIVABLE (our sales invoice); a debit line settles a PAYABLE (a supplier's,
   // carrier's or forwarder's cost invoice). Pro-formas never match. Same ranking.
@@ -244,9 +251,9 @@ export function bankPaymentEvent(line: BankLine): { date: string; amount: number
 // open amounts add up to it (the fewest, oldest first), else the payer's oldest open invoices in turn. What is left stays on the line
 // (recorded as an advance, if wanted). Each invoice gets its share as a payment from that bank line — the line counts as recorded.
 const r2b = (v: number) => Math.round(v * 100) / 100;
-export function splitBankLine(line: BankLine, invoices: any[], opts?: { tolerance?: number }): { allocations: Array<{ invoiceId: any; number: string; amount: number; outstanding: number }>; remainder: number; how: "title" | "exact" | "oldest" | "none"; open: any[] } {
+export function splitBankLine(line: BankLine, invoices: any[], opts?: { tolerance?: number; notes?: any[] }): { allocations: Array<{ invoiceId: any; number: string; amount: number; outstanding: number }>; remainder: number; how: "title" | "exact" | "oldest" | "none"; open: any[] } {
   const tol = opts?.tolerance ?? 0.05; const amt = r2b(Math.abs(Number(line?.amount) || 0)); const kind = Number(line?.amount) > 0 ? "SALES" : "COST";
-  const outstandingOf = (i: any) => r2b((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0));
+  const outstandingOf = (i: any) => openAmountWithNotes(i, opts?.notes || []);   // v7.34.0 (CN-1): net of the invoice's notes
   const open = (invoices || []).filter((i: any) => i && i.kind === kind && !i.isProforma && i.paymentStatus !== "Cancelled" && i.paymentStatus !== "Draft" && outstandingOf(i) > 0.005 && String(i.currency || "PLN").toUpperCase() === String(line?.currency || "PLN").toUpperCase())
     .sort((a: any, b: any) => String(a.issueDate || "").localeCompare(String(b.issueDate || "")));
   const fill = (list: any[]) => { let left = amt; const al: any[] = []; list.forEach((i: any) => { if (left <= 0.005) return; const o = outstandingOf(i); const a = r2b(Math.min(o, left)); al.push({ invoiceId: i.id, number: String(i.number || ""), amount: a, outstanding: o }); left = r2b(left - a); }); return { al, left }; };

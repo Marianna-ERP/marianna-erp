@@ -1,5 +1,5 @@
 {
- "version": "7.33.2",
+ "version": "7.34.0",
  "files": [
   ".npmrc",
   "HOW_TO_DEPLOY.md",
@@ -115,6 +115,7 @@
   "src/marginCalculations.ts",
   "src/masterData.domain.ts",
   "src/moduleGuards.domain.ts",
+  "src/noteRequest.ts",
   "src/numbering.ts",
   "src/numbers.ts",
   "src/operationalCosts.ts",

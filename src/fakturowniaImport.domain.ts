@@ -72,6 +72,7 @@ export function stagedRowFromMapped(m: any, idx: number, myTaxNo?: string, myNam
   const cur = String(m.currency || "PLN").toUpperCase();
   const party = counterpartySideOfMapped(m, myTaxNo, myName);
   return {
+    ...(String(m.kind || "").toLowerCase() === "correction" ? { isCorrection: true, correctedFktId: m.correctedFktId ?? null } : {}),   // v7.34.0 (CN-1)
     key: `api:${m.fktId ?? idx}`,
     number: String(m.number || ""),
     seller: party.name,
@@ -439,4 +440,16 @@ export function buildIssuedSalesInvoice(row: any, soNumber: string, contact: any
     paymentStatus: "Issued", paidAmount: 0, notes: `Issued in Fakturownia${row.description ? ` — ${row.description}` : ""}`,
     attachment: null, allocation: null, fakturownia: { exported: true, fktId: row.fktId ?? null }, source: "fakturownia-issued", createdAt: localTodayISO(),
   };
+}
+
+/** v7.34.0 (CN-1, owner 26 Oct): A CORRECTING INVOICE FROM FAKTUROWNIA IS A NOTE — on the invoice it corrects (by its Fakturownia id), with
+ *  its own number, issued: a correction that lowers the amount is a CREDIT note, one that raises it a DEBIT note; the party by id. */
+export function noteFromCorrection(row: any, direction: "incoming" | "outgoing", invoices: any[], contact: any | null, nextId: () => any): any {
+  const gross = Number(row.gross || row.net || 0); const fx = Number(row.fxRate) > 0 ? Number(row.fxRate) : 1;
+  const corrected = (invoices || []).find((i: any) => i && row.correctedFktId != null && String((i.fakturownia || {}).fktId ?? (i.fakturownia || {}).ref) === String(row.correctedFktId)) || null;
+  return { id: nextId(), noteType: gross < 0 ? "CREDIT" : "DEBIT", direction, number: String(row.number || ""), date: row.date, invoiceId: corrected ? corrected.id : null,
+    relatedRef: corrected ? String(corrected.number || "") : "", partyId: contact ? contact.id : (corrected && corrected.counterparty ? corrected.counterparty.id ?? null : null),
+    partyName: contact ? contact.name : String(row.seller || row.buyer || ""), category: "Correcting invoice", amount: Math.abs(gross), currency: String(row.currency || "PLN"), fxRate: fx,
+    amountPLN: Math.round(Math.abs(gross) * fx * 100) / 100, status: "Issued", reason: `Correcting invoice ${String(row.number || "")} from Fakturownia`, source: `fakturownia-correction:${row.fktId ?? row.number}`,
+    fakturownia: { fktId: row.fktId ?? null } };
 }

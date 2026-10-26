@@ -121,6 +121,7 @@ export async function createInvoice(_c: FakturowniaConfig, body: any): Promise<F
 
 // ── Tolerant mapping of a Fakturownia invoice JSON to the shapes the ERP uses ─
 export interface MappedInvoice {
+  correctedFktId?: any;   // v7.34.0 (CN-1)
   buyerAddr?: { street?: string; postcode?: string; city?: string; country?: string };    // v6.99.41 (ADDR-4)
   sellerAddr?: { street?: string; postcode?: string; city?: string; country?: string };
   fktId: any;
@@ -159,6 +160,7 @@ export function mapInvoice(raw: any): MappedInvoice {
     fktId: raw?.id,
     number: str(raw?.number),
     kind: str(raw?.kind || "vat"),
+    correctedFktId: raw?.invoice_id ?? raw?.from_invoice_id ?? null,   // v7.34.0 (CN-1): a correction names the invoice it corrects
     income: raw?.income === undefined ? true : (String(raw.income) === "1" || raw.income === true || raw.income === 1),
     issueDate: str(raw?.issue_date).slice(0, 10),
     sellDate: str(raw?.sell_date).slice(0, 10),

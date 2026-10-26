@@ -238,6 +238,7 @@ export default function App() {
   }, []);
   useEffect(() => { applyFxSettings(fxSettings || {}); }, [fxSettings]);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
+  const [bankLines, setBankLines] = useLocalStoredState<any>("bankLines", { lines: [], done: {} });   // v7.34.0 (BANK-1)
   // v7.13.1 (A-AU-11) + v7.13.3 (A-AU-2), owner 9 Oct: a foreign-currency invoice carries the NBP rate of the last working day BEFORE
   // its issue date, and every payment the rate of the last working day before the day the money was received. Whatever is not yet
   // rated from NBP is filled when NBP is reachable (fxTableDate marks a rated invoice / payment) — the invoices imported before
@@ -434,7 +435,7 @@ export default function App() {
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
-        return <Finance packagingTypes={packagingTypes} focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
+        return <Finance packagingTypes={packagingTypes} focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} bankLines={bankLines} setBankLines={setBankLines} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
         return <Contacts onLinkSaleDestination={linkSaleDestination} contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims}  users={users} userName={who}  lots={lots} setPOs={setPOs} setOrders={setOrders} setLots={setLots} setShipments={setShipments} />;
       case "pos":
