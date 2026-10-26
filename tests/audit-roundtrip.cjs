@@ -4959,6 +4959,21 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.34.1 — the App's windows in the running app; invoices imported twice ══
+(function v73401(){
+  console.log("\n══ v7.34.1 — confirm windows; imported twice ══");
+  const fsx = require("fs"), px = require("path"); const IV = B("invoicing.js");
+  t("v7.34.1: the App draws its confirm windows and the idle sign-out in the running app (not only on the sign-in screen); an adopted invoice is never posted again; two register invoices with one Fakturownia id lose the later unpaid copy and its mirrored cost line", () => {
+    const app = fsx.readFileSync(px.join(__dirname, "../src/App.tsx"), "utf8"); const L = app.split("\n"); const main = L.findIndex(l => l.startsWith('    <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily:'));
+    ok(main > 0 && L.slice(main, main + 10).some(l => l.includes("{dialogNode}<IdleSignOut active={!!readSession()} />")), "the confirm windows are not drawn in the running app");
+    ok(/if \(\(r as any\)\.adopt != null\) return;/.test(fsx.readFileSync(px.join(__dirname, "../src/Invoices.tsx"), "utf8")), "an adopted invoice is still posted");
+    const inv = [{ id: 1, kind: "COST", number: "9647/26", source: "migrated:opCost:5", fakturownia: { fktId: 77 } }, { id: 2, kind: "COST", number: "9647/26", source: "fakturownia-import:77", fakturownia: { fktId: 77 } }, { id: 3, kind: "COST", number: "X", source: "fakturownia-import:78", fakturownia: { fktId: 78 } }];
+    const ops = [{ id: 5, invoiceNo: "9647/26", source: "fakturownia:77" }, { id: 6, invoiceNo: "9647/26", source: "invoice:9647/26" }];
+    const r = IV.importedTwice(inv, ops); eq(r.invoices.join(), "2"); eq(r.opCosts.join(), "6");
+    eq(IV.importedTwice([{ ...inv[0] }, { ...inv[1], paidAmount: 10 }], ops).invoices.length, 0, "a paid copy was removed");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

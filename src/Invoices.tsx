@@ -217,6 +217,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     const regs: any[] = []; const flips: any[] = []; const opCosts: any[] = [];   /* v7.22.0 (A-RV-40): warehouse invoices go to the register (v7.21.4) — no list of their own */
     const notesIn: any[] = [];   // v7.34.0 (CN-1)
     inc.forEach(r => {
+      if ((r as any).adopt != null) return;   // v7.34.1: an adopted invoice is linked (below), never posted a second time
       const contact = contactForSeller(r, contacts, { byName: false });   // v7.25.1 (FZ-17): linked by tax number only — the rest go to the review list
       if ((r as any).isCorrection) { notesIn.push(noteFromCorrection(r, "incoming", invoices, contact, nextId)); return; }   // v7.34.0 (CN-1): a correction is a note
       if (r.tag === "WAREHOUSE") {

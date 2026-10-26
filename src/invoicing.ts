@@ -399,3 +399,20 @@ export function pushBlockers(inv: Invoice): string[] {
   }
   return out;
 }
+
+/** v7.34.1 (owner 26 Oct: "how can we have duplicated invoices if they are downloaded from Fakturownia?"): v7.33.1 adopted a registered
+ *  invoice AND posted a new copy of it in the same import. Two register invoices with the same Fakturownia id are one invoice imported twice:
+ *  the original (the earlier one) is kept; the later copy goes when nothing was paid on it, and so does its mirrored cost line when the
+ *  original has its own. */
+export function importedTwice(invoices: any[], opCosts: any[] = []): { invoices: any[]; opCosts: any[] } {
+  const by = new Map<string, any[]>();
+  (invoices || []).forEach((i: any) => { const id = i && i.fakturownia && (i.fakturownia.fktId ?? i.fakturownia.ref); if (id == null || String(i.paymentStatus) === "Cancelled") return; const k = `${i.kind}:${id}`; by.set(k, [...(by.get(k) || []), i]); });
+  const goneInv: any[] = []; const goneOp: any[] = [];
+  by.forEach(list => { if (list.length < 2) return;
+    const sorted = [...list].sort((a: any, b: any) => (String(a.source || "").startsWith("fakturownia") ? 1 : 0) - (String(b.source || "").startsWith("fakturownia") ? 1 : 0) || String(a.id).localeCompare(String(b.id)));
+    sorted.slice(1).forEach((dup: any) => { if ((Number(dup.paidAmount) || 0) > 0 || (dup.payments || []).length) return; goneInv.push(dup.id);
+      const mirrors = (opCosts || []).filter((c: any) => c && String(c.source || "") === `invoice:${dup.number}`);
+      const own = (opCosts || []).some((c: any) => c && String(c.invoiceNo || "") === String(dup.number || "") && !String(c.source || "").startsWith("invoice:"));
+      if (own) mirrors.forEach((c: any) => goneOp.push(c.id)); }); });
+  return { invoices: goneInv, opCosts: goneOp };
+}

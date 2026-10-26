@@ -52,6 +52,7 @@ import { linkSpellingOnDocs } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { linkSaleDestinationOn } from "./locations";   // v7.18.1 (A-AU-3)
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
+import { importedTwice } from "./invoicing";   // v7.34.1
 import { IdleSignOut } from "./IdleSignOut";   // v7.30.3 (Batch M · M-4)
 import { shapingSetter, shapeWritten, shapeShipment, shapeClaim } from "./storeShapes";   // v7.24.3 (FZ-01 step 2): a save writes the clean shape
 import { withLiveCompanies } from "./counterparty.domain";   // v7.25.0 (A-RV-13 / FZ-02)
@@ -460,13 +461,14 @@ export default function App() {
   const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog } as any).issues,   /* v7.21.13: + the audit log, for shared ids */ // eslint-disable-next-line react-hooks/exhaustive-deps
     [contacts, pos, lots, orders, shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog]);
 
-  if (!shared.ready) return <><IdleSignOut active={!!readSession()} />{/* v7.30.3 (Batch M · M-4) */}{dialogNode}{shared.node}</>;   // v6.99.148: sign in / loading the shared data
+  if (!shared.ready) return <>{dialogNode}{shared.node}</>;   // v6.99.148: sign in / loading the shared data
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>{dialogNode}
       <EnvironmentStrip />{/* v6.99.149 */}
       {(users || []).length > 0 && !hasOwner(users) && <div style={{ background: "#FEF3C7", color: "#92400E", borderBottom: "1px solid #FDE68A", textAlign: "center", fontSize: 12, fontWeight: 700, padding: "6px 0", flexShrink: 0 }}>No owner with a sign-in e-mail is defined in Settings → Users. Until there is one, Settings is open to every signed-in person — set the owner and their e-mail now.</div>}{/* v7.1.14 */}
       {tab.readOnly && (   /* v6.99.114 (AUD-02): a second tab of the app in this browser is read-only — two writing tabs overwrite each other */
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {dialogNode}<IdleSignOut active={!!readSession()} />{/* v7.34.1 (owner 26 Oct: "the repairs do nothing"): the app's confirm windows were drawn only on the sign-in screen — every confirm asked in the running app stayed invisible */}
           <div style={{ background: "#fff", borderRadius: 14, padding: "22px 26px", width: 460, maxWidth: "92vw", boxShadow: "0 24px 60px rgba(0,0,0,0.3)" }}>
             <div style={{ fontSize: 16, fontWeight: 800, color: "#111" }}>MARIANNA is already open in another tab</div>
             <div style={{ fontSize: 13, color: "#475569", marginTop: 8, lineHeight: 1.5 }}>Two tabs writing at once would overwrite each other's work, so this one is read-only. Close it, or take the pen: the other tab then becomes read-only.</div>
@@ -544,8 +546,12 @@ export default function App() {
         <IntegrityBadge
           data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog }}
           onNavigate={navigate}
-          onRepair={async (kind: "orphanLots" | "danglingLinks") => {   // v6.99.51 (A-FS-2)
+          onRepair={async (kind: "orphanLots" | "danglingLinks" | "importedTwice") => {   // v6.99.51 (A-FS-2)
             if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !(await uiConfirm({ title: "Please confirm", message: `Delete ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock. They stay on record, struck through.` }))) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).map((l: any) => ids.has(l.id) ? { ...l, status: "Cancelled", deletedAt: localTodayISO(), deletedReason: "orphan — its PO no longer exists" } : l));   /* v7.17.1 (A-RV-07): marked Deleted, not removed */ recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) deleted (kept on record): ${ol.map((l: any) => l.number).join(", ")}` }); }
+            if (kind === "importedTwice") { const tw = importedTwice(invoices, operationalCosts); const n = tw.invoices.length; if (!n || !(await uiConfirm({ title: "Please confirm", message: `Remove ${n} invoice(s) imported twice (the original kept, with its Fakturownia link)${tw.opCosts.length ? ` and ${tw.opCosts.length} duplicate cost line(s)` : ""}?`, confirmLabel: "Remove" }))) return;
+              const gone = new Set(tw.invoices.map(String)), goneOp = new Set(tw.opCosts.map(String));
+              setInvoices((prev: any[]) => (prev || []).filter((i: any) => !gone.has(String(i?.id)))); if (goneOp.size) setOperationalCosts((prev: any[]) => (prev || []).filter((c: any) => !goneOp.has(String(c?.id))));
+              recordAudit({ module: "System", docType: "Repair", docNumber: "IMPORTED-TWICE", action: "deleted", summary: `${n} invoice(s) imported twice removed (originals kept) — v7.34.1` }); return; }
             if (kind === "danglingLinks") { const dl = danglingLinks(invoices, claims, pos, orders, shipments); const n = dl.invoices.length + dl.claims.length; if (!n || !(await uiConfirm({ title: "Please confirm", message: `Unlink ${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) from documents that no longer exist?` }))) return;
               const bad = new Map<string, Set<string>>(dl.invoices.map(x => [String(x.id), new Set<string>(x.links.map((l: any) => l.type + ":" + l.number))]));
               setInvoices((prev: any[]) => (prev || []).map((i: any) => bad.has(String(i.id)) ? { ...i, links: (i.links || []).filter((l: any) => !bad.get(String(i.id))!.has(l.type + ":" + l.number)) } : i));
