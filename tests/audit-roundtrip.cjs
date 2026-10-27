@@ -5035,6 +5035,17 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.36.2 — a company's address written from Locations ══
+(function v73602(){
+  console.log("\n══ v7.36.2 — a company's address from Locations ══");
+  const L = B("locations.js");
+  t("v7.36.2: a named extra address of a company (a forwarder's terminal) is offered as that company's place with its name — the transport order prints it; the New location card writes it onto the company", () => {
+    const co = { id: 9, name: "Conbulk", roles: ["Forwarder"], countryIso: "SI", addr: { street: "Kolodvorska cesta 1", postcode: "6000", city: "Koper" }, extraAddresses: [{ label: "Mirage Trans d.o.o.", addr: { street: "Oic - Hrpelje", postcode: "6240", city: "Kozina", country: "Slovenia" } }], people: [] };
+    const a = L.contactAddresses(co); eq(a.length, 2); ok(/^Mirage Trans d\.o\.o\., Oic - Hrpelje/.test(a[1].address), "the terminal's name is lost: " + a[1].address);
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Contacts.tsx"), "utf8"); ok(/extraAddresses: \[\.\.\.\(c\.extraAddresses \|\| \[\]\), entry\]/.test(src), "the card does not write onto the company");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

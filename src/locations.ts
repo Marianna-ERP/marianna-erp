@@ -232,7 +232,7 @@ export function contactAddresses(c: any): { address: string; index: number; site
   if (own) list.push({ address: own, index: 0, siteId: c?.siteId });
   (c?.extraAddresses || []).forEach((a: any, i: number) => {
     const addr = typeof a === "string" ? a : (a?.addr && (a.addr.street || a.addr.city) ? formatAddressOneLine(a.addr) : (a?.address || ""));
-    if (String(addr).trim()) list.push({ address: String(addr), index: i + 1, siteId: typeof a === "object" ? a?.siteId : undefined });
+    if (String(addr).trim()) list.push({ address: (typeof a === "object" && a && String(a.label || "").trim() ? `${String(a.label).trim()}, ` : "") + String(addr), index: i + 1, siteId: typeof a === "object" ? a?.siteId : undefined });   // v7.36.2: a named address (a terminal) keeps its name — on the pickers and the transport order
   });
   if (!list.length) list.push({ address: "", index: 0, siteId: c?.siteId });
   return list;

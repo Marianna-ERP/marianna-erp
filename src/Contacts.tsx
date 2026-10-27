@@ -1424,7 +1424,7 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
 // ── v6.99.11 (owner, 13 Sept): PORTS TAB — ports · border crossings · customs points. Everything with an owner
 // (warehouses, port warehouses like Silvertech, supplier / client sites) lives on its COUNTERPARTY; these are the
 // places nobody invoices us for. Edited here, read everywhere through the one LocationPicker.
-export function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [], onOpenCompany = null, prefillOwner = null, onPrefillUsed = null, onLinkSaleDestination = null, setPOs = null, setOrders = null, setLots = null, setShipments = null }: any) {
+export function PortsView({ setCounterparties = null, counterparties = [], pos = [], orders = [], lots = [], shipments = [], onOpenCompany = null, prefillOwner = null, onPrefillUsed = null, onLinkSaleDestination = null, setPOs = null, setOrders = null, setLots = null, setShipments = null }: any) {
   const [, setRefresh] = useState(0);   // v7.32.0: redraw after the old-places panel changes the store
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's   // v7.18.1: exported for the screen check
   // v7.6.1 (A-PT-5, owner 7 Oct): the LOCATIONS tab works like Companies and People — search, filter chips, one table with actions, "+ New location" in a window
@@ -1462,7 +1462,14 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
     const addr = { street: form.street || "", postcode: form.postcode || "", city: form.city || "", country: form.country || "" };
     const oneLine = formatAddress(addr, { oneLine: true, withCountry: false });   // the legacy text mirrors the parts until the DDL
     // v7.32.0 (FZ-04a): no built-in places any more — every entry is an ordinary record
-    if (form.ownerId != null && form.ownerId !== "" && editId == null) { const co = (counterparties || []).find((c: any) => String(c.id) === String(form.ownerId)); setWinOpen(false); if (co && onOpenCompany) onOpenCompany(co); return; }   // v7.36.1 (PLACES-2)
+    // v7.36.2 (owner 27 Oct: "I added Mirage's location to Conbulk — nothing happens"): a company's address is WRITTEN ON THE COMPANY — one more of
+    // its addresses (extraAddresses), named, offered in the pickers as that company's place; nothing is stored in the public-places list
+    if (form.ownerId != null && form.ownerId !== "" && editId == null) { const co = (counterparties || []).find((c: any) => String(c.id) === String(form.ownerId));
+      if (!co || typeof setCounterparties !== "function") return;
+      const entry = { label: String(form.name || "").trim(), addr: { street: addr.street, postcode: addr.postcode, city: addr.city, country: form.country || "" }, address: oneLine, ...(form.unlocode ? { unlocode: String(form.unlocode).trim() } : {}) };
+      setCounterparties((prev: any[]) => (prev || []).map((c: any) => c && String(c.id) === String(co.id) ? { ...c, extraAddresses: [...(c.extraAddresses || []), entry] } : c));
+      recordAudit({ module: "Parties", docType: "Company", docNumber: String(co.name || ""), action: "updated", summary: `Address added: ${entry.label || oneLine} — ${oneLine} (from Locations) — v7.36.2` });
+      setWinOpen(false); return; }
     if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type, ownerId: form.ownerId ?? undefined });
     else addCustomLocation({ name: form.name, country: form.country, type: form.type, address: oneLine, addr, ownerId: form.ownerId ?? undefined });
     setWinOpen(false);   // v7.6.1
@@ -1535,7 +1542,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
             <div style={{ gridColumn: "1 / -1" }}><Lbl>Name</Lbl><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={inp} /></div>
             <div><Lbl>Kind</Lbl><select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={inp}>{KINDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}</select></div>
             <div data-company-address-route="1"><Lbl>A company's address?</Lbl><select value={form.ownerId ?? ""} onChange={e => setForm({ ...form, ownerId: e.target.value || null })} style={inp}><option value="">— no: a public place (port, airport, crossing, terminal) —</option>{(counterparties || []).filter((c: any) => c && !c.archived).map((c: any) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}</select>
-              {form.ownerId != null && form.ownerId !== "" && <div style={{ fontSize: 11, color: "#B45309", marginTop: 4 }}>A company's address belongs on its record. <button type="button" onClick={() => { const co = (counterparties || []).find((c: any) => String(c.id) === String(form.ownerId)); setWinOpen(false); if (co && onOpenCompany) onOpenCompany(co); }} style={{ border: "none", background: "none", color: "#1D4ED8", textDecoration: "underline", cursor: "pointer", padding: 0, fontSize: 11 }}>Open the company to add it there →</button></div>}</div>   {/* v7.36.1 (PLACES-2): no second route for a company's address */}
+              {form.ownerId != null && form.ownerId !== "" && <div style={{ fontSize: 11, color: "#B45309", marginTop: 4 }}>Saved as one of this company's addresses — on its record, offered in the pickers as its place.</div>}</div>   {/* v7.36.1 (PLACES-2): no second route for a company's address */}
             <div style={{ gridColumn: "1 / -1" }}><Lbl>Street / terminal</Lbl><input value={form.street ?? ""} onChange={e => setForm({ ...form, street: e.target.value })} style={inp} /></div>
             <div><Lbl>Postcode</Lbl><input value={form.postcode ?? ""} onChange={e => setForm({ ...form, postcode: e.target.value })} style={inp} /></div>
             <div><Lbl>City</Lbl><input value={form.city ?? ""} onChange={e => setForm({ ...form, city: e.target.value })} style={inp} /></div>
@@ -1939,7 +1946,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
           {/* Table */}
           <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 24px" }}>
             {viewMode === "ports" ? (
-              <PortsView counterparties={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} setPOs={setPOs} setOrders={setOrders} setLots={setLots} setShipments={setShipments} onOpenCompany={(id: any) => { if (id == null) return; setSelectedId(id); setViewMode("companies"); }} prefillOwner={newLocFor} onPrefillUsed={() => setNewLocFor(null)} onLinkSaleDestination={onLinkSaleDestination} />
+              <PortsView setCounterparties={setCounterparties} counterparties={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} setPOs={setPOs} setOrders={setOrders} setLots={setLots} setShipments={setShipments} onOpenCompany={(id: any) => { if (id == null) return; setSelectedId(id); setViewMode("companies"); }} prefillOwner={newLocFor} onPrefillUsed={() => setNewLocFor(null)} onLinkSaleDestination={onLinkSaleDestination} />
             ) : viewMode === "countries" ? (
               <CountriesView />
             ) : (<>
