@@ -339,7 +339,7 @@ export function setPartiesForPlaces(parties: any[]): void { PARTIES_FOR_PLACES =
 export function allPlaces(parties?: any[]): Location[] {
   const byId = new Map<string, Location>();
   counterpartyLocations(parties ?? PARTIES_FOR_PLACES).forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
-  readCustomLocations().forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
+  readCustomLocations().forEach(l => { if (l && isPublicPlaceType((l as any).type) && !byId.has(String(l.id))) byId.set(String(l.id), l); });   // v7.36.1 (PLACES-2): an old company-like entry is never offered
   return sortLocations(Array.from(byId.values()));
 }
 /** The older name of allPlaces, kept for the callers. */
@@ -353,7 +353,7 @@ export function ourMainWarehouse(parties?: any[]): Location | null {
 }
 export function locationById(id: any, contacts: any[] = []): Location | null {
   if (id === null || id === undefined || id === "") return null;
-  return allPlaces(contacts && contacts.length ? contacts : undefined).find(l => String(l.id) === String(id)) || null;   // v7.32.0: the Parties, or the live list the App handed over
+  return allPlaces(contacts && contacts.length ? contacts : undefined).find(l => String(l.id) === String(id)) || readCustomLocations().find(l => l && String(l.id) === String(id)) || null;   // v7.36.1: an old entry still resolves for the records that use it   // v7.32.0: the Parties, or the live list the App handed over
 }
 
 // ── v6.99.39 (D-1, owner 18 Sept): ONE resolver for how a place is PRINTED ──

@@ -3216,7 +3216,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ v7.6.x. locations tab ══");
   t("A-PT-5 / A-LOC-1: Locations tab with chips, search, actions and a window; a company's locations on its card; a location carries its owner", () => {
     const c = require("fs").readFileSync(require("path").join(__dirname, "../src/Contacts.tsx"), "utf8");
-    ok(/label: "Locations", icon: "📍"/.test(c), "renamed"); ok(/\["company", "Companies' places"/.test(c), "chips instead of tick boxes (the Hidden chip retired in v7.7.1)"); ok(/placeholder="Search locations, address, country, company…"/.test(c)); ok(/\+ New location<\/button>/.test(c) && /Belongs to company \(optional\)/.test(c), "+ New location in a window, with the owner company");
+    ok(/label: "Locations", icon: "📍"/.test(c), "renamed"); ok(/\["company", "Companies' places"/.test(c), "chips instead of tick boxes (the Hidden chip retired in v7.7.1)"); ok(/placeholder="Search locations, address, country, company…"/.test(c)); ok(/\+ New location<\/button>/.test(c) && /A company's address\?/.test(c), "+ New location in a window, with the owner company");
     ok(/>LOCATIONS<\/div>/.test(c) && /\+ add location<\/button>/.test(c), "the company card lists its locations and adds one"); ok(/open company →/.test(c), "a company's address opens its company");
     const l = require("fs").readFileSync(require("path").join(__dirname, "../src/locations.ts"), "utf8"); ok(/ownerId: input\.ownerId/.test(l), "a new location keeps its owner");
   });
@@ -5020,6 +5020,18 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("WB-8 (v7.36.0): blocks (Shift / drag), copy and paste over a block (one value fills it), Delete clears it, rows selected by their number and moved (Alt+arrows, ▲▼, drag), the view follows the selection, Ctrl+Z undoes", () => {
     const ps = fsx.readFileSync(px.join(__dirname, "../src/PlanningSheet.tsx"), "utf8");
     ok(/const fillRange = /.test(ps) && /many\(\) && blocks\.length === 1/.test(ps) && /function moveRows\(/.test(ps) && /scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/.test(ps) && /function undo\(\)/.test(ps) && /data-row-head=/.test(ps) && /data-col-menu="1"/.test(ps), "a WB-8 / WB-9 piece is missing");
+  });
+})();
+
+// ══ v7.36.1 — PLACES-2 ══
+(function v73601(){
+  console.log("\n══ v7.36.1 — PLACES-2 ══");
+  const L = B("locations.js");
+  t("PLACES-2 (v7.36.1): the pickers offer only public places from the places list — an old company-like entry still resolves for the records that use it, but is never offered; the New location card picks the country from the Countries list and sends a company's address to the company", () => {
+    ok(L.isPublicPlaceType("Port") && L.isPublicPlaceType("Airport") && !L.isPublicPlaceType("RentedWarehouse") && !L.isPublicPlaceType("ClientFacility"), "the public types");
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/locations.ts"), "utf8");
+    ok(/if \(l && isPublicPlaceType\(\(l as any\)\.type\) && !byId\.has/.test(src) && /\|\| readCustomLocations\(\)\.find\(l => l && String\(l\.id\) === String\(id\)\)/.test(src), "an old entry is offered, or no longer resolves");
+    const pc = require("fs").readFileSync(require("path").join(__dirname, "../src/Contacts.tsx"), "utf8"); ok(/data-location-country="1"/.test(pc) && /data-company-address-route="1"/.test(pc), "the card's fixes are missing");
   });
 })();
 
