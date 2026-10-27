@@ -75,6 +75,7 @@ export function normaliseCounterparty(c: any): { contact: any; changed: boolean 
   if ("country" in n) { delete n.country; changed = true; }
   if (n.addr && typeof n.addr === "object" && "country" in n.addr) { const a = { ...n.addr }; delete a.country; n.addr = a; changed = true; }
   }
+  if (typeof n.name === "string" && n.name !== n.name.trim()) { n.name = n.name.trim(); changed = true; }   // v7.35.0 (PARTY-1): no stray space in a name
   return { contact: n, changed };
 }
 

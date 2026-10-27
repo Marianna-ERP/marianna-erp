@@ -310,6 +310,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                 <div><Lbl>Default VAT rate (invoices)</Lbl><Sel value={form.terms?.defaultVatRate ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), defaultVatRate: e.target.value === "" ? null : Number(e.target.value) })}><option value="">— none —</option>{[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}</Sel></div>{/* v7.18.7 (BP-46): optional — an invoice draft for this company starts at it */}
                 <div style={{ gridColumn: "1 / -1" }}><Lbl>Receiving hours (delivery window) — e.g. Mon–Fri 06:00–14:00</Lbl><Inp value={form.receivingHours || ""} onChange={e => sf("receivingHours", e.target.value)} placeholder="when this site receives trucks — a planned delivery outside it will warn" /></div>
                 <label style={{ gridColumn: "1 / -1", fontSize: 11, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={!!form.archived} onChange={e => sf("archived", e.target.checked)} /> Archived — hidden from every picker, kept on its documents (CP-4)</label>
+                {form.archived && <div data-archive-warning="1" style={{ gridColumn: "1 / -1", fontSize: 11, color: "#B45309" }}>An archived company is not offered in any picker — POs, SOs, shipments, invoices, the weekly board. Untick to restore it.</div>}   {/* v7.35.0 (PARTY-1) */}
               </div>
               {/* people are edited in the People tab (one list: `contacts`); v6.99.5 removed the duplicate editor */}
               {/* v6.68.0 (F-3): credit control — confirming an SO that pushes this client's
@@ -1942,7 +1943,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
             ) : (<>
             <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
               {viewMode === "companies" ? (
-                <CompaniesTable
+                <CompaniesTable setCounterparties={setCounterparties}
                   rows={filteredCompanies}
                   selectedId={selectedId}
                   onSelect={id => setSelectedId(sel => sel === id ? null : id)}
@@ -1996,7 +1997,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
 // v6.99.12: LogisticsPointsView removed (dead since v6.86 — one location source; the Ports tab replaces it)
 
 // ─── COMPANIES TABLE ────────────────────────────────────────────────────────
-function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail }: any) {
+function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail, setCounterparties = null }: any) {
   const { confirm: ctConfirm, dialogNode: ctNode } = useConfirm(); // P2-6
   return (
     <>
@@ -2033,7 +2034,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
               )}
             </div>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{c.name}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{c.name}{c.archived && <span data-archived-company="1" style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", borderRadius: 6, padding: "1px 6px" }}>archived — not offered in the pickers <button type="button" onClick={(e: any) => { e.stopPropagation(); if (typeof setCounterparties !== "function") return; setCounterparties((prev: any[]) => (prev || []).map((x: any) => x && x.id === c.id ? { ...x, archived: false } : x)); recordAudit({ module: "Parties", docType: "Company", docNumber: String(c.name || ""), action: "updated", summary: "Restored from the archive — offered in the pickers again (PARTY-1)" }); }} style={{ marginLeft: 4, fontSize: 10, border: "1px solid #F59E0B", background: "#fff", borderRadius: 5, cursor: "pointer" }}>Restore</button></span>}</div>   {/* v7.35.0 (PARTY-1) */}
               <div style={{ fontSize: 11, color: "#AAA" }}>{c.nip || c.vatEuId || "—"}</div>
             </div>
             <div>

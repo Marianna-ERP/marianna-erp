@@ -40,13 +40,14 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   // ── the Directory lists the dropdown cells choose from ──
   const lists = useMemo(() => {
     // v7.10.2 (A-RV-15 · CP-4) · v7.28.2: a note in the middle of this line had hidden its end since v7.10.2 — the lists held companies, not names
-    const by = (r: string) => activeParties(contacts).filter((c: any) => rolesOf(c).includes(r)).map((c: any) => c.name).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));
+    const by = (r: string) => activeParties(contacts).filter((c: any) => rolesOf(c).includes(r)).map((c: any) => String(c.name || "").trim()).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));   // v7.35.0: names trimmed
+    const everyone = activeParties(contacts).map((c: any) => String(c.name || "").trim()).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));
     const locs = unifiedLocations(contacts || []);
     const ports = locs.filter((l: any) => isPortType(l)).map((l: any) => l.name);   // v7.21.14 (A-RV-37): by the type — a place of type Other is no port
-    return { clients: by("Client"), suppliers: by("Supplier"), carriers: by("Carrier"), forwarders: Array.from(new Set([...by("Forwarder"), ...by("Shipping line")])),
+    return { clients: by("Client"), suppliers: by("Supplier"), carriers: Array.from(new Set([...by("Carrier"), ...everyone])),   /* v7.35.0 (WB-7): carriers first, then every other company */ forwarders: Array.from(new Set([...by("Forwarder"), ...by("Shipping line")])),
       ports: Array.from(new Set(ports)).sort(),
       // v7.31.0 (WB-4, owner 21 Oct: "the loading place column refers once more to the supplier name and not the address"): each place with its address
-      places: Array.from(new Set(locs.map((l: any) => [S(l.name), S(l.address).replace(/\s*\n\s*/g, ", ")].filter(Boolean).join(" · ")))).sort(), placeNames: Array.from(new Set(locs.map((l: any) => S(l.name)))),
+      places: Array.from(new Set(locs.map((l: any) => [S(l.name), S(l.address).replace(/\s*\n\s*/g, ", ")].filter(Boolean).join(" · ")))).sort(), placeNames: Array.from(new Set(locs.map((l: any) => S(l.name)))), archivedNames: (contacts || []).filter((c: any) => c && c.archived).map((c: any) => String(c.name || "").trim()),
       orders: (orders || []).filter((o: any) => o.status !== "Cancelled").map((o: any) => o.number),
       items: (catalog || []).map((c: any) => c.item), varieties: Array.from(new Set((catalog || []).flatMap((c: any) => c.varieties || []))) } as Record<string, string[]>;
   }, [contacts, orders, catalog]);
@@ -80,10 +81,15 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   async function deleteTab() { if (!tab) return; if (tab.rows.some(r => r.frozen)) { (await uiAlert({ message: "This tab has frozen rows — unfreeze them before deleting the tab." })); return; } if (!(await uiConfirm({ title: "Please confirm", message: `Delete the tab "${tab.name}" and its ${tab.rows.length} row(s)?` }))) return; setTabs((prev: SheetTab[]) => (prev || []).filter(t => t.id !== tab.id)); addLog([{ at: nowISO(), who, tab: tab.id, action: "tab-", old: tab.name }]); setActiveId(""); }
   async function freezeTab() { if (!tab) return; if (!(await uiConfirm({ title: "Please confirm", message: `Freeze every row of "${tab.name}"?` }))) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.map(r => ({ ...r, frozen: true })) })); addLog(tab.rows.filter(r => !r.frozen).map(r => ({ at: nowISO(), who, tab: tab.id, row: r.id, action: "freeze" as const }))); }
   // ── her workbook in, the sheet out ──
+  const [pickTabs, setPickTabs] = useState<null | { names: string[]; file: string; done: (n: string[]) => void }>(null);
+  const [tabTicks, setTabTicks] = useState<Record<string, boolean>>({});
   function importFile(f: any) {
     if (!f) return; const rd = new FileReader();
     rd.onload = async () => { const wb = XLSX.read(rd.result, { type: "array", cellDates: true }); let order = (sorted[sorted.length - 1]?.order ?? 0);
-      const added: SheetTab[] = wb.SheetNames.map(n => ({ ...importWorkbookRows(n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }) as any[][], HER_HEADERS, nowISO()), order: ++order }));
+      // v7.35.0 (WB-7): the workbook's tabs are offered — only the ones ticked are brought in
+      const chosen: string[] = wb.SheetNames.length > 1 ? await new Promise<string[]>(res => setPickTabs({ names: wb.SheetNames, file: f.name, done: res })) : wb.SheetNames;
+      if (!chosen.length) return;
+      const added: SheetTab[] = chosen.map(n => ({ ...importWorkbookRows(n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }) as any[][], HER_HEADERS, nowISO()), order: ++order }));
       if (!(await uiConfirm({ title: "Please confirm", message: `Import ${added.length} tab(s), ${added.reduce((s, t) => s + t.rows.length, 0)} row(s) from ${f.name}? Existing tabs are kept.` }))) return;
       setTabs((prev: SheetTab[]) => [...(prev || []), ...added]); addLog(added.map(t => ({ at: nowISO(), who, tab: t.id, action: "import" as const, now: `${t.name} · ${t.rows.length} rows from ${f.name}` }))); if (added[0]) setActiveId(added[0].id); };
     rd.readAsArrayBuffer(f);
@@ -102,6 +108,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   // the arrow keys, Tab and Enter move the selection. Every change is still recorded for the study. ──
   const grid = useRef<HTMLDivElement | null>(null);
   const [editing, setEditing] = useState<null | { seed?: string }>(null);
+  const editorRef = useRef<any>(null);   // v7.35.0 (WB-7): the open editor, so leaving the cell saves what it holds
   const yearHint = new Date().getFullYear();
   const cols: ShownCol[] = SHOWN_COLUMNS;
   const rowsOf = (): SheetRow[] => (tab ? tab.rows : []);
@@ -123,24 +130,29 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
     else if (k === "Delete" || k === "Backspace") { e.preventDefault(); if (r && col && !r.frozen && shownText(r, col)) writeShown(r, col, ""); }
     else if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); if (r && !r.frozen) setEditing({ seed: k }); }
   }
-  function onCopy(e: React.ClipboardEvent, cut = false) {
-    if (editing || e.target !== grid.current || !tab) return; const r = rowsOf()[sel.row]; const col = cols[sel.col]; if (!r || !col) return;
+  const inGrid = () => { const a: any = typeof document !== "undefined" ? document.activeElement : null; return !!grid.current && !!a && (a === grid.current || grid.current.contains(a)) && !(a.dataset && a.dataset.sheetEditor) && !(a.dataset && a.dataset.sheetBar); };
+  function onCopy(e: any, cut = false) {
+    if (editing || !inGrid() || !tab) return; const r = rowsOf()[sel.row]; const col = cols[sel.col]; if (!r || !col) return;
     e.preventDefault(); e.clipboardData.setData("text/plain", cellClipboardText(shownText(r, col)));
     if (cut && !r.frozen && shownText(r, col)) writeShown(r, col, "");
   }
-  function onPaste(e: React.ClipboardEvent) {
-    if (editing || e.target !== grid.current || !tab) return; e.preventDefault();
+  function onPaste(e: any) {
+    if (editing || !inGrid() || !tab) return; e.preventDefault();
     const blocks = parseClipboard(e.clipboardData.getData("text/plain")); if (!blocks.length) return;
     const res = pasteShownGrid(tab.rows, sel, blocks, nowISO(), yearHint); if (!res.changed.length) return;
     updateTab(tab.id, x => ({ ...x, rows: res.rows }));
     addLog(res.changed.map(c => ({ at: nowISO(), who, tab: tab.id, row: c.row, col: c.col, old: c.old, now: c.now, action: "paste" as const })));
   }
+  // v7.35.0 (WB-7, owner 26 Oct: "we cannot copy paste from one cell to the other"): listened for on the page, while the board has the focus
+  useEffect(() => { const c = (e: any) => onCopy(e), x = (e: any) => onCopy(e, true), p = (e: any) => onPaste(e);
+    document.addEventListener("copy", c); document.addEventListener("cut", x); document.addEventListener("paste", p);
+    return () => { document.removeEventListener("copy", c); document.removeEventListener("cut", x); document.removeEventListener("paste", p); }; });
   // a cell to look at again — a name not in the Directory, a product not in the catalogue, a date that is neither a date nor a range
   function doubtful(r: SheetRow, col: ShownCol): string {
-    const txt = shownText(r, col); if (!txt) return "";
+    const txt = shownText(r, col).trim(); if (!txt) return "";
     if (col.kind === "date") return readSheetDate((r.cells || {})[col.dataKey], yearHint).iso === null ? "not a date — type dd/mm/yyyy, or a range such as 20-21/10" : "";
     if (col.part === "item") return (lists.items || []).includes(txt) ? "" : "not in the product catalogue";
-    if (col.kind === "list" && col.list) { const known = (lists[col.list] || []).includes(txt) || (col.list === "places" && (lists.placeNames || []).includes(txt)); return known ? "" : "not in the Directory"; }
+    if (col.kind === "list" && col.list) { const known = (lists[col.list] || []).includes(txt) || (col.list === "places" && (lists.placeNames || []).includes(txt)); if (known) return ""; return (lists.archivedNames || []).includes(txt) ? "archived in Parties — restore it there to choose it" : "not in the Directory"; }
     return "";
   }
   function editor(r: SheetRow, col: ShownCol) {
@@ -153,10 +165,11 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
       if (e.key === "Tab") { e.preventDefault(); stopEdit(true, e.target.value, [0, e.shiftKey ? -1 : 1]); return; }
       if (e.key === "Escape") { e.preventDefault(); stopEdit(false); }
     };
-    const focusEnd = (el: any) => { if (el && document.activeElement !== el) { el.focus(); const n = String(el.value || "").length; try { el.setSelectionRange(n, n); } catch { /* not a text box */ } } };
+    const focusEnd = (el: any) => { editorRef.current = el; if (el && document.activeElement !== el) { el.focus(); const n = String(el.value || "").length; try { el.setSelectionRange(n, n); } catch { /* not a text box */ } } };
     const listId = col.list ? "ps-" + col.list : undefined;
     if (col.kind === "text" && !col.part) return <textarea data-sheet-editor="1" ref={focusEnd} defaultValue={start} onKeyDown={keys} onBlur={e => { if (editing) stopEdit(true, e.target.value); }} style={{ ...box, whiteSpace: "pre-wrap", overflow: "hidden" }} rows={Math.max(1, String(start).split("\n").length)} />;
-    return <input data-sheet-editor="1" ref={focusEnd} list={listId} defaultValue={start} onKeyDown={keys} onBlur={e => { if (editing) stopEdit(true, e.target.value); }} style={box} placeholder={col.kind === "date" ? "dd/mm/yyyy or 20-21/10" : undefined} />;
+    const pickList: string[] = col.list ? ((lists as any)[col.list] || []) : [];
+    return <input data-sheet-editor="1" ref={focusEnd} list={listId} defaultValue={start} onKeyDown={keys} onInput={(e: any) => { const v = String(e.target.value || ""); if (pickList.length && pickList.includes(v) && v !== shownText(r, col)) stopEdit(true, v); }} onBlur={e => { if (editing) stopEdit(true, e.target.value); }} style={box} placeholder={col.kind === "date" ? "dd/mm/yyyy or 20-21/10" : undefined} />;
   }
 
   const usage = showUsage ? sheetUsage(sorted, log || []) : [];
@@ -202,6 +215,14 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
             style={{ flex: 1, border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12, fontFamily: "inherit", resize: "vertical", lineHeight: 1.35, background: row.frozen ? "#F8FAFC" : "#fff" }} />
         </div>; })()}
 
+      {pickTabs && <div data-pick-tabs="1" style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.35)", zIndex: 8500, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ background: "#fff", borderRadius: 12, padding: 16, width: 420, maxWidth: "95vw", fontSize: 12 }}>
+          <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>Which tabs of {pickTabs.file}?</div>
+          {pickTabs.names.map(n => <label key={n} style={{ display: "flex", gap: 8, padding: "3px 0" }}><input type="checkbox" checked={!!tabTicks[n]} onChange={e => setTabTicks(x => ({ ...x, [n]: e.target.checked }))} />{n}</label>)}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+            <button type="button" onClick={() => { pickTabs.done([]); setPickTabs(null); setTabTicks({}); }} style={btn}>Cancel</button>
+            <button type="button" onClick={() => { pickTabs.done(pickTabs.names.filter(n => tabTicks[n])); setPickTabs(null); setTabTicks({}); }} style={{ ...btn, background: "#111", color: "#fff" }}>Import the ticked tabs</button>
+          </div></div></div>}
       {showUsage && (
         <div style={{ margin: "10px 16px 0", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "8px 10px", maxHeight: 260, overflow: "auto" }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}><div style={{ fontSize: 12, fontWeight: 800 }}>How the sheet is used — from {(log || []).length} recorded change(s)</div><button style={{ ...btn, marginLeft: "auto" }} onClick={exportLog}>Export file (change log)</button></div>
@@ -211,7 +232,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
           </table>
         </div>
       )}
-      <div ref={grid} tabIndex={0} data-sheet-grid="1" style={{ flex: 1, overflow: "auto", padding: "10px 16px", outline: "none" }} onKeyDown={gridKeys} onCopy={e => onCopy(e)} onCut={e => onCopy(e, true)} onPaste={onPaste}>
+      <div ref={grid} tabIndex={0} data-sheet-grid="1" style={{ flex: 1, overflow: "auto", padding: "10px 16px", outline: "none" }} onKeyDown={gridKeys}>
         {!tab && <div style={{ fontSize: 12, color: "#94A3B8", padding: 12 }}>No tab yet — ＋ New tab, or Import file to start from her real file.</div>}
         {tab && (
           <table style={{ borderCollapse: "collapse", fontSize: 12, background: "#fff", tableLayout: "fixed", width: SHOWN_COLUMNS.reduce((s, c) => s + (liveW[c.key] || (tab.widths || {})[c.key] || c.width), liveW[ROW_HEAD_KEY] || (tab.widths || {})[ROW_HEAD_KEY] || 150) }}>
@@ -236,7 +257,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
                     <button title="delete the row" onClick={() => deleteRow(ri)} style={{ border: "none", background: "none", cursor: "pointer", color: "#B91C1C", fontWeight: 800 }}>Delete</button>
                   </td>
                   {SHOWN_COLUMNS.map((c, ci) => { const st: any = (r.styles || {})[c.key] || {}; const here = sel.row === ri && sel.col === ci; const txt = shownText(r, c); const doubt = doubtful(r, c);
-                    return <td key={c.key} data-sheet-cell={`${ri}:${ci}`} onMouseDown={() => { if (!(editing && here)) { if (editing) setEditing(null); setSel({ row: ri, col: ci }); backToGrid(); } }} onDoubleClick={() => { setSel({ row: ri, col: ci }); if (!r.frozen) setEditing({}); }}
+                    return <td key={c.key} data-sheet-cell={`${ri}:${ci}`} onMouseDown={() => { if (!(editing && here)) { if (editing) { const el: any = editorRef.current; const r0 = rowsOf()[sel.row], c0 = cols[sel.col]; if (el && r0 && c0) { const v = String(el.value ?? "").replace(/\s+$/, ""); if (v !== shownText(r0, c0)) writeShown(r0, c0, v); } setEditing(null); } setSel({ row: ri, col: ci }); backToGrid(); } }} onDoubleClick={() => { setSel({ row: ri, col: ci }); if (!r.frozen) setEditing({}); }}
                       style={{ border: "1px solid #E5E7EB", padding: 0, verticalAlign: "top", background: st.fill || (doubt ? "#FFFBEB" : undefined), outline: here ? "2px solid #2563EB" : undefined, outlineOffset: -2, overflow: "hidden", cursor: "cell" }} title={doubt || (txt.length > 24 || txt.includes("\n") ? txt : "")}>
                       {here && editing ? editor(r, c) : <div style={{ padding: "4px 5px", minHeight: 24, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.35, fontWeight: st.b ? 800 : undefined, color: st.color || (r.frozen ? "#64748B" : undefined), boxShadow: doubt ? "inset 0 0 0 1px #F59E0B" : undefined }}>{txt}</div>}</td>; })}
                 </tr>

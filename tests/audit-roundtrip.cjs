@@ -4538,7 +4538,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("v7.28.3: the planning sheet's client, supplier and carrier lists hold the companies' NAMES (a note in the middle of the line had hidden the end since v7.10.2)", () => {
     const ps = fsx.readFileSync(px.join(__dirname, "../src/PlanningSheet.tsx"), "utf8");
-    ok(/rolesOf\(c\)\.includes\(r\)\)\.map\(\(c: any\) => c\.name\)\.filter\(Boolean\)\.sort/.test(ps), "the lists still hold companies");
+    ok(/rolesOf\(c\)\.includes\(r\)\)\.map\(\(c: any\) => String\(c\.name \|\| ""\)\.trim\(\)\)\.filter\(Boolean\)\.sort/.test(ps), "the lists still hold companies");
   });
 })();
 
@@ -4971,6 +4971,35 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const ops = [{ id: 5, invoiceNo: "9647/26", source: "fakturownia:77" }, { id: 6, invoiceNo: "9647/26", source: "invoice:9647/26" }];
     const r = IV.importedTwice(inv, ops); eq(r.invoices.join(), "2"); eq(r.opCosts.join(), "6");
     eq(IV.importedTwice([{ ...inv[0] }, { ...inv[1], paidAmount: 10 }], ops).invoices.length, 0, "a paid copy was removed");
+  });
+})();
+
+// ══ v7.34.2 — an archived season's documents exist ══
+(function v73402(){
+  console.log("\n══ v7.34.2 — no false orphans ══");
+  const IC = B("integrityCheck.js");
+  t("v7.34.2: a lot or an invoice pointing at an archived season's PO / SO / shipment is not an orphan — the existence maps read every record; the repairs find nothing to delete and say so", () => {
+    const lots = [{ number: "LOT-2026-0001", poRef: "PO-2026-0001", movements: [] }];
+    const r1 = IC.checkIntegrity({ lots, pos: [], allPos: [{ number: "PO-2026-0001", status: "Closed", items: [] }] });
+    ok(!r1.issues.some(i => i.code === "ORPHAN_LOT_PO"), "an archived PO counted as missing");
+    const r2 = IC.checkIntegrity({ lots, pos: [] }); ok(r2.issues.some(i => i.code === "ORPHAN_LOT_PO"), "a really missing PO is no longer reported");
+    eq(IC.orphanLotsToRemove(lots, [{ number: "PO-2026-0001" }]).length, 0);
+  });
+})();
+
+// ══ v7.35.0 — WB-7, PARTY-1, CR-1, CR-2 ══
+(function v73500(){
+  console.log("\n══ v7.35.0 — the board in a real browser, parties, corrections ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  const CP = B("counterparty.domain.js"), FI = B("fakturowniaImport.domain.js");
+  t("v7.35.0: a company's name is trimmed on save; a derived VAT rate snaps to its standard rate; the sales import's corrections are notes; the board listens for copy / paste on the page, saves a pick at once and a left cell, offers carriers then every company, and asks which tabs to import; archived companies are marked with Restore; the invoice page reads the NIP from Parties", () => {
+    eq(CP.normaliseCounterparty({ id: 1, name: " P.H.U. Polkon Rafał Lech", type: "Carrier", roles: ["Carrier"], people: [] }).contact.name, "P.H.U. Polkon Rafał Lech");
+    eq(FI.vatRateOf(2127.75, 2234.14), 5); eq(FI.vatRateOf(100, 107), 7);
+    const ps = rd("PlanningSheet.tsx"), inv = rd("Invoices.tsx"), pc = rd("Contacts.tsx");
+    ok(/document\.addEventListener\("paste", p\)/.test(ps) && !/onPaste=\{onPaste\}/.test(ps), "copy / paste not on the page");
+    ok(/pickList\.includes\(v\)/.test(ps) && /const el: any = editorRef\.current;/.test(ps) && /carriers: Array\.from\(new Set\(\[\.\.\.by\("Carrier"\), \.\.\.everyone\]\)\)/.test(ps) && /data-pick-tabs="1"/.test(ps), "a board fix is missing");
+    ok(/r\.include && r\.isCorrection\)\.map\(\(r: any\) => noteFromCorrection\(r, "outgoing"/.test(inv) && /function CorrectionsAsInvoices/.test(inv) && /const partyNip = /.test(inv), "a correction / NIP fix is missing");
+    ok(/data-archived-company="1"/.test(pc) && /data-archive-warning="1"/.test(pc), "the archived company is not marked");
   });
 })();
 

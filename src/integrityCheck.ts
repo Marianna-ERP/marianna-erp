@@ -44,6 +44,8 @@ export interface IntegrityResult {
 }
 
 export interface IntegrityInputs {
+  /** v7.34.2: every record, the archived seasons included — a reference to an archived document EXISTS (only existence is read from these) */
+  allPos?: any[]; allLots?: any[]; allOrders?: any[]; allShipments?: any[];
   contacts?: any[];
   pos?: any[];
   lots?: any[];
@@ -88,9 +90,11 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   const shipments = arr(inp.shipments);
 
   // Lookup sets for fast reference checks.
-  const poByNumber = new Map(pos.map((p: any) => [String(p.number), p]));
-  const lotByNumber = new Map(lots.map((l: any) => [String(l.number), l]));
-  const orderByNumber = new Map(orders.map((o: any) => [String(o.number), o]));
+  // v7.34.2 (owner 26 Oct: "the repairs give no confirmation"): a document of an ARCHIVED season still exists — the existence maps read every
+  // record, so a lot or an invoice pointing at last season's PO / SO / shipment is no longer called an orphan
+  const poByNumber = new Map([...arr(inp.allPos), ...pos].map((p: any) => [String(p.number), p]));
+  const lotByNumber = new Map([...arr(inp.allLots), ...lots].map((l: any) => [String(l.number), l]));
+  const orderByNumber = new Map([...arr(inp.allOrders), ...orders].map((o: any) => [String(o.number), o]));
   const contactIds = new Set(contacts.map((c: any) => String(c.id)));
   const contactMergedIds = new Set(
     contacts.flatMap((c: any) => arr(c.mergedFromIds).map(String))
@@ -411,7 +415,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
         add("warning", "SHIP_ROW_ORPHAN", "Shipments", label, `A goods row points at purchase order ${g.poRef}, which doesn't exist.`);
     });
   });
-  const shipByNumber = new Set(shipments.map((s: any) => String(s.number)));
+  const shipByNumber = new Set([...arr(inp.allShipments), ...shipments].map((s: any) => String(s.number)));   // v7.34.2: archived ones exist
   const invoiceById = new Map(invoices.map((i: any) => [String(i.id), i]));
 
   // Invoice links pointing at records that no longer exist.

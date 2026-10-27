@@ -210,7 +210,10 @@ export function suggestForRow(row: StagedRow, contacts: any[], shipments: any[],
 *  (a rate rounded to whole percent turned 1 234,56 into 1 230,00); 0 when either amount is missing. */
 export function vatRateOf(net: any, gross: any): number {
 const a = num(net), b = num(gross); if (!a || !b) return 0;
-return Math.round(((b / a) - 1) * 100 * 1e6) / 1e6;
+const raw = ((b / a) - 1) * 100;
+// v7.35.0 (CR-1): 5.000117 → 5 — the standard rate, when it gives Fakturownia's gross back to the grosz; otherwise the precise rate (A-INV-1)
+for (const s of [0, 5, 8, 23]) if (Math.abs(raw - s) <= 0.05 && Math.round(a * (1 + s / 100) * 100) === Math.round(b * 100)) return s;
+return Math.round(raw * 1e6) / 1e6;
 }
 
 /** Build the register COST invoice for a posted row (money recomputed by the caller).
@@ -432,7 +435,7 @@ export function buildIssuedSalesInvoice(row: any, soNumber: string, contact: any
   const net = num(row.net) || num(row.gross); const own = num(row.fxRate) > 0 && String(row.currency).toUpperCase() !== "PLN";
   return {
     id: nextId(), kind: "SALES", category: "SALES", costScope: "SALES", number: row.number,
-    counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.buyer },
+    counterparty: contact ? { id: contact.id, name: contact.name, ...(contact.nip ? { nip: contact.nip } : {}) } : { name: row.buyer },   // v7.35.0 (CR-2): the NIP kept on the copy
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "", paymentMethod: "Transfer",
     currency: row.currency, fxRate: own ? num(row.fxRate) : resolveFxRate(defaultFxRate(row.currency), row.currency), ...(own ? { fxTableDate: row.date, fxSource: "fakturownia" } : {}),
     netAmount: net, vatRate: vatRateOf(row.net, row.gross), ...(!num(row.net) || !num(row.gross) ? { amountsIncomplete: true } : {}),

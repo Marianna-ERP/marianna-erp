@@ -376,8 +376,10 @@ function ImportIssuedModal({ invoices = [], contacts = [], orders = [], onClose,
   const upd = (k: string, p: any) => setRows(prev => prev.map(r => r.key === k ? { ...r, ...p } : r));
   const included = rows.filter(r => r.include).length;
   function post() {
-    const regs = rows.filter(r => r.include).map(r => buildIssuedSalesInvoice(r, r.so, (contacts || []).find((c: any) => String(c.id) === String(r.companyId)) || null));
-    onPost({ regs, flips: [], opCosts: [], fixes: [] });
+    const coOf = (r: any) => (contacts || []).find((c: any) => String(c.id) === String(r.companyId)) || null;
+    const notesIn = rows.filter((r: any) => r.include && r.isCorrection).map((r: any) => noteFromCorrection(r, "outgoing", invoices, coOf(r), nextId));   // v7.35.0 (CR-1): a correction is a note
+    const regs = rows.filter((r: any) => r.include && !r.isCorrection).map(r => buildIssuedSalesInvoice(r, r.so, coOf(r)));
+    onPost({ regs, flips: [], opCosts: [], fixes: [], notesIn });
   }
   const inp: React.CSSProperties = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 10px", fontSize: 12 };
   return (
@@ -464,6 +466,26 @@ function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any
  *  its company (a company of the very same name is suggested), or open the Directory to add it; no free text. */
 /** v7.33.0 (FIN-1, owner 26 Oct): the credit / debit notes that name their party in text only, linked here — where notes are made —
  *  by the same pick-and-link as the invoices (the Finance panel no longer mixes them with operational costs). */
+/** v7.35.0 (CR-1, owner 26 Oct: "where is the reference of the invoice CR48 corrects?"): corrections the sales import recorded as invoices
+ *  with negative amounts (before this version) are converted into notes on the invoice they correct — the corrected invoice proposed among
+ *  the same company's invoices, or picked. */
+function CorrectionsAsInvoices({ invoices = [], setInvoices = null, setNotes = null }: any) {
+  const [pick, setPick] = useState<Record<string, string>>({});
+  const rows = (invoices || []).filter((i: any) => i && Number(i.grossAmount) < 0 && i.paymentStatus !== "Cancelled");
+  if (!rows.length || typeof setNotes !== "function" || typeof setInvoices !== "function") return null;
+  const candidates = (i: any) => (invoices || []).filter((x: any) => x && x.id !== i.id && x.kind === i.kind && Number(x.grossAmount) > 0 && String(x.counterparty?.id ?? x.counterparty?.name) === String(i.counterparty?.id ?? i.counterparty?.name) && String(x.issueDate || "") <= String(i.issueDate || "9999")).sort((a: any, b: any) => String(b.issueDate).localeCompare(String(a.issueDate)));
+  const convert = (i: any) => { const target = pick[String(i.id)] || String((candidates(i)[0] || {}).id || ""); const corr = (invoices || []).find((x: any) => String(x.id) === target) || null;
+    const note = { id: nextId(), noteType: "CREDIT", direction: i.kind === "SALES" ? "outgoing" : "incoming", number: String(i.number || ""), date: i.issueDate, invoiceId: corr ? corr.id : null, relatedRef: corr ? String(corr.number || "") : "", partyId: i.counterparty?.id ?? null, partyName: String(i.counterparty?.name || ""), category: "Correcting invoice", amount: Math.abs(Number(i.grossAmount) || 0), currency: i.currency || "PLN", fxRate: Number(i.fxRate) || 1, amountPLN: Math.abs(Number(i.grossPLN) || Number(i.grossAmount) || 0), status: "Issued", reason: `Correcting invoice ${String(i.number || "")} (converted from the register)`, source: `converted:${i.id}`, ...(i.pdfSavedAs ? { pdfSavedAs: i.pdfSavedAs } : {}), ...(i.fakturownia ? { fakturownia: i.fakturownia } : {}) };
+    setNotes((prev: any[]) => [...(prev || []), note]); setInvoices((prev: any[]) => (prev || []).filter((x: any) => x && x.id !== i.id).map((x: any) => corr && x.id === corr.id ? { ...x, creditNoteIds: Array.from(new Set([...(x.creditNoteIds || []), note.id])) } : x));
+    recordAudit({ module: "Invoices", docType: "Note", docNumber: String(i.number || ""), action: "created", summary: `Correction converted from a negative invoice into a credit note${corr ? ` on ${corr.number}` : ""} — CR-1` }); };
+  return <div data-corrections-as-invoices="1" style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 10, padding: "10px 12px", margin: "0 0 12px", fontSize: 12 }}>
+    <b style={{ fontSize: 13 }}>{rows.length} correction{rows.length === 1 ? "" : "s"} recorded as {rows.length === 1 ? "an invoice" : "invoices"} with negative amounts — convert to credit notes</b>
+    <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}><tbody>{rows.map((i: any) => { const cs = candidates(i); const cur = pick[String(i.id)] ?? String((cs[0] || {}).id || "");
+      return <tr key={i.id}><td style={{ padding: "4px 6px", fontWeight: 700 }}>{i.number}</td><td style={{ padding: "4px 6px" }}>{i.counterparty?.name}</td><td style={{ padding: "4px 6px" }}>{Number(i.grossAmount).toLocaleString("pl-PL")} {i.currency}</td>
+        <td style={{ padding: "4px 6px", minWidth: 220 }}><Sel value={cur} onChange={(e: any) => setPick(p => ({ ...p, [String(i.id)]: e.target.value }))}><option value="">— the invoice it corrects —</option>{cs.map((x: any) => <option key={x.id} value={String(x.id)}>{x.number} · {formatDMY(x.issueDate)} · {Number(x.grossAmount).toLocaleString("pl-PL")} {x.currency}</option>)}</Sel></td>
+        <td style={{ padding: "4px 6px" }}><button type="button" onClick={() => convert(i)} style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #CA8A04", background: "#fff", color: "#92400E", fontWeight: 700, cursor: "pointer" }}>Convert to a note</button></td></tr>; })}</tbody></table>
+  </div>;
+}
 function UnlinkedNoteParties({ notes = [], contacts = [], setNotes = null }: any) {
   const S = (v: any) => String(v ?? "").trim(); const norm = (v: any) => S(v).toLowerCase().replace(/\s+/g, " ");
   const live = (contacts || []).filter((c: any) => c && c.status !== "Deleted" && !c.deleted && S(c.name));
@@ -858,7 +880,7 @@ export default function Invoices(props: any) {
   if (view === "note" && noteForm) return <NoteForm form={noteForm} setForm={setNoteForm} onSave={saveNote} onCancel={() => { setView(selected ? "detail" : "list"); setNoteForm(null); }} contacts={contacts} invoices={invoices} orders={orders} pos={pos} shipments={shipments} />;
   if (view === "detail" && selected) return (<>
       {invNode}
-    <InvoiceDetail setInvoices={setInvoices}
+    <InvoiceDetail setInvoices={setInvoices} contacts={contacts}
       inv={selected} notes={notes}
       onBack={() => { setView("list"); setSelId(null); }}
       onEdit={() => editInvoice(selected)}
@@ -911,6 +933,7 @@ export default function Invoices(props: any) {
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 28px" }}>
         <UnlinkedCompanies invoices={invoices} contacts={contacts} setInvoices={setInvoices} />
         <UnlinkedNoteParties notes={notes} contacts={contacts} setNotes={setNotes} />   {/* v7.33.0 (FIN-1) */}
+        <CorrectionsAsInvoices invoices={invoices} setInvoices={setInvoices} setNotes={setNotes} />   {/* v7.35.0 (CR-1) */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
           {[
             { l: "RECEIVABLE · OPEN", v: money(recvOpen, "PLN"), c: "#16A34A" },
@@ -984,7 +1007,11 @@ export default function Invoices(props: any) {
 }
 
 // ════════════════ DETAIL ════════════════
-function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState, onDeletePayment = null, shipments = [], onAllocate = null, allocatedLots = [], setInvoices = null }: any) {
+/** v7.35.0 (CR-1): a VAT rate shown as a rate — a stored drift (5.000117) as its standard rate, else two decimals at most. */
+function fmtRate(v: any): string { const n = Number(v) || 0; for (const s of [0, 5, 8, 23]) if (Math.abs(n - s) <= 0.05) return String(s); return String(Math.round(n * 100) / 100); }
+function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState, onDeletePayment = null, shipments = [], onAllocate = null, allocatedLots = [], setInvoices = null }: any) {
+  // v7.35.0 (CR-2, owner 26 Oct: "why under FruVerde is the NIP empty?"): the NIP is the linked company's, from Parties — the copy only for one not linked
+  const partyNip = (x: any) => { const id = x?.counterparty?.id; const co = id != null ? (contacts || []).find((c: any) => String(c.id) === String(id)) : null; return (co && (co.nip || co.vatEuId)) || x?.counterparty?.nip || x?.counterparty?.taxNo || ""; };
   // v6.99.72 (A-CU-3): what customs says about this invoice — read from the shipments' clearance lines, no store of its own
   const customs = inv.kind === "SALES" ? customsForInvoice(inv.number, shipments) : [];
   const locked = isLocked(inv);
@@ -1050,7 +1077,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
               {inv.paymentStatus !== "Paid" && inv.paidAmount > 0 && <Row k="Remaining" v={money(remaining, inv.currency)} />}
             </Card>
             <Card><SectionTitle>AMOUNTS</SectionTitle>
-              <Row k="Net" v={money(inv.netAmount, inv.currency)} /><Row k={`VAT ${inv.vatRate}%`} v={money(inv.vatAmount, inv.currency)} /><Row k="Gross" v={money(inv.grossAmount, inv.currency)} bold />
+              <Row k="Net" v={money(inv.netAmount, inv.currency)} /><Row k={`VAT ${fmtRate(inv.vatRate)}%`} v={money(inv.vatAmount, inv.currency)} /><Row k="Gross" v={money(inv.grossAmount, inv.currency)} bold />
               {inv.currency !== "PLN" && <Row k="Gross (PLN)" v={money(inv.grossPLN, "PLN")} />}
               {inv.kind === "COST" && <Row k="Charged to" v={CHARGED_TO[scopeOf(catKey(inv.category))] || "—"} />}
               {inv.pdfSavedAs && <Row k="PDF in the folder" v={`${inv.pdfSavedAs}${inv.pdfSavedAt ? ` · ${formatDMY(inv.pdfSavedAt)}` : ""}`} />}
@@ -1060,8 +1087,8 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
 
           <Card style={{ marginTop: 16 }}><SectionTitle>PARTIES</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-              <div><Lbl>Sprzedawca / Seller</Lbl><div style={{ fontSize: 13, fontWeight: 600 }}>{inv.kind === "SALES" ? COMPANY.name : inv.counterparty?.name || "—"}</div><div style={{ fontSize: 11, color: "#888" }}>NIP {inv.kind === "SALES" ? COMPANY.nip : inv.counterparty?.nip || "—"}</div></div>
-              <div><Lbl>Nabywca / Buyer</Lbl><div style={{ fontSize: 13, fontWeight: 600 }}>{inv.kind === "SALES" ? inv.counterparty?.name || "—" : COMPANY.name}</div><div style={{ fontSize: 11, color: "#888" }}>NIP {inv.kind === "SALES" ? inv.counterparty?.nip || "—" : COMPANY.nip}</div></div>
+              <div><Lbl>Sprzedawca / Seller</Lbl><div style={{ fontSize: 13, fontWeight: 600 }}>{inv.kind === "SALES" ? COMPANY.name : inv.counterparty?.name || "—"}</div><div style={{ fontSize: 11, color: "#888" }}>NIP {inv.kind === "SALES" ? COMPANY.nip : partyNip(inv) || "—"}</div></div>
+              <div><Lbl>Nabywca / Buyer</Lbl><div style={{ fontSize: 13, fontWeight: 600 }}>{inv.kind === "SALES" ? inv.counterparty?.name || "—" : COMPANY.name}</div><div style={{ fontSize: 11, color: "#888" }}>NIP {inv.kind === "SALES" ? partyNip(inv) || "—" : COMPANY.nip}</div></div>
             </div>
           </Card>
 

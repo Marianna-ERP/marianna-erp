@@ -58,7 +58,7 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
             boxShadow: "0 16px 48px rgba(0,0,0,0.18)",
           }}>
             {/* v6.99.51 (A-FS-2, owner): repairs for the leftovers of a season reset done by hand */}
-            {onRepair && (() => { const ol = orphanLotsToRemove((data as any).lots || [], (data as any).pos || []); const dl = danglingLinks((data as any).invoices || [], (data as any).claims || [], (data as any).pos || [], (data as any).orders || [], (data as any).shipments || []);
+            {onRepair && (() => { const D: any = data; const ol = orphanLotsToRemove(D.lots || [], D.allPos || D.pos || []); const dl = danglingLinks(D.invoices || [], D.claims || [], D.allPos || D.pos || [], D.allOrders || D.orders || [], D.allShipments || D.shipments || []);   /* v7.34.2: existence over every record */
               if (!ol.length && !dl.invoices.length && !dl.claims.length) return null;
               return <div style={{ padding: "10px 14px", background: "#FFFBEB", borderBottom: "1px solid #FDE68A", display: "grid", gap: 6 }}>
                 <div style={{ fontSize: 11, fontWeight: 800, color: "#92400E" }}>REPAIRS — leftovers of documents deleted by hand</div>
