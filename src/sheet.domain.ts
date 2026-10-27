@@ -47,7 +47,9 @@ export const SHEET_COLUMNS: SheetCol[] = [
 // bold / text colour / fill. Presentation only: never logged for the study, never read by any module.
 export interface CellStyle { b?: boolean; color?: string; fill?: string; }
 export interface SheetRow { id: string; createdAt: string; frozen?: boolean; cells: Record<string, any>; height?: number; styles?: Record<string, CellStyle>; }
-export interface SheetTab { id: string; name: string; order: number; createdAt: string; rows: SheetRow[]; widths?: Record<string, number>; }
+export interface SheetTab { id: string; name: string; order: number; createdAt: string; rows: SheetRow[]; widths?: Record<string, number>;
+  /** v7.36.0 (WB-9): columns the user added (free text, after a column), built-in columns hidden (kept), and the order chosen */
+  extraCols?: Array<{ key: string; label: string; after?: string }>; hiddenCols?: string[]; colOrder?: string[]; }
 export const TEXT_COLOURS = ["#111827", "#B91C1C", "#C2410C", "#15803D", "#1D4ED8", "#7E22CE", "#6B7280"];
 export const FILL_COLOURS = ["#FEF08A", "#FECACA", "#FED7AA", "#BBF7D0", "#BFDBFE", "#E9D5FF", "#E5E7EB"];
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
@@ -126,13 +128,13 @@ export function pasteGrid(rows: SheetRow[], at: { row: number; col: number }, gr
 }
 export function productText(v: any): string { if (!v) return ""; if (typeof v === "string") return v; return [v.item, v.variety, v.size].map(S).filter(Boolean).join(" "); }
 /** Grid of the tab as strings in the sheet's column order (copy, export). */
-export function tabToGrid(tab: SheetTab): string[][] { return (tab.rows || []).map(r => SHEET_COLUMNS.map(c => c.kind === "product" ? productText(r.cells[c.key]) : S(r.cells[c.key]))); }
+export function tabToGrid(tab: SheetTab): string[][] { return (tab.rows || []).map(r => [...SHEET_COLUMNS.map(c => c.kind === "product" ? productText(r.cells[c.key]) : S(r.cells[c.key])), ...(tab.extraCols || []).map(x => S(r.cells[x.key]))]); }   /* v7.36.0 (WB-9): the added columns exported too */
 
 /** Import her workbook AS IT IS: one tab per sheet, rows unchanged; ETD–ETA and 'Production date / controlling person' split. */
 export function importWorkbookRows(sheetName: string, matrix: any[][], headerMap: Record<string, string>, now: string): SheetTab {
   const header = (matrix[0] || []).map((h: any) => S(h).replace(/\s+/g, " "));
-  const map: Record<number, string> = {}; let priceSeen = 0;
-  header.forEach((h, c) => { if (h === "Price") { priceSeen++; map[c] = priceSeen === 1 ? "truckPrice" : "containerPrice"; return; } const k = headerMap[h] || headerMap[h.replace(/\s+$/, "")]; if (k) map[c] = k; });
+  const map: Record<number, string> = {}; let priceSeen = 0; const extraCols: Array<{ key: string; label: string }> = [];   // v7.36.0 (WB-9)
+  header.forEach((h, c) => { if (h === "Price") { priceSeen++; map[c] = priceSeen === 1 ? "truckPrice" : "containerPrice"; return; } const k = headerMap[h] || headerMap[h.replace(/\s+$/, "")]; if (!k && h) { const xk = "x_" + h.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30); if (!extraCols.some(x => x.key === xk)) extraCols.push({ key: xk, label: h }); map[c] = xk; return; } if (k) map[c] = k; });
   const year = new Date(now).getFullYear();
   const rows: SheetRow[] = [];
   for (let r = 1; r < matrix.length; r++) {
@@ -151,7 +153,7 @@ export function importWorkbookRows(sheetName: string, matrix: any[][], headerMap
     });
     if (filled >= 2) rows.push({ id: sid("r"), createdAt: now, cells });
   }
-  return { id: sid("t"), name: sheetName, order: 0, createdAt: now, rows };
+  return { id: sid("t"), name: sheetName, order: 0, createdAt: now, rows, ...(extraCols.length ? { extraCols } : {}) };
 }
 
 /** SH-12 — how the sheet is used, from the change log alone. */
@@ -184,21 +186,23 @@ export const SHOWN_COLUMNS: ShownCol[] = SHEET_COLUMNS.flatMap((c): ShownCol[] =
 const productOf = (v: any) => (typeof v === "object" && v ? { item: S(v.item), variety: S(v.variety), size: S(v.size) } : { item: S(v), variety: "", size: "" });
 /** What a shown cell holds, as text (a date as dd/mm/yyyy). */
 export function shownText(row: SheetRow, col: ShownCol): string {
+  if (!SHEET_COLUMNS.some(c => c.key === col.dataKey)) return S((row.cells || {})[col.dataKey]);   // v7.36.0 (WB-9): an added column
   const v = (row?.cells || {})[col.dataKey]; if (col.part) return productOf(v)[col.part];
   return col.kind === "date" ? sheetDateText(v) : S(v);
 }
 /** What writing TEXT into a shown cell stores: the product's part inside the one product; a date read as for typing; else as typed. */
 export function shownValue(row: SheetRow, col: ShownCol, text: any, yearHint?: number): { key: string; value: any } {
+  if (!SHEET_COLUMNS.some(c => c.key === col.dataKey)) return { key: col.dataKey, value: String(text ?? "") };   // v7.36.0 (WB-9): an added column
   if (col.part) { const p = productOf((row?.cells || {})[col.dataKey]); return { key: col.dataKey, value: { ...p, [col.part]: S(text) } }; }
   const dataCol = SHEET_COLUMNS.find(c => c.key === col.dataKey)!; return { key: col.dataKey, value: coerce(dataCol, text, yearHint) };
 }
 /** Paste a block at a shown (row, col) — right and down, rows added when needed, frozen rows skipped. */
-export function pasteShownGrid(rows: SheetRow[], at: { row: number; col: number }, grid: string[][], now: string, yearHint?: number): { rows: SheetRow[]; changed: Array<{ row: string; col: string; old: any; now: any }> } {
+export function pasteShownGrid(rows: SheetRow[], at: { row: number; col: number }, grid: string[][], now: string, yearHint?: number, columns: ShownCol[] = SHOWN_COLUMNS): { rows: SheetRow[]; changed: Array<{ row: string; col: string; old: any; now: any }> } {
   const out = rows.map(r => ({ ...r, cells: { ...r.cells } })); const changed: Array<{ row: string; col: string; old: any; now: any }> = [];
   grid.forEach((line, dr) => {
     const ri = at.row + dr; while (out.length <= ri) out.push(blankRow(now));
     const r = out[ri]; if (r.frozen) return;
-    line.forEach((raw, dc) => { const col = SHOWN_COLUMNS[at.col + dc]; if (!col) return; const { key, value } = shownValue(r, col, raw, yearHint); const old = r.cells[key];
+    line.forEach((raw, dc) => { const col = columns[at.col + dc]; if (!col) return; const { key, value } = shownValue(r, col, raw, yearHint); const old = r.cells[key];
       if (JSON.stringify(old ?? "") !== JSON.stringify(value ?? "")) { r.cells[key] = value; changed.push({ row: r.id, col: key, old, now: value }); } });
   });
   return { rows: out, changed };
@@ -207,3 +211,13 @@ export function pasteShownGrid(rows: SheetRow[], at: { row: number; col: number 
 export function cellClipboardText(text: any): string { const s = S(text); return /[\t\n"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
 /** WB-1: the width of the first column (the row number and its buttons) is kept like any other. */
 export const ROW_HEAD_KEY = "#rows";
+
+/** v7.36.0 (WB-9): THE TAB'S COLUMNS — the built-in ones not hidden, the added ones placed after their column, in the order chosen. */
+export function shownColumnsOf(tab: SheetTab | null | undefined): ShownCol[] {
+  if (!tab) return SHOWN_COLUMNS; const hidden = new Set(tab.hiddenCols || []);
+  const tpl: any = SHOWN_COLUMNS.find(c => !c.part && !SHEET_COLUMNS.some(s => s.key === c.dataKey && (s.kind === "date" || s.kind === "list" || s.kind === "product"))) || SHOWN_COLUMNS[0];
+  const out: ShownCol[] = SHOWN_COLUMNS.filter(c => !hidden.has(c.key));
+  (tab.extraCols || []).forEach(x => { const col: any = { ...tpl, key: x.key, label: x.label, dataKey: x.key, width: 140, part: undefined, list: undefined }; const at = x.after ? out.findIndex(c => c.key === x.after) : -1; if (at >= 0) out.splice(at + 1, 0, col); else out.push(col); });
+  if (tab.colOrder && tab.colOrder.length) { const pos = new Map(tab.colOrder.map((k, i) => [k, i])); out.sort((a, b) => (pos.has(a.key) ? (pos.get(a.key) as number) : 999) - (pos.has(b.key) ? (pos.get(b.key) as number) : 999)); }
+  return out;
+}

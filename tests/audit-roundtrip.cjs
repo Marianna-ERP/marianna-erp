@@ -5003,6 +5003,26 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.36.0 — WB-8 (blocks, rows, scrolling, undo) · WB-9 (columns per tab) ══
+(function v73600(){
+  console.log("\n══ v7.36.0 — the weekly board: blocks, rows, columns ══");
+  const fsx = require("fs"), px = require("path"); const SD = B("sheet.domain.js");
+  t("WB-9 (v7.36.0): a tab's columns — built-in ones hidden (kept), added ones placed after their column, the order chosen; an added column's cell is plain text; the export carries the added columns; an unknown header of her workbook becomes an added column", () => {
+    const base = SD.shownColumnsOf(null); const k0 = base[0].key, k1 = base[1].key;
+    const tab = { id: "t", name: "W", order: 0, createdAt: "", rows: [{ id: "r1", cells: { x_note: "check docs" } }], hiddenCols: [k1], extraCols: [{ key: "x_note", label: "Note", after: k0 }] };
+    const cols = SD.shownColumnsOf(tab); eq(cols[0].key, k0); eq(cols[1].key, "x_note"); ok(!cols.some(c => c.key === k1), "the hidden column is shown"); eq(cols.length, base.length);
+    eq(SD.shownText(tab.rows[0], cols[1]), "check docs"); eq(SD.shownValue(tab.rows[0], cols[1], "new").value, "new");
+    const ord = SD.shownColumnsOf({ ...tab, colOrder: ["x_note", k0] }); eq(ord[0].key, "x_note");
+    eq(SD.tabToGrid(tab)[0].slice(-1)[0], "check docs", "the export lost the added column");
+    const imp = SD.importWorkbookRows("W", [["Client", "Remarks for the driver"], ["Al Baraka", "call before"]], { Client: "client" }, "2026-10-27T10:00:00");
+    ok((imp.extraCols || []).some(x => x.label === "Remarks for the driver"), "the unknown header was dropped"); eq(imp.rows[0].cells[imp.extraCols[0].key], "call before");
+  });
+  t("WB-8 (v7.36.0): blocks (Shift / drag), copy and paste over a block (one value fills it), Delete clears it, rows selected by their number and moved (Alt+arrows, ▲▼, drag), the view follows the selection, Ctrl+Z undoes", () => {
+    const ps = fsx.readFileSync(px.join(__dirname, "../src/PlanningSheet.tsx"), "utf8");
+    ok(/const fillRange = /.test(ps) && /many\(\) && blocks\.length === 1/.test(ps) && /function moveRows\(/.test(ps) && /scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/.test(ps) && /function undo\(\)/.test(ps) && /data-row-head=/.test(ps) && /data-col-menu="1"/.test(ps), "a WB-8 / WB-9 piece is missing");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
