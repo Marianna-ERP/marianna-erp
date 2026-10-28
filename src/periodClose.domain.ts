@@ -36,3 +36,27 @@ export function cashProjection(invoices: any[], todayISO: string): { buckets: Ar
   out.forEach(x => { x.inPLN = r2(x.inPLN); x.outPLN = r2(x.outPLN); x.netPLN = r2(x.inPLN - x.outPLN); });
   return { buckets: out, overdueInPLN: r2(overdueIn), overdueOutPLN: r2(overdueOut) };
 }
+
+/** v7.40.0 (AUD3-L1, external audit: "a closed month is closed only to invoices"): A CLOSED MONTH IS CLOSED TO EVERY DATED RECORD. Between
+ *  the list as it was and the list as a screen wants it: a record (or, with nestedKey, a line inside a record — a shipment's cost line, a
+ *  lot's movement, an invoice's payment) dated in a closed month is not added, changed or removed — the earlier version is kept.
+ *  Returns the list to store and how many changes were refused. */
+export function closedPeriodFilter(prev: any[], next: any[], dateOf: (x: any) => any, closed: ClosedPeriod[], nestedKey?: string): { list: any[]; refused: number } {
+  if (!Array.isArray(prev) || !Array.isArray(next) || !(closed || []).length) return { list: next, refused: 0 };
+  const shut = (x: any) => { const d = x ? dateOf(x) : null; return !!(d && periodGuard(d, closed)); };
+  const same = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
+  let refused = 0;
+  const guardList = (was: any[], now: any[]): any[] => {
+    const before = new Map((was || []).map((x: any) => [String(x?.id), x])); const nowIds = new Set((now || []).map((x: any) => String(x?.id)));
+    const out: any[] = [];
+    (now || []).forEach((x: any) => { const w = before.get(String(x?.id)); if (w && same(w, x)) { out.push(x); return; }
+      if (shut(x) || (w && shut(w))) { refused++; if (w) out.push(w); return; } out.push(x); });
+    (was || []).forEach((w: any) => { if (!nowIds.has(String(w?.id)) && shut(w)) { refused++; out.push(w); } });
+    return out;
+  };
+  if (!nestedKey) return { list: guardList(prev, next), refused };
+  const before = new Map(prev.map((x: any) => [String(x?.id), x]));
+  const list = next.map((x: any) => { const w = before.get(String(x?.id)); if (!w || !x || same(w[nestedKey], x[nestedKey])) return x;
+    const lines = guardList(w[nestedKey] || [], x[nestedKey] || []); return same(lines, x[nestedKey]) ? x : { ...x, [nestedKey]: lines }; });
+  return { list, refused };
+}

@@ -11,7 +11,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
-import { stampSiteIds, ensureUsedBuiltinsAreOrdinary, usedLocationIds , registerCounterpartyLocations } from "./locations";
+import { stampSiteIds, setPartiesForPlaces } from "./locations";
 import { normaliseLot } from "./seasonOps.domain";
 import { normalisePO } from "./po.domain";
 import { normaliseSO } from "./so.domain";
@@ -23,7 +23,7 @@ import { normaliseCounterparty } from "./counterparty.domain";
    // v6.99.127
 import { useSingleTab } from "./useSingleTab";   // v6.99.114 (AUD-02)
 import { useSharedStore, SharedStoreStatus, EnvironmentStrip } from "./SharedStoreGate";   // v6.99.148–149
-import { setFxSettings as applyFxSettings, fetchNbpRates, ensureNbpRange } from "./fx";   // v7.13.x (A-AU-2)
+import { setFxSettings as applyFxSettings, ensureNbpRange, refreshNbp } from "./fx";   // v7.13.x (A-AU-2)
 import { poDirectFromSOs, directSync } from "./tradeFlow.domain";
 import Claims from "./Claims";
 import { localTodayISO, addDaysISO } from "./dates";
@@ -38,11 +38,10 @@ import { appendAudit, splitAuditOverflow, archiveAudit } from "./auditTrail.doma
 import AuditTrail from "./AuditTrail";
 
 import { fxDatesNeeded, fxFillInvoice } from "./fxNbp.domain";   // v7.13.1 / v7.13.3 (A-AU-11 / A-AU-2)
-import { periodGuard } from "./periodClose.domain";   // v7.13.1 (A-AU-11): closed months are not re-rated
+import { periodGuard , closedPeriodFilter } from "./periodClose.domain";   // v7.13.1 (A-AU-11): closed months are not re-rated
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
 import Invoices from "./Invoices";
-import { migrateLegacyInvoices } from "./invoicing";   // v7.21.4 (A-ST-10)
 import { syncOverheadOpCosts } from "./operationalCosts";
 
 import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn, hasOwner } from "./permissions.domain";
@@ -53,6 +52,7 @@ import { linkSpellingOnDocs } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { linkSaleDestinationOn } from "./locations";   // v7.18.1 (A-AU-3)
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
+import { importedTwice } from "./invoicing";   // v7.34.1
 import { IdleSignOut } from "./IdleSignOut";   // v7.30.3 (Batch M · M-4)
 import { shapingSetter, shapeWritten, shapeShipment, shapeClaim } from "./storeShapes";   // v7.24.3 (FZ-01 step 2): a save writes the clean shape
 import { withLiveCompanies } from "./counterparty.domain";   // v7.25.0 (A-RV-13 / FZ-02)
@@ -164,7 +164,15 @@ export default function App() {
   const [packagingTypes, setPackagingTypes] = useLocalStoredState("packagingTypes", PACKAGING_SEED);
   const [claims, setClaimsRaw] = useLocalStoredState("claims", []);
   // v7.30.14 (owner test 21 Oct): the place module's copy of the companies' addresses follows the Directory as it changes
-  useEffect(() => { try { registerCounterpartyLocations(contacts || []); } catch { /* the pickers read the Directory anyway */ } }, [contacts]);
+  setPartiesForPlaces(contacts || []);   // v7.32.0 (FZ-04a): the places read the Parties' live list — no copy anywhere
+  // v7.32.2 (INV-QC): a company created in Parties from an invoice — the invoices it came for are linked to it, then back to Invoices
+  useEffect(() => {
+    const h = (e: any) => { const d = e?.detail || {}; const ids = new Set((d.linkInvoices || []).map(String)); if (!d.id || !ids.size) return;
+      setInvoices((prev: any[]) => (prev || []).map((x: any) => x && ids.has(String(x.id)) && !(x.counterparty && x.counterparty.id) ? { ...x, counterparty: { ...(x.counterparty || {}), id: d.id, name: d.name } } : x));
+      (invoices || []).filter((x: any) => x && ids.has(String(x.id))).forEach((x: any) => recordAudit({ module: "Invoices", docType: "Invoice", docNumber: String(x.number || ""), action: "updated", summary: `Company linked by id: ${d.name} (created in Parties from invoice ${d.fromInvoice || ""}) — INV-QC` }));
+      if (d.returnTo) navigateRef.current(d.returnTo); };
+    window.addEventListener("marianna:companyCreated", h); return () => window.removeEventListener("marianna:companyCreated", h);
+  }, [invoices]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v7.30.2 (Batch M · M-3): a save that asked for a number the shared counter could not give stops before writing anything; say so
   useEffect(() => {
     const onRefusal = (ev: PromiseRejectionEvent) => { const r: any = ev && ev.reason; if (r && r.name === "NumberingUnavailable") { ev.preventDefault(); uiAlert({ tone: "warn", title: "Not saved", message: String(r.message) }); } };   // the app's own window (A-RV-17)
@@ -218,16 +226,37 @@ export default function App() {
   setOurCountry(String((company as any)?.country || "").trim() || COMPANY_DEFAULTS.country);   // v7.19.6 (A-TD-5): the trade-direction rule reads Settings → Company
   const [numbering, setNumbering] = useLocalStoredState("numbering", {});
   // FX auto (owner): NBP table A on load — sets the reference rates when reachable; manual values win when typed.
-  useEffect(() => { fetchNbpRates().then(r => { if (r) setFxSettings((prev: any) => ({ ...(prev || {}), ...(r as any), _nbp: (r as any)._date })); });   /* v7.13.0 (A-AU-2): today's NBP wins over old typed rates */ // eslint-disable-next-line react-hooks/exhaustive-deps
+  // v7.33.2 (FX-1, owner 26 Oct): the NBP tables of the last fortnight are read at start, when the day changes and when the window comes back
+  // into view -- no copy of a "latest table" is written into the shared settings any more (it went stale while a window stayed open)
+  const [, setNbpTick] = useState(0);
+  useEffect(() => {
+    let day = localTodayISO(); const refresh = () => { refreshNbp().then(() => setNbpTick(x => x + 1)); };
+    refresh();
+    const onShow = () => { if (document.visibilityState === "visible") refresh(); };
+    const timer = window.setInterval(() => { const now = localTodayISO(); if (now !== day) { day = now; refresh(); } }, 60000);
+    document.addEventListener("visibilitychange", onShow);
+    return () => { document.removeEventListener("visibilitychange", onShow); window.clearInterval(timer); };
   }, []);
   useEffect(() => { applyFxSettings(fxSettings || {}); }, [fxSettings]);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
+  const [bankLines, setBankLines] = useLocalStoredState<any>("bankLines", { lines: [], done: {} });   // v7.34.0 (BANK-1)
   // v7.13.1 (A-AU-11) + v7.13.3 (A-AU-2), owner 9 Oct: a foreign-currency invoice carries the NBP rate of the last working day BEFORE
   // its issue date, and every payment the rate of the last working day before the day the money was received. Whatever is not yet
   // rated from NBP is filled when NBP is reachable (fxTableDate marks a rated invoice / payment) — the invoices imported before
   // v7.13 carried today's reference instead (4.3228 on all 34 EUR invoices of the 2 Oct file). Closed months are never changed;
   // they are named once. Each change goes to the audit trail.
   const fxClosed = (d: any) => !!periodGuard(d, closedPeriods || []);
+  // v7.40.0 (AUD3-L1): every screen's change goes through the closed-month guard — notes, operational costs, shipment cost lines, lot
+  // movements, invoice payments dated in a closed month are kept as they were, and the person is told why
+  const guarded = (setter: any, label: string, dateOf: (x: any) => any, nestedKey?: string) => (upd: any) => setter((prev: any[]) => {
+    const next = typeof upd === "function" ? upd(prev) : upd; const r = closedPeriodFilter(prev as any[], next, dateOf, closedPeriods || [], nestedKey);
+    if (r.refused) setTimeout(() => { uiAlert({ tone: "warn", title: "Closed month", message: `${r.refused} ${label} dated in a closed month ${r.refused === 1 ? "was" : "were"} not changed. Reopen the month first (Settings).` }); }, 0);
+    return r.list; });
+  const setFinanceNotesG = guarded(setFinanceNotes, "credit / debit note(s)", (n: any) => n?.date);
+  const setOperationalCostsG = guarded(setOperationalCosts, "operational cost(s)", (c: any) => c?.date);
+  const setShipmentsG = guarded(setShipments, "shipment cost line(s)", (c: any) => c?.date, "costs");
+  const setLotsG = guarded(setLots, "stock movement(s)", (m: any) => m?.date, "movements");
+  const setInvoicesG = guarded(setInvoices, "payment(s)", (p: any) => p?.date, "payments");
   const fxPendingKey = fxDatesNeeded(invoices || [], fxClosed).join(",");
   React.useEffect(() => {
     let cancelled = false;
@@ -296,17 +325,9 @@ export default function App() {
 
   // v7.21.13 (FZ-15): the id counter is primed by every store as it is read or pulled (useLocalStoredState) — no longer seven of them here
 
-  // Fold the four legacy invoice representations (SO pendingInvoices, warehouse
-  // invoices, invoice-backed operational costs) into the unified Invoicing model.
-  // Idempotent by source tag — safe to run on every relevant change; never duplicates.
-  useEffect(() => {
-    setInvoices((prev: any[]) => {
-      const merged = migrateLegacyInvoices({ existing: prev || [], operationalCosts });   // v7.22.1 (FZ-12): no purchase invoice is invented from an order
-      return merged.length !== (prev || []).length ? merged : prev;
-    });
-    // v7.24.1 (FZ-01): the pending invoices of the orders were stripped long ago — the strip went (no change on either copy, 15 Oct)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [operationalCosts]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // v7.33.1 (INV-PDF / FZ-11, owner 26 Oct): no operational cost is copied into the register at start any more — an invoice enters through
+  // its own door: a Polish one from Fakturownia (with its id, NIP, address and PDF), a foreign one with + Cost invoice and its PDF;
+  // an operational cost is a cost without an invoice (the form says so when an invoice number is typed)
 
   // v6.82.0 (Round 6): packaging types saved before v6.46 lack boxesPerPallet/palletTareKg —
   // backfill from the seed by id/label so pallet tables split correctly.
@@ -327,7 +348,7 @@ export default function App() {
 
   // v6.99.11: pickers may ask to open the Directory ("＋ Add it in the Directory…") — never free text.
   const navigateRef = useRef<(m: string) => void>(() => {});   // v6.99.58 (A-US-2)
-  useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); if (e?.detail?.newLocationFor) window.sessionStorage.setItem("marianna:contactsNewLocFor", JSON.stringify(e.detail.newLocationFor)); } catch {} };   /* v7.18.1 (A-AU-3): "+ Add a site for this client" from a sale */ window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
+  useEffect(() => { const h = (e: any) => { const target = String(e?.detail?.module || "contacts"); navigateRef.current(target);   /* v6.99.58 (A-US-2): guarded like every other jump · v7.33.1: to the module asked for */ if (target !== "contacts") return; try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); if (e?.detail?.newLocationFor) window.sessionStorage.setItem("marianna:contactsNewLocFor", JSON.stringify(e.detail.newLocationFor)); if (e?.detail?.newCompany) window.sessionStorage.setItem("marianna:contactsNewCompany", JSON.stringify(e.detail.newCompany)); } catch {} };   /* v7.32.2 (INV-QC) */   /* v7.18.1 (A-AU-3): "+ Add a site for this client" from a sale */ window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
 
   // v6.68.0 (D-34): SINGLE-ENTRY OVERHEAD — every register invoice with cost
   // scope OVERHEAD mirrors into exactly one operational cost (replace-by-ref
@@ -349,7 +370,7 @@ export default function App() {
   const shared = useSharedStore(userName || "");   // v6.99.148: the shared store — login + pull when configured, otherwise nothing
   // v7.3.4 (A-LOC-2): a built-in place still used by a document becomes an ordinary location (same id) — re-checked whenever the
   // data changes (idempotent), so it also lands after the shared data has been pulled and reaches everyone
-  useEffect(() => { try { const n = ensureUsedBuiltinsAreOrdinary(usedLocationIds({ pos, orders, lots, shipments })); if (n) recordAudit({ module: "Parties", docType: "Locations", docNumber: "built-in", action: "updated", summary: `${n} built-in place(s) used by documents became ordinary locations (same ids)` }); } catch { /* never blocks the start */ } }, [shared.ready, (pos || []).length, (orders || []).length, (lots || []).length, (shipments || []).length]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // v7.32.0 (FZ-04a): nothing is copied back from a list in the code any more — every place is an address in Parties
   // v7.1.0 (A-USR-1, owner 6 Oct): on the shared copy the SIGNED-IN e-mail decides who you are — the typed "Your name" is ignored there
   const signInEmail = readSession()?.email || "";   // v7.21.0 (A-RV-19): the app runs only on the shared data
   const who = effectiveUserName(users, userName, signInEmail);
@@ -422,23 +443,23 @@ export default function App() {
       case "dashboard":
         return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate} onOpenFilter={(m: string, flt: string) => { setShipmentsFilter(flt); navigate(m); }}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={who} integrityIssues={integrityIssuesForDashboard} />;
       case "claims":
-        return <Claims key={"clm-" + (openDocNum.module === "claims" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "claims" ? openDocNum.number : ""} archive={archive} claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
+        return <Claims key={"clm-" + (openDocNum.module === "claims" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "claims" ? openDocNum.number : ""} archive={archive} claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLotsG} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotesG} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoicesG} inspections={inspections} />;
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
-        return <Finance packagingTypes={packagingTypes} focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
+        return <Finance packagingTypes={packagingTypes} focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLotsG} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCostsG} invoices={invoices} setInvoices={setInvoicesG} financeNotes={financeNotes} setFinanceNotes={setFinanceNotesG} bankLines={bankLines} setBankLines={setBankLines} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
-        return <Contacts onLinkSaleDestination={linkSaleDestination} contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims}  users={users} userName={who}  lots={lots} />;
+        return <Contacts onLinkSaleDestination={linkSaleDestination} contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims}  users={users} userName={who}  lots={lots} setPOs={setPOs} setOrders={setOrders} setLots={setLotsG} setShipments={setShipmentsG} />;
       case "pos":
-        return <PurchaseOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={() => navigate("finance")} key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={liveCatalog} setProductCatalog={setProductCatalog}  packagingTypes={livePackaging} setPackagingTypes={setPackagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} financeNotes={financeNotes} setInvoices={setInvoices}  users={users} userName={who}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
+        return <PurchaseOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={() => navigate("finance")} key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLotsG} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={liveCatalog} setProductCatalog={setProductCatalog}  packagingTypes={livePackaging} setPackagingTypes={setPackagingTypes}  setShipments={setShipmentsG}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotesG} financeNotes={financeNotes} setInvoices={setInvoicesG}  users={users} userName={who}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
       case "lots":
-        return <Inventory users={users} userName={who} key={"lot-" + (openDocNum.module === "lots" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "lots" ? openDocNum.number : ""} archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
+        return <Inventory users={users} userName={who} key={"lot-" + (openDocNum.module === "lots" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "lots" ? openDocNum.number : ""} archive={archive} lots={lots} setLots={setLotsG} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipmentsG} pos={pos} invoices={invoices} setInvoices={setInvoicesG} financeNotes={financeNotes} setFinanceNotes={setFinanceNotesG} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
       case "orders":
-        return <SalesOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={(o: any) => { setResultFocus({ number: o?.number, n: Date.now() }); navigate("finance"); }} inspections={inspections} key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={livePackaging} setPackagingTypes={setPackagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userName={who} productCatalog={liveCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
+        return <SalesOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={(o: any) => { setResultFocus({ number: o?.number, n: Date.now() }); navigate("finance"); }} inspections={inspections} key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={livePackaging} setPackagingTypes={setPackagingTypes} invLots={lots} setLots={setLotsG} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipmentsG} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoicesG} financeNotes={financeNotes} setFinanceNotes={setFinanceNotesG} userName={who} productCatalog={liveCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
-        return <Shipments key={"shp-" + (openShipmentNumber || shipmentsFilter || "list")} claims={claims} initialStatusFilter={shipmentsFilter} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={liveCatalog} userName={who} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={livePackaging} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
+        return <Shipments key={"shp-" + (openShipmentNumber || shipmentsFilter || "list")} claims={claims} initialStatusFilter={shipmentsFilter} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={liveCatalog} userName={who} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipmentsG} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLotsG} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={livePackaging} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":
-        return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} setLots={setLots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts}  closedPeriods={closedPeriods} />;
+        return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoicesG} notes={financeNotes} setNotes={setFinanceNotesG} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipmentsG} setOrders={setOrders} lots={lots} setLots={setLotsG} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCostsG}  closedPeriods={closedPeriods} />;
       case "settings":
         return <Settings roles={roles} setRoles={setRoles} seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userName={who} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} onLinkPackagingSpelling={linkPackagingSpelling}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
       default:
@@ -451,13 +472,14 @@ export default function App() {
   const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog } as any).issues,   /* v7.21.13: + the audit log, for shared ids */ // eslint-disable-next-line react-hooks/exhaustive-deps
     [contacts, pos, lots, orders, shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog]);
 
-  if (!shared.ready) return <><IdleSignOut active={!!readSession()} />{/* v7.30.3 (Batch M · M-4) */}{dialogNode}{shared.node}</>;   // v6.99.148: sign in / loading the shared data
+  if (!shared.ready) return <>{dialogNode}{shared.node}</>;   // v6.99.148: sign in / loading the shared data
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>{dialogNode}
       <EnvironmentStrip />{/* v6.99.149 */}
       {(users || []).length > 0 && !hasOwner(users) && <div style={{ background: "#FEF3C7", color: "#92400E", borderBottom: "1px solid #FDE68A", textAlign: "center", fontSize: 12, fontWeight: 700, padding: "6px 0", flexShrink: 0 }}>No owner with a sign-in e-mail is defined in Settings → Users. Until there is one, Settings is open to every signed-in person — set the owner and their e-mail now.</div>}{/* v7.1.14 */}
       {tab.readOnly && (   /* v6.99.114 (AUD-02): a second tab of the app in this browser is read-only — two writing tabs overwrite each other */
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {dialogNode}<IdleSignOut active={!!readSession()} />{/* v7.34.1 (owner 26 Oct: "the repairs do nothing"): the app's confirm windows were drawn only on the sign-in screen — every confirm asked in the running app stayed invisible */}
           <div style={{ background: "#fff", borderRadius: 14, padding: "22px 26px", width: 460, maxWidth: "92vw", boxShadow: "0 24px 60px rgba(0,0,0,0.3)" }}>
             <div style={{ fontSize: 16, fontWeight: 800, color: "#111" }}>MARIANNA is already open in another tab</div>
             <div style={{ fontSize: 13, color: "#475569", marginTop: 8, lineHeight: 1.5 }}>Two tabs writing at once would overwrite each other's work, so this one is read-only. Close it, or take the pen: the other tab then becomes read-only.</div>
@@ -533,11 +555,15 @@ export default function App() {
           <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} /> include archived{archivedSeasons.length ? ` (${archivedSeasons.join(", ")})` : ""}
         </label>
         <IntegrityBadge
-          data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog }}
+          data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, allPos: pos, allLots: lots, allOrders: orders, allShipments: shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog }}
           onNavigate={navigate}
-          onRepair={async (kind: "orphanLots" | "danglingLinks") => {   // v6.99.51 (A-FS-2)
-            if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !(await uiConfirm({ title: "Please confirm", message: `Delete ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock. They stay on record, struck through.` }))) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).map((l: any) => ids.has(l.id) ? { ...l, status: "Cancelled", deletedAt: localTodayISO(), deletedReason: "orphan — its PO no longer exists" } : l));   /* v7.17.1 (A-RV-07): marked Deleted, not removed */ recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) deleted (kept on record): ${ol.map((l: any) => l.number).join(", ")}` }); }
-            if (kind === "danglingLinks") { const dl = danglingLinks(invoices, claims, pos, orders, shipments); const n = dl.invoices.length + dl.claims.length; if (!n || !(await uiConfirm({ title: "Please confirm", message: `Unlink ${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) from documents that no longer exist?` }))) return;
+          onRepair={async (kind: "orphanLots" | "danglingLinks" | "importedTwice") => {   // v6.99.51 (A-FS-2)
+            if (kind === "orphanLots") { const ol = orphanLotsToRemove(live.lots, pos); if (!ol.length) { await uiAlert({ tone: "info", title: "Nothing to repair", message: "No lot points at a purchase order that does not exist (last season's archived orders count as existing)." }); return; } if (!(await uiConfirm({ title: "Please confirm", message: `Delete ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock. They stay on record, struck through.` }))) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).map((l: any) => ids.has(l.id) ? { ...l, status: "Cancelled", deletedAt: localTodayISO(), deletedReason: "orphan — its PO no longer exists" } : l));   /* v7.17.1 (A-RV-07): marked Deleted, not removed */ recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) deleted (kept on record): ${ol.map((l: any) => l.number).join(", ")}` }); }
+            if (kind === "importedTwice") { const tw = importedTwice(invoices, operationalCosts); const n = tw.invoices.length; if (!n || !(await uiConfirm({ title: "Please confirm", message: `Remove ${n} invoice(s) imported twice (the original kept, with its Fakturownia link)${tw.opCosts.length ? ` and ${tw.opCosts.length} duplicate cost line(s)` : ""}?`, confirmLabel: "Remove" }))) return;
+              const gone = new Set(tw.invoices.map(String)), goneOp = new Set(tw.opCosts.map(String));
+              setInvoices((prev: any[]) => (prev || []).filter((i: any) => !gone.has(String(i?.id)))); if (goneOp.size) setOperationalCosts((prev: any[]) => (prev || []).filter((c: any) => !goneOp.has(String(c?.id))));
+              recordAudit({ module: "System", docType: "Repair", docNumber: "IMPORTED-TWICE", action: "deleted", summary: `${n} invoice(s) imported twice removed (originals kept) — v7.34.1` }); return; }
+            if (kind === "danglingLinks") { const dl = danglingLinks(invoices, claims, pos, orders, shipments); const n = dl.invoices.length + dl.claims.length; if (!n) { await uiAlert({ tone: "info", title: "Nothing to repair", message: "Every invoice and claim points at documents that exist (archived ones included)." }); return; } if (!(await uiConfirm({ title: "Please confirm", message: `Unlink ${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) from documents that no longer exist?` }))) return;
               const bad = new Map<string, Set<string>>(dl.invoices.map(x => [String(x.id), new Set<string>(x.links.map((l: any) => l.type + ":" + l.number))]));
               setInvoices((prev: any[]) => (prev || []).map((i: any) => bad.has(String(i.id)) ? { ...i, links: (i.links || []).filter((l: any) => !bad.get(String(i.id))!.has(l.type + ":" + l.number)) } : i));
               const badC = new Map<string, Set<string>>(dl.claims.map(x => [String(x.id), new Set<string>(x.subjects.map((s: any) => s.kind + ":" + s.ref))]));

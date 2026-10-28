@@ -14,17 +14,17 @@ import { fetchDepartments } from "./fakturownia";
 import { mapDepartments } from "./fakturowniaDepartments.domain";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, fakturowniaStatus } from "./fakturownia";   // v7.21.1 (AUD-49): the token lives in the server part
 import { addCatalogItem, addCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode, addCatalogValue } from "./productCatalog";   // v7.18.3: + addCatalogValue   // v7.17.1: removals are soft deletes (masterData.domain)
-import { referencesToLocation } from "./referenceGuards";
 import { MODULE_KEYS, FINANCE_KEYS, usersGaps } from "./permissions.domain";
 import { CN_CODES, suggestCN } from "./cnCodes";   // v7.21.6: + suggestCN, shown in the product catalogue
 import { nextId as mintId } from "./ids";
 import { renameCatalogItem } from "./productCatalog";
-import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
+
 import { DEFAULT_SEASON, seasonsPresent, currentSeason, docSeason, sliceSeason, removeSeason, appendArchive, STORE_KIND } from "./season.domain";
 import { recordAudit } from "./audit";
 import { localTodayISO , formatDMY } from "./dates";
 import { packagingUsers, catalogUsers, namedList, softDeleteCatalogItem, restoreCatalogItem, softDeleteVariety, catalogValueUsers, softDeleteCatalogValue, valuesInUse } from "./masterData.domain";   // v7.17.1 (A-RV-07) · v7.18.3 (A-AU-5)
 import { parseNum } from "./numbers";
+import { nbpHeld, refreshNbp, fxRateFor } from "./fx";
 import { typedPackagingSpellings } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { readCountries } from "./Contacts";   // v7.19.6 (A-TD-5): the company's country from the one country list
 import { counterInstalled } from "./numbering";   // v7.27.8 (A-W5)
@@ -150,107 +150,6 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
   );
 }
 
-function LocationsPanel({ refStores = {} }: any) {
-  const { confirm: lpConfirm, alert: lpAlert, dialogNode: lpNode } = useConfirm(); // P2-6
-  const [q, setQ] = React.useState("");
-  const [typeFilter, setTypeFilter] = React.useState("All");
-  const [editingId, setEditingId] = React.useState<any>(null);
-  const [edit, setEdit] = React.useState<any>({});
-  const [add, setAdd] = React.useState<any>({ name: "", type: "Port", country: "", address: "" });
-  const overrides = readLocationOverrides();
-  // v6.38.0: this list manages ONLY built-in and custom locations. Party-derived
-  // addresses (suppliers/clients/warehouses) and logistics points remain in every
-  // picker but are managed in Parties — they don't belong in this list and were
-  // the "can't delete / wrong data" confusion.
-  const sourceOf = (l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE ? "Custom" : "Built-in";
-  // v6.43.0 (test-round #12): this manager is for PORTS only. Built-in party
-  // facilities (rented warehouse / supplier / client / customs) belong to the
-  // Parties module — they were wrongly mixed into the built-in seed here and
-  // couldn't be deleted. We now show only genuine Port-type built-ins; custom
-  // entries the user added stay visible and manageable. Party facilities are
-  // unaffected in storage and still feed the pickers via counterpartyLocations.
-  const PORT_TYPES = new Set(["Port", "PortWarehouse"]);
-  const locs = allLocations().filter((l: any) =>
-    Number(l.id) < LOGISTICS_POINT_BASE &&
-    (sourceOf(l) === "Custom" || PORT_TYPES.has(String(l.type))));
-  const types = ["All", ...Array.from(new Set(locs.map((l: any) => l.type)))];
-  const shown = locs.filter((l: any) => (typeFilter === "All" || l.type === typeFilter) &&
-    (!q.trim() || `${l.name} ${l.country} ${l.address || ""}`.toLowerCase().includes(q.trim().toLowerCase())));
-  const reloadNote = async () => { await lpAlert({ tone: "info", title: "Saved", message: "The app will reload so all location pickers see the change." }); window.location.reload(); };
-  const startEdit = (l: any) => { setEditingId(l.id); setEdit({ name: l.name, country: l.country || "", address: l.address || "" }); };
-  const saveEdit = (l: any) => {
-    const src = sourceOf(l);
-    if (src === "Custom") updateCustomLocation(Number(l.id), { name: edit.name, country: edit.country, address: edit.address });
-    else if (src === "Built-in") writeLocationOverride(Number(l.id), { name: edit.name, country: edit.country, address: edit.address });
-    reloadNote();
-  };
-  const inp = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: "100%" } as any;
-  return (
-    <Card style={{ marginBottom: 16 }}>
-      {lpNode}
-      <SectionTitle>PORTS &amp; LOCATIONS <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· feeds port pickers, the over-ship guard and transport-order addresses</span></SectionTitle>
-      <div style={{ fontSize: 11, color: "#64748B", margin: "6px 0 12px" }}>
-        Add your own ports, port/transshipment warehouses or facilities here — they appear in every location picker.
-        Built-in reference locations can be edited too (e.g. put the real transshipment-warehouse address on a port) — shown with an <span style={{ color: "#B45309", fontWeight: 700 }}>edited</span> mark.
-        Supplier / client / warehouse addresses and forwarders' relay points are <strong>not listed here</strong> — they live in <strong>Parties</strong> (and still appear in every location picker automatically).
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.1fr 0.9fr 1.6fr auto", gap: 8, alignItems: "end", marginBottom: 12, background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: 10 }}>
-        <div><Lbl>Name</Lbl><input style={inp} value={add.name} onChange={e => setAdd((a: any) => ({ ...a, name: e.target.value }))} placeholder="e.g. Luka Koper CFS warehouse" /></div>
-        <div><Lbl>Type</Lbl><select style={inp} value={add.type} onChange={e => setAdd((a: any) => ({ ...a, type: e.target.value }))}>{CUSTOM_LOCATION_TYPE_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}</select></div>
-        <div><Lbl>Country</Lbl><input style={inp} value={add.country} onChange={e => setAdd((a: any) => ({ ...a, country: e.target.value }))} placeholder="Slovenia" /></div>
-        <div><Lbl>Address</Lbl><input style={inp} value={add.address} onChange={e => setAdd((a: any) => ({ ...a, address: e.target.value }))} placeholder="street, city — printed on transport orders" /></div>
-        <button disabled={!add.name.trim()} onClick={() => { addCustomLocation({ name: add.name, country: add.country, type: add.type, address: add.address }); reloadNote(); }}
-          style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: add.name.trim() ? "#111" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: add.name.trim() ? "pointer" : "not-allowed" }}>+ Add</button>
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        <input style={{ ...inp, maxWidth: 260 }} value={q} onChange={e => setQ(e.target.value)} placeholder="Search name / country / address…" />
-        <select style={{ ...inp, maxWidth: 180 }} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>{types.map(t => <option key={String(t)}>{String(t)}</option>)}</select>
-        <div style={{ fontSize: 11, color: "#94A3B8", alignSelf: "center" }}>{shown.length} of {locs.length}</div>
-      </div>
-      <div style={{ maxHeight: 340, overflowY: "auto", border: "1px solid #F1F5F9", borderRadius: 8 }}>
-        {shown.map((l: any) => {
-          const src = sourceOf(l);
-          const overridden = src === "Built-in" && !!overrides[String(l.id)];
-          const editable = src === "Custom" || src === "Built-in";
-          const isEd = editingId === l.id;
-          return (
-            <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.5fr 0.9fr 0.8fr 1.7fr 0.9fr auto", gap: 8, padding: "7px 10px", borderBottom: "1px solid #F8FAFC", fontSize: 12, alignItems: "center" }}>
-              {isEd ? <input style={inp} value={edit.name} onChange={e => setEdit((x: any) => ({ ...x, name: e.target.value }))} />
-                    : <div style={{ fontWeight: 600 }}>{l.name}{overridden && <span style={{ marginLeft: 6, fontSize: 10, color: "#B45309", fontWeight: 700 }}>edited</span>}</div>}
-              <div style={{ color: "#64748B" }}>{l.type}</div>
-              {isEd ? <input style={inp} value={edit.country} onChange={e => setEdit((x: any) => ({ ...x, country: e.target.value }))} /> : <div style={{ color: "#64748B" }}>{l.country}</div>}
-              {isEd ? <input style={inp} value={edit.address} onChange={e => setEdit((x: any) => ({ ...x, address: e.target.value }))} placeholder="address" /> : <div style={{ color: "#94A3B8", fontSize: 11 }}>{l.address || "—"}</div>}
-              <div style={{ fontSize: 10, color: src === "Built-in" ? "#64748B" : src === "Custom" ? "#0369A1" : "#7C3AED" }}>{src}</div>
-              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                {isEd ? (<>
-                  <button onClick={() => saveEdit(l)} style={{ border: "none", background: "#111", color: "#fff", borderRadius: 6, fontSize: 11, padding: "4px 10px", cursor: "pointer", fontWeight: 700 }}>Save</button>
-                  <button onClick={() => setEditingId(null)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}>Cancel</button>
-                </>) : (<>
-                  {editable && <button onClick={() => startEdit(l)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Edit</button>}
-                  {overridden && <button title="Restore the built-in details" onClick={() => { clearLocationOverride(Number(l.id)); reloadNote(); }} style={{ border: "1px solid #FDE68A", background: "#fff", color: "#B45309", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Reset</button>}
-                  {src === "Custom" && <button onClick={async () => {
-                    // v6.63.0 (D-04, M8): a location still referenced by lots, movements,
-                    // shipments/legs, PO/SO destinations or a warehouse tariff must not be
-                    // removable — removing it blanked the lot's location with no fallback.
-                    const refs = referencesToLocation(Number(l.id), refStores);
-                    if (refs.total > 0) {
-                      await lpAlert({ tone: "warn", title: `${l.name} is still in use`, message: `It can't be removed while referenced by:\n\n${refs.blockers.map((b: string) => "• " + b).join("\n")}\n\nRe-point or complete those documents first; an unused location can then be removed.` });
-                      return;
-                    }
-                    if (await lpConfirm({ tone: "danger", title: `Delete ${l.name}?`, message: "Nothing references this location. It will be deleted.", confirmLabel: "Delete" })) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Delete</button>}
-                </>)}
-              </div>
-            </div>
-          );
-        })}
-        {shown.length === 0 && <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12 }}>No locations match.</div>}
-      </div>
-    </Card>
-  );
-}
-
-
-// ── v6.38.0 (R1-C): full-screen editor window for the reference-data managers ──
 function FullScreenModal({ title, onClose, children }: any) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 70, display: "flex", alignItems: "stretch", justifyContent: "center", padding: "3vh 3vw" }} onClick={onClose}>
@@ -688,6 +587,7 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles:
 
 // ── v6.99.0 (FN-7): REFERENCE FX RATES — the season's rates, set by the owner; documents still lock their own rate ──
 function FxSettingsPanel({ fxSettings = {}, setFxSettings = null }: any) {
+  const [, setNbpTick] = useState(0);   // v7.33.2 (FX-1): re-drawn after "Refresh now"
   // v7.13.0 / v7.13.4 (A-AU-2, owner 9 Oct): the rates are NBP's, read automatically — nothing typed. Documents take the NBP rate of the
   // last working day before their own date. The one choice here is the safety buffer on ORDERS, saved with an explicit Save (A-SET-1).
   const [buf, setBuf] = React.useState<string>(String(fxSettings?._bufferPct ?? fxSettings?._BUFFERPCT ?? ""));
@@ -696,9 +596,9 @@ function FxSettingsPanel({ fxSettings = {}, setFxSettings = null }: any) {
   const n = parseNum(buf); const valid = buf === "" || (isFinite(n) && n >= 0 && n < 50);
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
-      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Exchange rates — NBP{fxSettings?._nbp ? <span style={{ fontSize: 11, fontWeight: 500, color: "#16A34A", marginLeft: 8 }}>table A of {String(fxSettings._nbp).replace(/(\d{4})(\d{2})(\d{2})/, "$3/$2/$1")} read</span> : <span style={{ fontSize: 11, fontWeight: 500, color: "#92400E", marginLeft: 8 }}>NBP not reached yet</span>}</div>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Exchange rates — NBP{(() => { const h = nbpHeld(); return h.latest ? <span data-nbp-held="1" style={{ fontSize: 11, fontWeight: 500, color: "#16A34A", marginLeft: 8 }}>tables of {h.days} working day(s) held, the newest of {h.latest.split("-").reverse().join("/")}</span> : <span style={{ fontSize: 11, fontWeight: 500, color: "#B45309", marginLeft: 8 }}>no NBP table read yet</span>; })()} <button type="button" onClick={() => { refreshNbp().then(() => setNbpTick((x: number) => x + 1)); }} style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer" }}>Refresh now</button></div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Read from NBP automatically. Every invoice, payment and order takes the NBP rate of the last working day <b>before</b> its own date; these are today's, for reference.</div>
-      <div data-fx-reference="1" style={{ display: "flex", gap: 16, fontSize: 12, marginBottom: 12 }}>{["EUR", "USD", "GBP"].map(c => <span key={c}>{c} <b>{fxSettings?.[c] ? Number(fxSettings[c]).toFixed(4) : "—"}</b></span>)}</div>
+      <div data-fx-reference="1" style={{ display: "flex", gap: 16, fontSize: 12, marginBottom: 12 }}>{["EUR", "USD", "GBP"].map(c => { const r = fxRateFor(c); return <span key={c}>{c} <b>{r ? Number(r).toFixed(4) : "-"}</b></span>; })}</div>
       <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Safety buffer on orders (%)</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>A sale is priced at the NBP rate <b>less</b> this %, a purchase at the rate <b>plus</b> it — the margin you see already allows for a weaker euro at payment. Invoices and payments never take it.</div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -944,6 +844,8 @@ export default function Settings({ roles = [], setRoles = null,
       {   // v7.21.0 (A-RV-19): a backup is only ever restored into the shared data — there is no browser of its own to import into
         { const meU = userBySignIn(users || [], readSession()?.email); if (!meU || !meU.isOwner) { setMessage({ kind: "error", text: "Only the owner can restore a backup into the shared data." }); return; } }   // v7.2.4 (A-SET-4)
         let parsed: any; try { parsed = storesFromExport(result); } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; }
+        // v7.37.0 (AUD3-A3): a backup whose users list has no owner with an e-mail would put the shared rules back into setup mode — refused
+        { const us = Array.isArray(parsed?.stores?.users) ? parsed.stores.users : null; if (us && !us.some((u: any) => u && u.isOwner && String(u.email || "").trim())) { setMessage({ kind: "error", text: "This backup has no owner linked to an e-mail — restoring it would open the shared rules to everyone. Link the owner in that file's users list, or restore a newer backup." }); return; } }
         const word = (await uiPrompt({ message: `RESTORE this file into the SHARED data${ENV_LABEL ? ` (${ENV_LABEL})` : ""} — for everyone?\n\nFile: ${file.name}\nExported: ${String(parsed.meta?.exportedAt || "?").replace("T", " ").slice(0, 16)}, app ${parsed.meta?.appVersion || "?"}\nIt holds: ${parsed.summary}\n\nEvery colleague's screen will show this data. The shared copy as it is now will be downloaded first.\n\nType RESTORE to go ahead:`, defaultValue: "" }));
         if (String(word || "").trim().toUpperCase() !== "RESTORE") { setMessage({ kind: "info", text: "Restore not done (the confirmation word was not typed)." }); return; }
         try {
@@ -1062,7 +964,6 @@ export default function Settings({ roles = [], setRoles = null,
         )}
         {manage === "locations" && (
           <FullScreenModal title="Ports & locations" onClose={() => setManage(null)}>
-            <LocationsPanel refStores={refStores} />
           </FullScreenModal>
         )}
 

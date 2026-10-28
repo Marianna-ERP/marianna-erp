@@ -27,6 +27,7 @@ import { nbpRateBefore } from "./fx";   // v7.18.6 (A-AU-12)
 import { parseNum } from "./numbers";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
 import { buildLedger } from "./ledger";
+import { RatesToReviewPanel } from "./RatesToReviewPanel";   // v7.33.2 (FX-1)
 import { CompanyPicker, newCompanyRecord } from "./CompanyPicker";   // v7.27.15 (A-RV-26 / A-AU-8)
 import { fxDifferences } from "./fxDifferences.domain";   // v7.27.16 (FZ-06)
 import {
@@ -411,20 +412,27 @@ function AdvancesPanel({ advancePayments = [], setAdvancePayments = null, invoic
 // auto-posted (the Confirm click is the act), tolerance ±0.05 in any currency.
 // A confirmed line becomes a standard payment event with source bank:{lineId} —
 // re-importing the same statement can never double-post.
-function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null }: any) {
-  const [parsed, setParsed] = React.useState<any>(null);
-  const [done, setDone] = React.useState<Record<string, string>>({});
+function BankImportPanel({ financeNotes = [], invoices = [], setInvoices = null, nextId, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, bankLines = null, setBankLines = null }: any) {
+  // v7.34.0 (BANK-1, owner 26 Oct: "the import is deleted when you change screen"): the lines read are KEPT in a shared store with their
+  // state — matched (to what), ignored (a fee, a transfer between own accounts) — until matched; the same file read again adds nothing
+  const store: any = bankLines && typeof bankLines === "object" && !Array.isArray(bankLines) ? bankLines : { lines: [], done: {} };
+  const keep = typeof setBankLines === "function";
+  const [localParsed, setLocalParsed] = React.useState<any>(null); const [localDone, setLocalDone] = React.useState<Record<string, string>>({});
+  const parsed: any = React.useMemo(() => keep ? (store.lines && store.lines.length ? { lines: store.lines, account: store.account || "" } : null) : localParsed, [keep, store.lines, store.account, localParsed]);
+  const done: Record<string, string> = keep ? (store.done || {}) : localDone;
+  const setParsed = (p: any) => { if (!keep) { setLocalParsed(p); return; } setBankLines((prev: any) => { const cur = prev && typeof prev === "object" && !Array.isArray(prev) ? prev : { lines: [], done: {} }; const have = new Set((cur.lines || []).map((l: any) => String(l.id))); return { ...cur, account: p?.account || cur.account || "", lines: [...(cur.lines || []), ...((p?.lines || []).filter((l: any) => !have.has(String(l.id))))] }; }); };
+  const setDone = (u: any) => { if (!keep) { setLocalDone(u); return; } setBankLines((prev: any) => { const cur = prev && typeof prev === "object" && !Array.isArray(prev) ? prev : { lines: [], done: {} }; const d = typeof u === "function" ? u(cur.done || {}) : u; return { ...cur, done: d }; }); };
   const [pick, setPick] = React.useState<Record<string, any>>({});
   const [split, setSplit] = React.useState<Record<string, Record<string, string>>>({});   // v7.26.5 (A-INV-5): line → invoice → amount typed
   const fileRef = React.useRef<any>(null);
-  const suggestions = React.useMemo(() => parsed ? matchBankLines(parsed.lines, invoices) : [], [parsed, invoices]);
+  const suggestions = React.useMemo(() => parsed ? matchBankLines(parsed.lines, invoices, { notes: financeNotes }) : [], [parsed, invoices, financeNotes]);   // v7.34.0 (CN-1)
 
   function onFile(f: any) {
     if (!f) return;
     const reader = new FileReader();
     reader.onload = () => {
       const p = parseBankCSV(String(reader.result || ""));
-      setParsed(p); setDone({}); setPick({});
+      setParsed(p); if (!keep) setDone({}); setPick({});   // v7.34.0 (BANK-1): kept lines and their states stay
       // v6.68.0 (F-4): every statement registers/refreshes its account.
       if (typeof setBankAccounts === "function") setBankAccounts((prev: any[]) => upsertBankAccountFromStatement(prev || [], p, { nextId, todayISO: () => localTodayISO() }));
     };
@@ -438,7 +446,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
     }
     // v7.26.5 (A-INV-5, owner 17 Oct): one bank line over several invoices — each gets its share as a payment from that line
     function openSplit(s: any) {
-    const sp = splitBankLine(s.line, invoices); const amounts: Record<string, string> = {};
+    const sp = splitBankLine(s.line, invoices, { notes: financeNotes }); const amounts: Record<string, string> = {};
     sp.open.forEach((i: any) => { const a = sp.allocations.find((x: any) => String(x.invoiceId) === String(i.id)); amounts[String(i.id)] = a ? String(a.amount) : ""; });
     setSplit(m => ({ ...m, [s.line.id]: amounts }));
     }
@@ -498,6 +506,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
                       ))}
                     </select>
                     <button disabled={chosen == null || chosen === ""} onClick={() => confirmLine(s, chosen)} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: chosen != null && chosen !== "" ? "#16A34A" : "#CBD5E1", color: "#fff", fontSize: 12, fontWeight: 800, cursor: chosen != null && chosen !== "" ? "pointer" : "not-allowed" }}>{s.line.amount > 0 ? "Confirm receipt" : "Confirm payment"}</button>
+                    <button type="button" onClick={() => setDone((d: any) => ({ ...d, [s.line.id]: "ignored" }))} title="a bank fee, a transfer between our own accounts — kept, not matched" style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Ignore</button>   {/* v7.34.0 (BANK-1) */}
                     <button onClick={() => split[s.line.id] ? setSplit(m => { const n = { ...m }; delete n[s.line.id]; return n; }) : openSplit(s)} title="v7.26.5 (A-INV-5): one transfer paying several invoices" style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{split[s.line.id] ? "Close split" : "Split over several invoices"}</button>
                     {typeof setAdvancePayments === "function" && (advanceSources(advancePayments).has(`bank:${s.line.id}`)
                       ? <span style={{ fontSize: 11, fontWeight: 800, color: "#7C3AED" }}>✓ advance</span>
@@ -527,7 +536,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
   );
 }
 
-function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], operationalCosts = [], advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
+function LedgerView({ bankLines = null, setBankLines = null, orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], operationalCosts = [], advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
   const { alert: lvAlert, dialogNode: lvNode } = useConfirm(); // P2-6
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
@@ -580,7 +589,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
           <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ color: "#94A3B8", textAlign: "left" }}><th>Counterparty</th><th>Side</th><th style={{ textAlign: "right" }}>Paid</th><th style={{ textAlign: "right" }}>Invoice rate (avg)</th><th style={{ textAlign: "right" }}>Payment rate (avg)</th><th style={{ textAlign: "right" }}>Gain / loss PLN</th></tr></thead>
           <tbody>{rows.map((r, i) => <tr key={i} style={{ borderTop: "1px solid #F1F5F9" }}><td>{r.counterparty}</td><td>{r.side === "receivable" ? "we receive" : "we pay"}</td><td style={{ textAlign: "right" }}>{fp(r.paid)} {r.currency} <span style={{ color: "#94A3B8" }}>({r.payments})</span></td><td style={{ textAlign: "right" }}>{f4(r.avgInvoiceRate)}</td><td style={{ textAlign: "right" }}>{f4(r.avgPaymentRate)}</td><td style={{ textAlign: "right", fontWeight: 700, color: r.gainPLN >= 0 ? "#065F46" : "#B91C1C" }}>{fp(r.gainPLN)}</td></tr>)}</tbody></table>
         </div>; })()}
-      <BankImportPanel invoices={invoices} setInvoices={setInvoices} nextId={nextId} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
+      <BankImportPanel financeNotes={financeNotes} bankLines={bankLines} setBankLines={setBankLines} invoices={invoices} setInvoices={setInvoices} nextId={nextId} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`ledger_${xlsStamp()}`, items, [{ key: "direction", label: "Direction" }, { key: "kind", label: "Kind" }, { key: "ref", label: "Reference" }, { key: "counterparty", label: "Counterparty" }, { key: "date", label: "Date" }, { key: "dueDate", label: "Due" }, { key: "currency", label: "Currency" }, { key: "amount", label: "Amount" }, { key: "amountPLN", label: "Open PLN" }, { key: "status", label: "Status" }, { key: "daysOverdue", label: "Days overdue" }], "Ledger")} title="v6.99.0: exports the open items as listed">Export file (Excel)</SmallButton></div>
       {canOpenFinance(users, userName, "clients") && <ClientRiskCard invoices={invoices} orders={orders} contacts={contacts} />}
       <StatementCard invoices={invoices} financeNotes={financeNotes} />
@@ -840,7 +849,7 @@ function TypedCompaniesPanel({ contacts = [], operationalCosts = [], setOperatio
   const S1 = (v: any) => String(v ?? "").trim(); const key = (v: any) => S1(v).toLowerCase();
   const rows = new Map<string, { name: string; costs: number; notes: number }>();
   (operationalCosts || []).forEach((c: any) => { if (c && c.supplierId == null && S1(c.supplierName)) { const k = key(c.supplierName); const r = rows.get(k) || { name: S1(c.supplierName), costs: 0, notes: 0 }; r.costs++; rows.set(k, r); } });
-  (financeNotes || []).forEach((n: any) => { if (n && n.partyId == null && S1(n.partyName)) { const k = key(n.partyName); const r = rows.get(k) || { name: S1(n.partyName), costs: 0, notes: 0 }; r.notes++; rows.set(k, r); } });
+  // v7.33.0 (FIN-1, owner 26 Oct: "why is FruVerde an operational cost here?"): the credit / debit notes are linked in Invoices, where they are made
   if (!rows.size) return null;
   const directory = contacts || [];   // a SUGGESTION by the same name, linked only when the person clicks (never silently)
   const exactOf = (nm: string) => directory.find((c: any) => c && !c.deleted && key(c.name) === key(nm)) || null;
@@ -855,7 +864,7 @@ function TypedCompaniesPanel({ contacts = [], operationalCosts = [], setOperatio
   return (
     <Card style={{ marginBottom: 14, border: "1px solid #FDE68A", background: "#FFFBEB" }}>
       <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", marginBottom: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>Typed companies to link — {total} record(s), {list.length} name(s)</div>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>Operational costs with a typed supplier — {total} cost(s), {list.length} name(s)</div>
         <div style={{ fontSize: 12, color: "#64748B", flex: 1 }}>Saved before companies were picked from the directory. Linked once, they count under their company everywhere.</div>
         {exact.length > 0 && <SmallButton onClick={() => exact.forEach(r => link(r.name, exactOf(r.name)))}>Link the {exact.reduce((a, r) => a + r.costs + r.notes, 0)} exact matches</SmallButton>}
       </div>
@@ -870,6 +879,7 @@ function TypedCompaniesPanel({ contacts = [], operationalCosts = [], setOperatio
 export default function Finance({
 setContacts = null,   /* v7.27.15 (A-AU-8): a payee not yet in the directory is added from the cost form */
 setFinanceNotes = null,   /* v7.27.15 (A-RV-26): the notes' typed parties are linked from the linking panel */
+bankLines = null, setBankLines = null,   /* v7.34.0 (BANK-1): the bank lines kept until matched */
 packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from its packaging */
   focusResultOf = null,
   claims = [],
@@ -920,7 +930,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
   userName?: string;
   closedPeriods?: any[];
   setClosedPeriods?: any;
-  setFinanceNotes?: any; setContacts?: any; poSettlements?: any[];
+  setFinanceNotes?: any; setContacts?: any; poSettlements?: any[]; bankLines?: any; setBankLines?: any;
 }) {
   const [plOpenSO, setPlOpenSO] = useState<any>(null);   // v7.1.3 (A-PL-1): which sale's breakdown is open in the P/L list
   useEffect(() => { if (focusResultOf?.number) { const o = (orders || []).find((x: any) => String(x.number) === String(focusResultOf.number)); if (o) { setTab("pl"); setPlOpenSO(o.id); } } }, [focusResultOf?.n]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -1060,7 +1070,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
       <div>
 
         {tab === "ledger" ? (
-          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} users={users} userName={userName} contacts={contacts} />
+          <LedgerView bankLines={bankLines} setBankLines={setBankLines} orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} users={users} userName={userName} contacts={contacts} />
         ) : tab === "warehouse" ? (
           <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} invoices={invoices} setInvoices={setInvoices} packagingTypes={packagingTypes} />
         ) : tab === "pl" ? (
@@ -1240,18 +1250,19 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
           </>
         ) : (
         <>
-        <TypedCompaniesPanel contacts={contacts} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />{/* v7.27.15 (A-RV-26 / A-AU-8) */}
+        <TypedCompaniesPanel contacts={contacts} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />
+        <RatesToReviewPanel operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} />{/* v7.27.15 (A-RV-26 / A-AU-8) */}
         <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1.1fr", gap: 14, alignItems: "start" }}>
         <Card style={{ order: 2 }}>
                 <SectionTitle>{form.id && (operationalCosts || []).some(c => c.id === form.id) ? "EDIT OPERATIONAL COST" : "ADD OPERATIONAL COST"}</SectionTitle>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 10 }}>   {/* v7.33.0 (FIN-3): equal columns, never squeezed */}
                   <Field label="Period"><Inp value={form.period} onChange={(e: any) => setForm({ ...form, period: e.target.value })} placeholder="2026-05" /></Field>
                   <Field label="Date"><Inp type="date" value={form.date} onChange={(e: any) => setForm({ ...form, date: e.target.value })} /></Field>
                   <Field label="Category"><Sel value={form.category} onChange={(e: any) => setForm({ ...form, category: e.target.value })}>{OPERATIONAL_COST_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</Sel></Field>
                   <Field label="Cost center"><Sel value={form.costCenter} onChange={(e: any) => setForm({ ...form, costCenter: e.target.value })}>{["admin", "sales", "operations", "logistics", "finance", "general"].map(c => <option key={c} value={c}>{c}</option>)}</Sel></Field>
-                  <Field label="Description"><Inp value={form.description} onChange={(e: any) => setForm({ ...form, description: e.target.value })} placeholder="Office rent - May" /></Field>
-                  <Field label="Supplier / payee"><CompanyPicker contacts={contacts} value={(form as any).supplierId ?? null} typedName={(form as any).supplierId != null ? "" : (form.supplierName || "")} onPick={(c: any) => setForm({ ...form, supplierId: c ? c.id : null, supplierName: c ? c.name : "" } as any)} onAdd={typeof setContacts === "function" ? (nm: string) => { const c = newCompanyRecord(nm, "Other", nextId); setContacts((prev: any[]) => [...(prev || []), c]); return c; } : null} /></Field>{/* v7.27.15 (A-AU-8, owner approved 17 Oct): picked from Counterparties, stored by id */}
-                  <Field label="Invoice no. (received)"><Inp value={(form as any).invoiceNo || ""} onChange={(e: any) => setForm({ ...form, invoiceNo: e.target.value } as any)} placeholder="FV/2026/06/123 — from Fakturownia/KSeF" /></Field>
+                  <div style={{ gridColumn: "1 / -1" }}><Field label="Description"><Inp value={form.description} onChange={(e: any) => setForm({ ...form, description: e.target.value })} placeholder="Office rent - May" /></Field></div>
+                  <div style={{ gridColumn: "1 / -1" }}><Field label="Supplier / payee"><CompanyPicker contacts={contacts} value={(form as any).supplierId ?? null} typedName={(form as any).supplierId != null ? "" : (form.supplierName || "")} onPick={(c: any) => setForm({ ...form, supplierId: c ? c.id : null, supplierName: c ? c.name : "" } as any)} onAdd={typeof setContacts === "function" ? (nm: string) => { const c = newCompanyRecord(nm, "Other", nextId); setContacts((prev: any[]) => [...(prev || []), c]); return c; } : null} /></Field></div>{/* v7.27.15 (A-AU-8, owner approved 17 Oct): picked from Counterparties, stored by id */}
+<div><Field label="Invoice no. (received)"><Inp value={(form as any).invoiceNo || ""} onChange={(e: any) => setForm({ ...form, invoiceNo: e.target.value } as any)} placeholder="FV/2026/06/123 — from Fakturownia/KSeF" /></Field>{String((form as any).invoiceNo || "").trim() && <div data-op-has-invoice="1" style={{ marginTop: 4, fontSize: 11, color: "#92400E", lineHeight: 1.4 }}>This cost has an invoice — invoices live in Invoices: a Polish one arrives from Fakturownia by itself; <button type="button" onClick={() => { try { window.sessionStorage.setItem("marianna:newCostInvoice", JSON.stringify({ number: (form as any).invoiceNo, supplierId: (form as any).supplierId ?? null, supplierName: form.supplierName || "", date: form.date, amount: form.amount, currency: form.currency })); } catch { /* the form opens empty */ } window.dispatchEvent(new CustomEvent("marianna:navigate", { detail: { module: "invoices" } })); }} style={{ border: "none", background: "none", color: "#1D4ED8", textDecoration: "underline", cursor: "pointer", padding: 0, fontSize: 11 }}>record a foreign one as a cost invoice</button>.</div>}</div>   {/* v7.33.1 (INV-PDF) */}
                   <Field label="Amount"><Inp type="number" value={form.amount} onChange={(e: any) => setForm({ ...form, amount: safe(e.target.value), amountPLN: Math.round(safe(e.target.value) * (String(form.currency || "PLN").toUpperCase() === "PLN" ? 1 : safe(form.fxRate)) * 100) / 100 })} /></Field>
                   <Field label="Currency"><Sel value={form.currency} onChange={(e: any) => setForm({ ...form, currency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c} value={c}>{c}</option>)}</Sel></Field>
                   <Field label="FX → PLN (NBP)"><div data-op-rate="1" title={opFx.note} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#F9FAFB", color: "#374151" }}>{String(form.currency || "PLN").toUpperCase() === "PLN" ? "1" : (safe(form.fxRate) > 0 ? String(form.fxRate) : "—")}<span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6 }}>{opFx.note}</span></div></Field>{/* v7.21.11 (A-RV-34): shown, not typed */}
@@ -1261,7 +1272,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
                   <Field label="Cost invoice no. (actual)"><Inp value={(form as any).invoiceRef || ""} onChange={(e: any) => setForm({ ...form, invoiceRef: e.target.value } as any)} placeholder="e.g. FS 106/2026 — links this line to the real invoice" /></Field>
                 </div>
                 <div style={{ marginTop: 10 }}>
-                  <Field label="Notes"><Inp value={form.notes || ""} onChange={(e: any) => setForm({ ...form, notes: e.target.value })} placeholder="Internal note" /></Field>
+                  <div style={{ gridColumn: "1 / -1" }}><Field label="Notes"><Inp value={form.notes || ""} onChange={(e: any) => setForm({ ...form, notes: e.target.value })} placeholder="Internal note" /></Field></div>
                 </div>
                 <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                   <Button variant="primary" onClick={saveCost}>Save cost</Button>

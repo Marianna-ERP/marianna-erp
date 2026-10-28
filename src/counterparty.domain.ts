@@ -75,6 +75,7 @@ export function normaliseCounterparty(c: any): { contact: any; changed: boolean 
   if ("country" in n) { delete n.country; changed = true; }
   if (n.addr && typeof n.addr === "object" && "country" in n.addr) { const a = { ...n.addr }; delete a.country; n.addr = a; changed = true; }
   }
+  if (typeof n.name === "string" && n.name !== n.name.trim()) { n.name = n.name.trim(); changed = true; }   // v7.35.0 (PARTY-1): no stray space in a name
   return { contact: n, changed };
 }
 
@@ -168,4 +169,19 @@ export function withLiveCompanies(docs: any[], fields: string[], contacts: any[]
     if (o !== d) any = true; return o;
   });
   return any ? out : (docs || []);
+}
+
+/** v7.32.1 (INV-QC, owner 26 Oct): A COMPANY FROM AN INVOICE — the record the Invoices panel creates for a company the register
+ *  names in text only (a petrol station, a one-off carrier): name, tax number, address parts and country as the invoice carries them,
+ *  the role from the invoice's side (Supplier for a cost invoice, Client for a sales invoice); the common address base, the country
+ *  code; not a loading place by default. The same tidy-up as any company applies on save. */
+export function newCompanyFromInvoice(inv: any, nextId: () => any, role?: "Supplier" | "Client"): any {
+  const cp = inv?.counterparty || {}; const r = role || (S(inv?.kind).toUpperCase() === "SALES" ? "Client" : "Supplier");
+  const taxRaw = S(cp.taxNo || cp.nip); const prefix = (taxRaw.match(/^([A-Za-z]{2})/) || [])[1]; const digits = taxRaw.replace(/[^0-9A-Za-z]/g, "");
+  const addr = cp.addr || {}; const fromPrefix = prefix && countryNameOf(prefix.toUpperCase()) !== prefix.toUpperCase() ? prefix.toUpperCase() : "";
+  const iso = countryIso(addr.country) || fromPrefix || "";   // v7.32.2: only a country the list knows — else left to the form's Countries list
+  const nip = digits ? (prefix ? digits.slice(2) : digits) : "";
+  const id = nextId(); return { ...(id != null ? { id } : {}), name: S(cp.name), roles: [r], type: r, countryIso: iso,
+    addr: { street: S(addr.street), postcode: S(addr.postcode), city: S(addr.city) },
+    nip, vatEuId: prefix && prefix.toUpperCase() !== "PL" ? taxRaw : "", terms: { defaultCurrency: S(inv?.currency) || "PLN", paymentDays: 30 }, services: [], notes: `Created from invoice ${S(inv?.number)}`, people: [], isPlace: false, createdFromInvoice: S(inv?.number) };
 }

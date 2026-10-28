@@ -56,6 +56,31 @@ if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the 
   fs.readdirSync(src).filter(f => /\.tsx$/.test(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\/\/|\*|\{\/\*)/.test(l)) return; const c = l.replace(/\/\/[^\n]*/g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, ""); if (/no backend yet|Interim (workflow|flow)|until the email backend/i.test(c)) off.push(`${f}:${i + 1}`); }));
   if (off.length) { failed++; console.log(`  ✗ no developer's note on a screen: ${off.slice(0, 4).join(", ")}`); } else console.log("  ✓ no developer's note on a screen");
 }
+// v7.32.0 (FZ-04a, P-13): NO PLACE IN THE CODE — the places module names no place and keeps no list of its own; every place is an
+// address in Parties (a company's) or a public place in Parties › Locations, read through allPlaces / locationById
+{
+  checked++; const off = [];
+  const loc = fs.readFileSync(path.join(src, "locations.ts"), "utf8");
+  if (/WH-0\d|Logipark|ColdStore|Koper Port|Damietta Port|Gdynia Port/.test(loc)) off.push("a place's name is written in locations.ts");
+  if (/^export const LOCATIONS\b|ensureUsedBuiltinsAreOrdinary|registerCounterpartyLocations|readLogisticsPoints|readLocationOverrides/m.test(loc)) off.push("a legacy place mechanism is back in locations.ts");
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && f !== "locations.ts").forEach(f => { const c = fs.readFileSync(path.join(src, f), "utf8"); if (/\bLOCATIONS_ALL_BUILTIN\b|\bensureUsedBuiltinsAreOrdinary\b|\bregisterCounterpartyLocations\b|\bwarehouseAddressLocations\b/.test(c)) off.push(`${f} reads a legacy place mechanism`); });
+  if (off.length) { failed++; console.log(`  ✗ no place in the code: ${off.join("; ")}`); } else console.log("  ✓ no place in the code: the places module names no place and keeps no list of its own");
+}
+// v7.34.0 (CN-2, P-13): A NOTE IS CREATED ONLY IN INVOICES — no other module adds a credit / debit note to the store; they request one
+// (noteRequest.requestNoteInInvoices). The PO settlement's expected documents are the one rule-made exception (they appear in Invoices).
+{
+  checked++; const off = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["Invoices.tsx", "PurchaseOrders.tsx", "poSettlement.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\/\/|\*)/.test(l)) return; if (/[sS]etFinanceNotes\(\(prev: any\[\]\) => \[/.test(l)) off.push(`${f}:${i + 1}`); }));
+  if (off.length) { failed++; console.log(`  ✗ a note is created only in Invoices: ${off.slice(0, 4).join(", ")}`); } else console.log("  ✓ a note is created only in Invoices: the other modules request one");
+}
+// v7.38.0 (AUD3-B2 / B6): NUMBERS — the shipment editor never reads a number on every keystroke (the one number field reads it when the
+// field is left), and the screens and engines the audit named read numbers with the one reader, never plain parseFloat
+{
+  checked++; const off = [];
+  const ed = fs.readFileSync(path.join(src, "ShipmentEditor.tsx"), "utf8"); if (/onChange=\{\(?e(?:: any)?\)? => [A-Za-z_]+\([^()]*?parseNum\(e\.target\.value\)\)\}/.test(ed)) off.push("ShipmentEditor reads a number on every keystroke");
+  ["Shipments.tsx", "Inventory.tsx", "ShipmentEditor.tsx", "shipments.domain.ts", "costAllocation.ts", "receipts.domain.ts", "pricingUnit.domain.ts", "bankReconciliation.domain.ts"].forEach(f => { const c = fs.readFileSync(path.join(src, f), "utf8"); if (/(?<!isNaN\()parseFloat\(/.test(c)) off.push(`${f} reads data with parseFloat`); });
+  if (off.length) { failed++; console.log(`  ✗ numbers: ${off.join("; ")}`); } else console.log("  ✓ numbers: one number field, one reader where the audit looked");
+}
 // v7.28.11 (Batch L · FZ-03, P-13): A COMPANY'S COUNTRY IS ITS CODE — no file reads a company record's country name except the
 // helpers (companyCountryName / companyCountryIso) and the company tidy-up; the copies on documents keep the printed name
 {

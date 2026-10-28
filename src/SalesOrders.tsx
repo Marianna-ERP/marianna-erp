@@ -12,7 +12,7 @@ import { PACKAGING_SEED } from "./packaging.domain";
 import { effectiveSoStatus } from "./statusOwnership.domain";
 import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, kgPerBoxForLine, effectiveCounts } from "./pricingUnit.domain";
 import { SO_STATUSES } from "./types";
-import { isPOUsableForConfirmedSO, lotReservationsForPicker, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
+import { isPOUsableForConfirmedSO, lotReservationsForPicker, computeLineAvailability as domainComputeLineAvailability , lotSellableBasis } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
 import { nextId } from "./ids";
 import { nextClaimNumber, blankClaim } from "./claims.domain";
@@ -28,6 +28,7 @@ import { companyProfile } from "./useLocalStoredState";
 import { OrderForm } from "./SalesOrderForm";
 import { InvoiceCreationModal, OrderDetail } from "./SalesOrderDetail";
 import { SODoc } from "./SalesOrderDocument";
+import { requestNoteInInvoices } from "./noteRequest";   // v7.34.0 (CN-2)
 import { invoicesForCounterpartyDoc, shipmentsForSO } from "./documents.domain";   // v7.28.5 (Batch L)
 import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { peopleOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 (Batch L)
@@ -113,7 +114,7 @@ function _adaptLotsFromInventory(invLots: any[], inspections: any[] = []) {
     warehouse: l.warehouse || "—",
     locationName: (() => { try { return locationById(l.locationId)?.name || ""; } catch { return ""; } })(),   // v7.8.1 (A-SO-PK-2)
     // v6.99.127 (A-ONE-1, owner): a lot not yet received is sold on its EXPECTED kilos — selling from the PO is selling the lot made from it
-    availableKg: rejectedByReport(l, inspections) ? 0 : (parseNum(l.physicalKg) || parseNum(l.receivedKg)) > 0 ? (l.physicalKg ?? l.receivedKg ?? 0) : parseNum(l.expectedKg),
+    availableKg: rejectedByReport(l, inspections) ? 0 : lotSellableBasis(l),   // v7.41.0 (AUD3-L3): the one rule (a direct lot sells on the larger of expected and physical)
     rejected: rejectedByReport(l, inspections),
     lotState: /Cancelled/.test(String(l.status || "")) ? "deleted" : rejectedByReport(l, inspections) ? "rejected by quality report" : parseNum(l.physicalKg) > 0 ? "in stock" : parseNum(l.receivedKg) > 0 ? "received" : (l.directFlow || /direct/i.test(String(l.status || ""))) ? "direct" : "expected",
     physicalKg: l.physicalKg ?? 0,
@@ -366,7 +367,7 @@ export function computeLineAvailability(soItems, allOrders, currentOrderId, sd: 
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
 export function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max, min, noFuture }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
-  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder || undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
@@ -1046,13 +1047,13 @@ function SalesOrdersScreen({ archive = null,
       const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => String(lk.number) === String(soDoc.number)));
       const cur = cc.cur || inv?.currency || soDoc.currency || "PLN";
       const fx = defaultFxRate(cur);
-      extSetFinanceNotes((prev: any[]) => [...(prev || []), {
-        id: nextId(), noteType: "CREDIT", direction: "outgoing",
-        invoiceId: inv?.id ?? null, relatedRef: soDoc.number, partyName: inv?.counterparty?.name || soDoc.client?.name || "Client",
+      requestNoteInInvoices({   // v7.34.0 (CN-2): created in Invoices, on its own form
+        noteType: "CREDIT", direction: "outgoing",
+        invoiceId: inv?.id ?? null, relatedRef: soDoc.number, partyId: inv?.counterparty?.id ?? soDoc.client?.id ?? null, partyName: inv?.counterparty?.name || soDoc.client?.name || "",
         category: "Quality", amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
         status: "Draft", reason: `Client quality claim — ${qty ? qty + " kg " : ""}on ${lot.number} (${soDoc.number})`,
         date: today, source: mv.source,
-      }]);
+      });
     }
     recordAudit({ module: "Sales orders", docType: "SO", docNumber: soDoc.number, action: "claim", summary: `Client claim recorded on ${lot.number} — ${amt.toLocaleString("pl-PL")} ${cc.cur || "PLN"}; credit note drafted` });
     setClientClaimFor(null);

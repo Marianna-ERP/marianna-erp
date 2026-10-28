@@ -23,7 +23,11 @@ let FX_SETTINGS: Record<string, number> = {};
 export function setFxSettings(s: Record<string, any> | null | undefined) { FX_SETTINGS = {}; Object.entries(s || {}).forEach(([k, v]) => { const n = parseFloat(String(v)); if (isFinite(n) && n > 0) FX_SETTINGS[k.toUpperCase()] = n; }); }
 export function defaultFxRate(currency?: string): number {
   if (!currency) return 1;
-  const own = FX_SETTINGS[String(currency).toUpperCase()]; if (own) return own;
+  // v7.33.2 (FX-1, owner 26 Oct): the NBP table of the last working day before today, from the per-date tables this browser keeps fresh;
+  // the old 'latest table' copy in the shared settings is only a fallback while no table has been read
+  const c0 = String(currency).toUpperCase(); if (c0 === "PLN") return 1;
+  const known = rateBefore(NBP, c0, todayIso()); if (known && known.rate > 0) return known.rate;
+  const own = FX_SETTINGS[c0]; if (own) return own;
   const r = FX_RATES[String(currency).toUpperCase()];
   return r && isFinite(r) ? r : 1;
 }
@@ -138,3 +142,17 @@ export function orderRateFrom(nbp: number, side: "SALE" | "PURCHASE", bufferPct 
   if (!(nbp > 0)) return 0; const k = side === "SALE" ? 1 - bufferPct / 100 : 1 + bufferPct / 100;
   return Math.round(nbp * k * 10000) / 10000;
 }
+
+// ── v7.33.2 (FX-1, owner 26 Oct: "the NBP box referred to table A of 06/10 until I refreshed the browser"): ONE RULE FOR EVERY RATE — the NBP
+// table A of the last working day before the record's own date. The tables are read for the last fortnight when the app starts, again when
+// the day changes and when the window comes back into view, so no rate is ever taken from a table older than the record's date. ──
+/** The NBP rate for a record dated dateISO (today when none), from the tables already read; null when not read yet. */
+export function fxRateFor(currency: any, dateISO?: string): number | null {
+  const c = String(currency || "PLN").toUpperCase(); if (c === "PLN") return 1;
+  const d = /^\d{4}-\d{2}-\d{2}/.test(String(dateISO || "")) ? String(dateISO).slice(0, 10) : todayIso();
+  const r = rateBefore(NBP, c, d); return r && r.rate > 0 ? r.rate : null;
+}
+/** The newest table this browser holds, and how many days it covers (for the Settings box). */
+export function nbpHeld(): { latest: string; days: number } { const days = Object.keys(NBP.days || {}).sort(); return { latest: days[days.length - 1] || "", days: days.length }; }
+/** Keep the last fortnight's tables read (the start, a new day, the window back in view); resolves true when NBP answered. */
+export async function refreshNbp(): Promise<boolean> { const today = todayIso(); return ensureNbpRange(isoAdd(today, -14), today); }

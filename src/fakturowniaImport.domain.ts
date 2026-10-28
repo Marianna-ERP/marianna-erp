@@ -43,6 +43,7 @@ export interface StagedRow {
   number: string;
   seller: string;
   sellerTaxNo?: string;
+  sellerAddr?: { street?: string; postcode?: string; city?: string; country?: string };   // v7.32.1 (INV-QC): kept for "New company from this invoice"
   date: string;        // issue date
   dueDate?: string;
   net: number;
@@ -59,22 +60,24 @@ export interface StagedRow {
  *  invoice show Marianna as its own supplier. Whichever side's tax number (or,
  *  failing that, name) matches OUR company is us; the counterparty is the other. */
 function normTax(v: any): string { return String(v ?? "").toLowerCase().replace(/[^0-9a-z]/g, ""); }
-export function counterpartySideOfMapped(m: any, myTaxNo?: string, myName?: string): { name: string; taxNo: string } {
+export function counterpartySideOfMapped(m: any, myTaxNo?: string, myName?: string): { name: string; taxNo: string; addr?: any } {
   const sellerIsUs =
     (!!myTaxNo && normTax(m.sellerTaxNo) !== "" && normTax(m.sellerTaxNo) === normTax(myTaxNo)) ||
     (!!myName && String(m.sellerName || "").toLowerCase().includes(String(myName).toLowerCase()));
-  if (sellerIsUs) return { name: String(m.buyerName || ""), taxNo: String(m.buyerTaxNo || "") };
-  return { name: String(m.sellerName || ""), taxNo: String(m.sellerTaxNo || "") };
+  if (sellerIsUs) return { name: String(m.buyerName || ""), taxNo: String(m.buyerTaxNo || ""), addr: m.buyerAddr };
+  return { name: String(m.sellerName || ""), taxNo: String(m.sellerTaxNo || ""), addr: m.sellerAddr };
 }
 
 export function stagedRowFromMapped(m: any, idx: number, myTaxNo?: string, myName?: string): StagedRow {
   const cur = String(m.currency || "PLN").toUpperCase();
   const party = counterpartySideOfMapped(m, myTaxNo, myName);
   return {
+    ...(String(m.kind || "").toLowerCase() === "correction" ? { isCorrection: true, correctedFktId: m.correctedFktId ?? null } : {}),   // v7.34.0 (CN-1)
     key: `api:${m.fktId ?? idx}`,
     number: String(m.number || ""),
     seller: party.name,
     sellerTaxNo: party.taxNo,
+    ...(party.addr && Object.values(party.addr).some((v: any) => String(v || "").trim()) ? { sellerAddr: party.addr } : {}),   // v7.32.1 (INV-QC)
     date: m.issueDate || m.sellDate || localTodayISO(),
     dueDate: m.dueDate || "",
     net: num(m.netTotal),
@@ -207,7 +210,10 @@ export function suggestForRow(row: StagedRow, contacts: any[], shipments: any[],
 *  (a rate rounded to whole percent turned 1 234,56 into 1 230,00); 0 when either amount is missing. */
 export function vatRateOf(net: any, gross: any): number {
 const a = num(net), b = num(gross); if (!a || !b) return 0;
-return Math.round(((b / a) - 1) * 100 * 1e6) / 1e6;
+const raw = ((b / a) - 1) * 100;
+// v7.35.0 (CR-1): 5.000117 → 5 — the standard rate, when it gives Fakturownia's gross back to the grosz; otherwise the precise rate (A-INV-1)
+for (const s of [0, 5, 8, 23]) if (Math.abs(raw - s) <= 0.05 && Math.round(a * (1 + s / 100) * 100) === Math.round(b * 100)) return s;
+return Math.round(raw * 1e6) / 1e6;
 }
 
 /** Build the register COST invoice for a posted row (money recomputed by the caller).
@@ -226,7 +232,7 @@ const vatRate = vatRateOf(row.net, row.gross);
     category: (tag === "FREIGHT" ? "FREIGHT" : tag === "CUSTOMS" ? "CUSTOMS" : tag === "WAREHOUSE" ? "WAREHOUSE" : tag === "GOODS" ? "PURCHASE" : "OTHER") as any,   // v6.99.120 (AUD-18): the tag names the category
     costScope: scopeOf(tag === "FREIGHT" ? "FREIGHT" : tag === "CUSTOMS" ? "CUSTOMS" : tag === "WAREHOUSE" ? "WAREHOUSE" : tag === "GOODS" ? "PURCHASE" : "OTHER"),   // v7.26.1 (A-INV-6)
     number: row.number,
-    counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller },
+    counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller, ...(row.sellerTaxNo ? { taxNo: row.sellerTaxNo } : {}), ...(row.sellerAddr ? { addr: row.sellerAddr } : {}) },   // v7.32.1 (INV-QC): what the invoice knows, for a company created from it
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "",
     paymentMethod: "Transfer",
     currency: row.currency, fxRate: resolveFxRate(row.fxRate, row.currency),
@@ -429,7 +435,7 @@ export function buildIssuedSalesInvoice(row: any, soNumber: string, contact: any
   const net = num(row.net) || num(row.gross); const own = num(row.fxRate) > 0 && String(row.currency).toUpperCase() !== "PLN";
   return {
     id: nextId(), kind: "SALES", category: "SALES", costScope: "SALES", number: row.number,
-    counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.buyer },
+    counterparty: contact ? { id: contact.id, name: contact.name, ...(contact.nip ? { nip: contact.nip } : {}) } : { name: row.buyer },   // v7.35.0 (CR-2): the NIP kept on the copy
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "", paymentMethod: "Transfer",
     currency: row.currency, fxRate: own ? num(row.fxRate) : resolveFxRate(defaultFxRate(row.currency), row.currency), ...(own ? { fxTableDate: row.date, fxSource: "fakturownia" } : {}),
     netAmount: net, vatRate: vatRateOf(row.net, row.gross), ...(!num(row.net) || !num(row.gross) ? { amountsIncomplete: true } : {}),
@@ -437,4 +443,16 @@ export function buildIssuedSalesInvoice(row: any, soNumber: string, contact: any
     paymentStatus: "Issued", paidAmount: 0, notes: `Issued in Fakturownia${row.description ? ` — ${row.description}` : ""}`,
     attachment: null, allocation: null, fakturownia: { exported: true, fktId: row.fktId ?? null }, source: "fakturownia-issued", createdAt: localTodayISO(),
   };
+}
+
+/** v7.34.0 (CN-1, owner 26 Oct): A CORRECTING INVOICE FROM FAKTUROWNIA IS A NOTE — on the invoice it corrects (by its Fakturownia id), with
+ *  its own number, issued: a correction that lowers the amount is a CREDIT note, one that raises it a DEBIT note; the party by id. */
+export function noteFromCorrection(row: any, direction: "incoming" | "outgoing", invoices: any[], contact: any | null, nextId: () => any): any {
+  const gross = Number(row.gross || row.net || 0); const fx = Number(row.fxRate) > 0 ? Number(row.fxRate) : 1;
+  const corrected = (invoices || []).find((i: any) => i && row.correctedFktId != null && String((i.fakturownia || {}).fktId ?? (i.fakturownia || {}).ref) === String(row.correctedFktId)) || null;
+  return { id: nextId(), noteType: gross < 0 ? "CREDIT" : "DEBIT", direction, number: String(row.number || ""), date: row.date, invoiceId: corrected ? corrected.id : null,
+    relatedRef: corrected ? String(corrected.number || "") : "", partyId: contact ? contact.id : (corrected && corrected.counterparty ? corrected.counterparty.id ?? null : null),
+    partyName: contact ? contact.name : String(row.seller || row.buyer || ""), category: "Correcting invoice", amount: Math.abs(gross), currency: String(row.currency || "PLN"), fxRate: fx,
+    amountPLN: Math.round(Math.abs(gross) * fx * 100) / 100, status: "Issued", reason: `Correcting invoice ${String(row.number || "")} from Fakturownia`, source: `fakturownia-correction:${row.fktId ?? row.number}`,
+    fakturownia: { fktId: row.fktId ?? null } };
 }

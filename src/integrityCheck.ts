@@ -44,6 +44,8 @@ export interface IntegrityResult {
 }
 
 export interface IntegrityInputs {
+  /** v7.34.2: every record, the archived seasons included — a reference to an archived document EXISTS (only existence is read from these) */
+  allPos?: any[]; allLots?: any[]; allOrders?: any[]; allShipments?: any[];
   contacts?: any[];
   pos?: any[];
   lots?: any[];
@@ -88,13 +90,22 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   const shipments = arr(inp.shipments);
 
   // Lookup sets for fast reference checks.
-  const poByNumber = new Map(pos.map((p: any) => [String(p.number), p]));
-  const lotByNumber = new Map(lots.map((l: any) => [String(l.number), l]));
-  const orderByNumber = new Map(orders.map((o: any) => [String(o.number), o]));
+  // v7.34.2 (owner 26 Oct: "the repairs give no confirmation"): a document of an ARCHIVED season still exists — the existence maps read every
+  // record, so a lot or an invoice pointing at last season's PO / SO / shipment is no longer called an orphan
+  const poByNumber = new Map([...arr(inp.allPos), ...pos].map((p: any) => [String(p.number), p]));
+  const lotByNumber = new Map([...arr(inp.allLots), ...lots].map((l: any) => [String(l.number), l]));
+  const orderByNumber = new Map([...arr(inp.allOrders), ...orders].map((o: any) => [String(o.number), o]));
   const contactIds = new Set(contacts.map((c: any) => String(c.id)));
   const contactMergedIds = new Set(
     contacts.flatMap((c: any) => arr(c.mergedFromIds).map(String))
   );
+
+  // v7.41.0 (AUD3-L2, external audit: "a missing exchange rate silently means 1.0"): a foreign-currency shipment cost line or operational
+  // cost with no rate (missing or 1) is listed — "Rates to review" sets the NBP rate of its date
+  shipments.forEach((s: any) => arr(s?.costs).forEach((c: any) => { const cur = String(c?.currency || "PLN").toUpperCase(); if (cur !== "PLN" && num(c?.amount) > 0 && !(num(c?.fxRate) > 1) && !c?.fxAgreed)
+    add("warning", "FX_MISSING_COST", "Shipments", s.number || "(shipment)", `A ${cur} cost line (${num(c.amount)} ${cur}) has no exchange rate — it counts as PLN until "Rates to review" sets the NBP rate of its date.`); }));
+  arr((inp as any).operationalCosts).forEach((c: any) => { const cur = String(c?.currency || "PLN").toUpperCase(); if (cur !== "PLN" && num(c?.amount) > 0 && !(num(c?.fxRate) > 1) && !c?.fxAgreed)
+    add("warning", "FX_MISSING_COST", "Finance", String(c?.invoiceNo || c?.supplierName || c?.id || "cost"), `An operational cost in ${cur} has no exchange rate — set it in Finance › "Rates to review".`); });
 
   // ── 1. Orphaned references ────────────────────────────────────────────────
   // Lot pointing at a PO that no longer exists.
@@ -411,7 +422,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
         add("warning", "SHIP_ROW_ORPHAN", "Shipments", label, `A goods row points at purchase order ${g.poRef}, which doesn't exist.`);
     });
   });
-  const shipByNumber = new Set(shipments.map((s: any) => String(s.number)));
+  const shipByNumber = new Set([...arr(inp.allShipments), ...shipments].map((s: any) => String(s.number)));   // v7.34.2: archived ones exist
   const invoiceById = new Map(invoices.map((i: any) => [String(i.id), i]));
 
   // Invoice links pointing at records that no longer exist.
@@ -640,7 +651,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
       const sos = arr(s.soRefs).filter(Boolean).map(String).sort().join("+");
       const kg = arr(s.goods).reduce((t: number, g: any) => t + num(g?.qtyKg), 0);
       const cost = arr(s.costs).reduce((t: number, c: any) => t + (num(c?.amountPLN) || num(c?.amount) * (num(c?.fxRate) || 1)), 0);
-      const lots = Array.from(new Set(arr(s.goods).map((g: any) => String(g?.lotRef || "")).filter(Boolean))).sort().join("+");
+      const lots = Array.from(new Set(arr(s.goods).map((g: any) => String(g?.lotRef || "") || (g?.poRef ? `${g.poRef}#${g.poLineId ?? g.lineId ?? g.productId ?? ""}` : "")).filter(Boolean))).sort().join("+");   // v7.41.0 (AUD3-L5): no lot yet → the PO line
       return sos ? `${sos}|${Math.round(kg)}|${Math.round(cost)}|${lots}` : null;
     };
     const seen = new Map<string, string>();

@@ -42,8 +42,30 @@ export const SHEET_COLUMNS: SheetCol[] = [
   { key: "eta", label: "ETA", kind: "date", width: 130 },
 ];
 
-export interface SheetRow { id: string; createdAt: string; frozen?: boolean; cells: Record<string, any>; }
-export interface SheetTab { id: string; name: string; order: number; createdAt: string; rows: SheetRow[]; }
+// v7.30.17 (owner test 21 Oct: "like an excel sheet — another line in the same cell, cell height and width, bold letters and colours
+// for the letters and the cells"): the sheet keeps its own LOOK beside its content — a row's height, a tab's column widths, a cell's
+// bold / text colour / fill. Presentation only: never logged for the study, never read by any module.
+export interface CellStyle { b?: boolean; color?: string; fill?: string; }
+export interface SheetRow { id: string; createdAt: string; frozen?: boolean; cells: Record<string, any>; height?: number; styles?: Record<string, CellStyle>; }
+export interface SheetTab { id: string; name: string; order: number; createdAt: string; rows: SheetRow[]; widths?: Record<string, number>;
+  /** v7.36.0 (WB-9): columns the user added (free text, after a column), built-in columns hidden (kept), and the order chosen */
+  extraCols?: Array<{ key: string; label: string; after?: string }>; hiddenCols?: string[]; colOrder?: string[]; }
+export const TEXT_COLOURS = ["#111827", "#B91C1C", "#C2410C", "#15803D", "#1D4ED8", "#7E22CE", "#6B7280"];
+export const FILL_COLOURS = ["#FEF08A", "#FECACA", "#FED7AA", "#BBF7D0", "#BFDBFE", "#E9D5FF", "#E5E7EB"];
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
+/** A cell's look changed (a patch value of null clears that part; an empty look is removed). */
+export function setCellStyle(tab: SheetTab, rowId: string, key: string, patch: Partial<Record<keyof CellStyle, any>> | null): SheetTab {
+return { ...tab, rows: (tab.rows || []).map(r => {
+if (r.id !== rowId) return r;
+const cur: any = { ...((r.styles || {})[key] || {}) };
+if (patch === null) { Object.keys(cur).forEach(k => delete cur[k]); } else Object.entries(patch).forEach(([k, v]) => { if (v === null || v === undefined || v === false || v === "") delete cur[k]; else cur[k] = v; });
+const styles: any = { ...(r.styles || {}) }; if (Object.keys(cur).length) styles[key] = cur; else delete styles[key];
+const n: any = { ...r, styles }; if (!Object.keys(styles).length) delete n.styles; return n;
+}) };
+}
+/** A column's width (50–600 px) and a row's height (24–400 px), as dragged. */
+export function setColWidth(tab: SheetTab, key: string, px: number): SheetTab { return { ...tab, widths: { ...(tab.widths || {}), [key]: clamp(px, 50, 600) } }; }
+export function setRowHeight(tab: SheetTab, rowId: string, px: number): SheetTab { return { ...tab, rows: (tab.rows || []).map(r => r.id === rowId ? { ...r, height: clamp(px, 24, 400) } : r) }; }
 export interface SheetLogEntry { at: string; who: string; tab: string; row?: string; col?: string; old?: any; now?: any; action: "cell" | "row+" | "row-" | "freeze" | "unfreeze" | "tab+" | "tab-" | "rename" | "import" | "paste"; }
 
 let seq = 0;
@@ -58,14 +80,39 @@ export function toISODate(v: any, yearHint?: number): string | null {
   if (m) { const y = m[3] ? (m[3].length === 2 ? "20" + m[3] : m[3]) : String(yearHint || new Date().getFullYear()); const mo = m[2].padStart(2, "0"), d = m[1].padStart(2, "0"); if (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) return `${y}-${mo}-${d}`; }
   return null;
 }
-/** Tab-separated text (copied from Excel) → a grid of strings. */
+/** Tab-separated text (copied from Excel) → a grid of strings. v7.31.0 (WB-6): Excel's quoting is read — a cell that holds several
+*  lines or a tab comes "…" (with "" for a quote) and stays ONE cell. */
 export function parseClipboard(text: string): string[][] {
-  const t = String(text || "").replace(/\r\n/g, "\n").replace(/\n$/, "");
-  return t.split("\n").map(line => line.split("\t"));
+const t = String(text || "").replace(/\r\n/g, "\n").replace(/\n$/, "");
+if (!t.includes('"')) return t.split("\n").map(line => line.split("\t"));
+const rows: string[][] = []; let row: string[] = []; let cell = ""; let i = 0; let quoted = false; let atStart = true;
+while (i < t.length) {
+const ch = t[i];
+if (quoted) { if (ch === '"' && t[i + 1] === '"') { cell += '"'; i += 2; continue; } if (ch === '"') { quoted = false; i++; continue; } cell += ch; i++; continue; }
+if (ch === '"' && atStart) { quoted = true; atStart = false; i++; continue; }
+if (ch === "\t") { row.push(cell); cell = ""; atStart = true; i++; continue; }
+if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; atStart = true; i++; continue; }
+cell += ch; atStart = false; i++;
+}
+row.push(cell); rows.push(row); return rows;
 }
 /** The value a pasted/typed string becomes in a column. */
+/** v7.31.0 (WB-5, owner 21 Oct: "some cases the production of a container is done on more days so we write 20-21/10"): what a date
+*  cell holds, read — one date (13/09, 13.09.2026, 2026-09-13), or a range kept as written ("20-21/10", "20/10-22/10") whose FIRST
+*  day is the date the system reads; null when it is neither. */
+export function readSheetDate(v: any, yearHint?: number): { iso: string | null; range: boolean } {
+const s = S(v); if (!s) return { iso: "", range: false };
+const one = toISODate(s, yearHint); if (one !== null) return { iso: one, range: false };
+let m = s.match(/^(\d{1,2})\s*[-–]\s*(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?$/);
+if (m) { const iso = toISODate(`${m[1]}/${m[3]}${m[4] ? "/" + m[4] : ""}`, yearHint); if (iso && +m[2] >= +m[1] && +m[2] <= 31) return { iso, range: true }; }
+m = s.match(/^(\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?)\s*[-–]\s*(\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?)$/);
+if (m) { const a = toISODate(m[1], yearHint), b = toISODate(m[2], yearHint); if (a && b) return { iso: a, range: true }; }
+return { iso: null, range: false };
+}
+/** A date cell shown: one date as dd/mm/yyyy, a range as written. */
+export function sheetDateText(v: any): string { const s = S(v); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}/${m[2]}/${m[1]}` : s; }
 export function coerce(col: SheetCol, raw: any, yearHint?: number): any {
-  if (col.kind === "date") { const iso = toISODate(raw, yearHint); return iso === null ? S(raw) : iso; }
+if (col.kind === "date") { const iso = toISODate(raw, yearHint); return iso === null ? S(raw) : iso; }   // a range stays as typed (readSheetDate reads its first day)
   if (col.kind === "product") return { item: S(raw), variety: "", size: "" };
   return S(raw);
 }
@@ -81,13 +128,13 @@ export function pasteGrid(rows: SheetRow[], at: { row: number; col: number }, gr
 }
 export function productText(v: any): string { if (!v) return ""; if (typeof v === "string") return v; return [v.item, v.variety, v.size].map(S).filter(Boolean).join(" "); }
 /** Grid of the tab as strings in the sheet's column order (copy, export). */
-export function tabToGrid(tab: SheetTab): string[][] { return (tab.rows || []).map(r => SHEET_COLUMNS.map(c => c.kind === "product" ? productText(r.cells[c.key]) : S(r.cells[c.key]))); }
+export function tabToGrid(tab: SheetTab): string[][] { return (tab.rows || []).map(r => [...SHEET_COLUMNS.map(c => c.kind === "product" ? productText(r.cells[c.key]) : S(r.cells[c.key])), ...(tab.extraCols || []).map(x => S(r.cells[x.key]))]); }   /* v7.36.0 (WB-9): the added columns exported too */
 
 /** Import her workbook AS IT IS: one tab per sheet, rows unchanged; ETD–ETA and 'Production date / controlling person' split. */
 export function importWorkbookRows(sheetName: string, matrix: any[][], headerMap: Record<string, string>, now: string): SheetTab {
   const header = (matrix[0] || []).map((h: any) => S(h).replace(/\s+/g, " "));
-  const map: Record<number, string> = {}; let priceSeen = 0;
-  header.forEach((h, c) => { if (h === "Price") { priceSeen++; map[c] = priceSeen === 1 ? "truckPrice" : "containerPrice"; return; } const k = headerMap[h] || headerMap[h.replace(/\s+$/, "")]; if (k) map[c] = k; });
+  const map: Record<number, string> = {}; let priceSeen = 0; const extraCols: Array<{ key: string; label: string }> = [];   // v7.36.0 (WB-9)
+  header.forEach((h, c) => { if (h === "Price") { priceSeen++; map[c] = priceSeen === 1 ? "truckPrice" : "containerPrice"; return; } const k = headerMap[h] || headerMap[h.replace(/\s+$/, "")]; if (!k && h) { const xk = "x_" + h.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30); if (!extraCols.some(x => x.key === xk)) extraCols.push({ key: xk, label: h }); map[c] = xk; return; } if (k) map[c] = k; });
   const year = new Date(now).getFullYear();
   const rows: SheetRow[] = [];
   for (let r = 1; r < matrix.length; r++) {
@@ -106,7 +153,7 @@ export function importWorkbookRows(sheetName: string, matrix: any[][], headerMap
     });
     if (filled >= 2) rows.push({ id: sid("r"), createdAt: now, cells });
   }
-  return { id: sid("t"), name: sheetName, order: 0, createdAt: now, rows };
+  return { id: sid("t"), name: sheetName, order: 0, createdAt: now, rows, ...(extraCols.length ? { extraCols } : {}) };
 }
 
 /** SH-12 — how the sheet is used, from the change log alone. */
@@ -121,9 +168,56 @@ export function sheetUsage(tabs: SheetTab[], log: SheetLogEntry[]): ColumnUsage[
     const filled = rows.filter(r => { const v = r.cells[c.key]; return c.kind === "product" ? !!productText(v) : S(v) !== ""; }).length;
     const lead: number[] = []; let changes = 0, withAny = 0, afterFreeze = 0;
     rows.forEach(r => { const es = (byRowCol.get(`${r.id}|${c.key}`) || []).sort((a, b) => a.at.localeCompare(b.at)); if (!es.length) return; withAny++; changes += Math.max(0, es.length - 1);
-      const ld = S(r.cells.loadingDate); if (/^\d{4}-\d{2}-\d{2}$/.test(ld)) lead.push(days(es[0].at.slice(0, 10), ld));
+      const ld = readSheetDate(r.cells.loadingDate).iso || ""; if (/^\d{4}-\d{2}-\d{2}$/.test(ld)) lead.push(days(es[0].at.slice(0, 10), ld));   // v7.31.0: a range by its first day
       const fz = frozenAt.get(r.id); if (fz) afterFreeze += es.filter(e => e.at > fz).length; });
     lead.sort((a, b) => a - b);
     return { key: c.key, label: c.label, filledPct: rows.length ? Math.round((filled / rows.length) * 100) : 0, medianDaysBeforeLoading: lead.length ? lead[Math.floor(lead.length / 2)] : null, avgChangesAfterFirst: withAny ? Math.round((changes / withAny) * 10) / 10 : 0, changedAfterFreeze: afterFreeze };
   });
+}
+
+// ── v7.31.0 (WB-2, owner 21 Oct): THE COLUMNS AS SHOWN — the product as three columns (Item, Variety, Size), each with its own
+// width; the stored product stays one value, so her workbook's import, the export and the study are unchanged ──
+export interface ShownCol { key: string; label: string; kind: CellKind; list?: SheetCol["list"] | "items" | "varieties"; width: number; dataKey: string; part?: "item" | "variety" | "size"; }
+export const SHOWN_COLUMNS: ShownCol[] = SHEET_COLUMNS.flatMap((c): ShownCol[] => c.kind === "product"
+  ? [{ key: c.key + ".item", label: "Item", kind: "text", list: "items", width: 120, dataKey: c.key, part: "item" },
+     { key: c.key + ".variety", label: "Variety", kind: "text", list: "varieties", width: 110, dataKey: c.key, part: "variety" },
+     { key: c.key + ".size", label: "Size", kind: "text", width: 70, dataKey: c.key, part: "size" }]
+  : [{ key: c.key, label: c.label, kind: c.kind, list: c.list, width: c.width, dataKey: c.key }]);
+const productOf = (v: any) => (typeof v === "object" && v ? { item: S(v.item), variety: S(v.variety), size: S(v.size) } : { item: S(v), variety: "", size: "" });
+/** What a shown cell holds, as text (a date as dd/mm/yyyy). */
+export function shownText(row: SheetRow, col: ShownCol): string {
+  if (!SHEET_COLUMNS.some(c => c.key === col.dataKey)) return S((row.cells || {})[col.dataKey]);   // v7.36.0 (WB-9): an added column
+  const v = (row?.cells || {})[col.dataKey]; if (col.part) return productOf(v)[col.part];
+  return col.kind === "date" ? sheetDateText(v) : S(v);
+}
+/** What writing TEXT into a shown cell stores: the product's part inside the one product; a date read as for typing; else as typed. */
+export function shownValue(row: SheetRow, col: ShownCol, text: any, yearHint?: number): { key: string; value: any } {
+  if (!SHEET_COLUMNS.some(c => c.key === col.dataKey)) return { key: col.dataKey, value: String(text ?? "") };   // v7.36.0 (WB-9): an added column
+  if (col.part) { const p = productOf((row?.cells || {})[col.dataKey]); return { key: col.dataKey, value: { ...p, [col.part]: S(text) } }; }
+  const dataCol = SHEET_COLUMNS.find(c => c.key === col.dataKey)!; return { key: col.dataKey, value: coerce(dataCol, text, yearHint) };
+}
+/** Paste a block at a shown (row, col) — right and down, rows added when needed, frozen rows skipped. */
+export function pasteShownGrid(rows: SheetRow[], at: { row: number; col: number }, grid: string[][], now: string, yearHint?: number, columns: ShownCol[] = SHOWN_COLUMNS): { rows: SheetRow[]; changed: Array<{ row: string; col: string; old: any; now: any }> } {
+  const out = rows.map(r => ({ ...r, cells: { ...r.cells } })); const changed: Array<{ row: string; col: string; old: any; now: any }> = [];
+  grid.forEach((line, dr) => {
+    const ri = at.row + dr; while (out.length <= ri) out.push(blankRow(now));
+    const r = out[ri]; if (r.frozen) return;
+    line.forEach((raw, dc) => { const col = columns[at.col + dc]; if (!col) return; const { key, value } = shownValue(r, col, raw, yearHint); const old = r.cells[key];
+      if (JSON.stringify(old ?? "") !== JSON.stringify(value ?? "")) { r.cells[key] = value; changed.push({ row: r.id, col: key, old, now: value }); } });
+  });
+  return { rows: out, changed };
+}
+/** One cell copied as Excel does: quoted when it holds several lines, a tab or a quote. */
+export function cellClipboardText(text: any): string { const s = S(text); return /[\t\n"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
+/** WB-1: the width of the first column (the row number and its buttons) is kept like any other. */
+export const ROW_HEAD_KEY = "#rows";
+
+/** v7.36.0 (WB-9): THE TAB'S COLUMNS — the built-in ones not hidden, the added ones placed after their column, in the order chosen. */
+export function shownColumnsOf(tab: SheetTab | null | undefined): ShownCol[] {
+  if (!tab) return SHOWN_COLUMNS; const hidden = new Set(tab.hiddenCols || []);
+  const tpl: any = SHOWN_COLUMNS.find(c => !c.part && !SHEET_COLUMNS.some(s => s.key === c.dataKey && (s.kind === "date" || s.kind === "list" || s.kind === "product"))) || SHOWN_COLUMNS[0];
+  const out: ShownCol[] = SHOWN_COLUMNS.filter(c => !hidden.has(c.key));
+  (tab.extraCols || []).forEach(x => { const col: any = { ...tpl, key: x.key, label: x.label, dataKey: x.key, width: 140, part: undefined, list: undefined }; const at = x.after ? out.findIndex(c => c.key === x.after) : -1; if (at >= 0) out.splice(at + 1, 0, col); else out.push(col); });
+  if (tab.colOrder && tab.colOrder.length) { const pos = new Map(tab.colOrder.map((k, i) => [k, i])); out.sort((a, b) => (pos.has(a.key) ? (pos.get(a.key) as number) : 999) - (pos.has(b.key) ? (pos.get(b.key) as number) : 999)); }
+  return out;
 }

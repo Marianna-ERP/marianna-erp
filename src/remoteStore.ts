@@ -32,7 +32,7 @@ function saveSession(s: Session | null) { if (s) window.localStorage.setItem(SES
 async function authCall(path: string, body: any): Promise<any> {
   const res = await fetch(`${REMOTE_URL}/auth/v1/${path}`, { method: "POST", headers: { apikey: REMOTE_KEY, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(j.error_description || j.msg || j.message || `login failed (${res.status})`);
+  if (!res.ok) { const err: any = new Error(j.error_description || j.msg || j.message || `login failed (${res.status})`); err.status = res.status; throw err; }
   return j;
 }
 export async function login(email: string, password: string): Promise<Session> {
@@ -45,7 +45,7 @@ async function freshToken(): Promise<string | null> {
   const s = readSession(); if (!s) return null;
   if (Date.now() < s.expires_at - 60_000) return s.access_token;
   try { const j = await authCall("token?grant_type=refresh_token", { refresh_token: s.refresh_token }); const n: Session = { ...s, access_token: j.access_token, refresh_token: j.refresh_token || s.refresh_token, expires_at: Date.now() + (Number(j.expires_in) || 3600) * 1000 }; saveSession(n); return n.access_token; }
-  catch { saveSession(null); return null; }
+  catch (e: any) { if (e && (e.status === 400 || e.status === 401)) saveSession(null); return null; }   // v7.37.0 (AUD3-B1): a network blip keeps the session; only a refused token signs out
 }
 /** v7.21.1 (AUD-49): the signed-in person's session token — what the server part checks before it calls Fakturownia. */
 export async function sessionToken(): Promise<string | null> { try { return await freshToken(); } catch { return null; } }
@@ -61,7 +61,7 @@ export async function rpc(name: string, body: any): Promise<Response> { return r
 /** v7.14.0 (A-RV-01): what a merge has to tell the person — a record both changed (theirs kept, mine aside, "Use mine"), or a new
  *  document of mine renumbered because a colleague took its number meanwhile. */
 export type SyncNotice = { key: string; kind: "clash" | "renumbered"; id: string; label: string; by?: string; at: string; to?: string };
-export type SyncState = { status: "off" | "login" | "pulling" | "synced" | "saving" | "offline" | "empty" | "refused"; refusedKey?: string; conflicts: string[]; lastPull?: string; by?: Record<string, string>; notices?: SyncNotice[] };
+export type SyncState = { unsent?: number; status: "off" | "login" | "pulling" | "synced" | "saving" | "offline" | "empty" | "refused"; refusedKey?: string; conflicts: string[]; lastPull?: string; by?: Record<string, string>; notices?: SyncNotice[] };
 type Known = { version: number; json: string };
 const known = new Map<string, Known>();   // what this tab last pulled or successfully pushed, per store
 const pending = new Map<string, { json: string; timer: any }>();
@@ -71,15 +71,18 @@ export function onSync(l: (s: SyncState) => void): () => void { listeners.push(l
 export function syncState(): SyncState { return state; }
 
 type Row = { key: string; data: any; version: number; updated_at?: string; updated_by?: string };
-async function fetchRows(select = "key,data,version,updated_at,updated_by"): Promise<Row[]> {
-  const res = await rest(`stores?select=${select}`); if (!res.ok) throw new Error(`pull failed (${res.status})`); return res.json();
+async function fetchRows(select = "key,data,version,updated_at,updated_by", keys?: string[]): Promise<Row[]> {
+  // v7.41.0 (AUD3-A2, external audit: "when any list changes, every open tab downloads every list"): only the lists asked for
+  const only = keys && keys.length ? `&key=in.(${keys.map(k => encodeURIComponent(`"${k}"`)).join(",")})` : "";
+  const res = await rest(`stores?select=${select}${only}`); if (!res.ok) throw new Error(`pull failed (${res.status})`); return res.json();
 }
 export async function pullAll(): Promise<{ empty: boolean }> {
   emit({ status: "pulling" });
   const rows = await fetchRows();
 
   const by: Record<string, string> = {};
-  rows.forEach(r => { const json = JSON.stringify(r.data); known.set(r.key, { version: r.version, json }); by[r.key] = r.updated_by || ""; if (DATA_KEYS.includes(r.key)) applyStoreFromRemote(r.key, r.data); });
+  const unsent = new Set(unsentKeys());   // v7.37.0 (AUD3-B1): an unsent change is pushed (and merged), never pulled over
+  rows.forEach(r => { const json = JSON.stringify(r.data); known.set(r.key, { version: r.version, json }); by[r.key] = r.updated_by || ""; if (DATA_KEYS.includes(r.key) && !unsent.has(r.key)) applyStoreFromRemote(r.key, r.data); });
   emit({ status: rows.length ? "synced" : "empty", lastPull: new Date().toISOString(), by });
   return { empty: rows.length === 0 };
 }
@@ -111,7 +114,22 @@ async function refused(key: string): Promise<void> {
   emit({ status: "refused", refusedKey: key });
   try { const fresh = (await fetchRows()).find((r: any) => r.key === key); if (fresh) { known.set(key, { version: fresh.version, json: JSON.stringify(fresh.data) }); applyStoreFromRemote(key, fresh.data); } } catch { /* the next pull brings it back */ }
 }
-async function pushNow(key: string, json: string, by: string, attempt = 0): Promise<void> {
+// ── v7.37.0 (AUD3-B1, external audit 28 Oct: "a save that fails is never retried — the pill turns back to synced and the next reload
+// wipes it"): EVERY CHANGE IS KEPT IN THIS BROWSER UNTIL THE SHARED COPY HAS IT. Written at once (so closing the tab loses nothing),
+// retried at every poll and when the network returns, pushed again after a reload (merged by the version check), never pulled over. ──
+const UNSENT_KEY = "marianna:unsent:v1";
+function readUnsent(): Record<string, { json: string; at: string }> { try { const u = JSON.parse(window.localStorage.getItem(UNSENT_KEY) || "{}"); return u && typeof u === "object" ? u : {}; } catch { return {}; } }
+function writeUnsent(u: Record<string, any>) { try { if (Object.keys(u).length) window.localStorage.setItem(UNSENT_KEY, JSON.stringify(u)); else window.localStorage.removeItem(UNSENT_KEY); } catch { /* storage full: the timer still pushes */ } }
+function markUnsent(key: string, json: string) { const u = readUnsent(); u[key] = { json, at: new Date().toISOString() }; writeUnsent(u); }
+function clearUnsent(key: string, json: string) { const u = readUnsent(); if (u[key] && u[key].json === json) { delete u[key]; writeUnsent(u); } }
+export function unsentKeys(): string[] { return Object.keys(readUnsent()); }
+async function flushUnsent(by: string): Promise<boolean> {
+  const u = readUnsent();
+  for (const [k, v] of Object.entries(u)) { if (pending.has(k)) continue; try { await pushNow(k, v.json, by); } catch { emit({ status: "offline", unsent: Object.keys(readUnsent()).length } as any); return false; } }
+  return !Object.keys(readUnsent()).length;
+}
+async function pushNow(key: string, json: string, by: string, attempt = 0): Promise<void> { await pushInner(key, json, by, attempt); clearUnsent(key, json); }
+async function pushInner(key: string, json: string, by: string, attempt = 0): Promise<void> {
   const k = known.get(key);
   if (k && k.json === json) return;   // an echo of what was pulled — nothing to push
   emit({ status: "saving" });
@@ -176,21 +194,26 @@ export function startSync(by: string): () => void {
   setStoreWrittenHook((key, json) => {
     if (!DATA_KEYS.includes(key)) return;
     if (state.status === "empty") return;   // v6.99.152: before the first upload nothing goes up — no stray store from a test browser
+    markUnsent(key, json);   // v7.37.0 (AUD3-B1): kept here until the shared copy has it
     const p = pending.get(key); if (p) clearTimeout(p.timer);
-    pending.set(key, { json, timer: setTimeout(() => { pending.delete(key); pushNow(key, json, by).catch(() => emit({ status: "offline" })); }, 1500) });
+    pending.set(key, { json, timer: setTimeout(() => { pending.delete(key); pushNow(key, json, by).catch(() => emit({ status: "offline", unsent: unsentKeys().length } as any)); }, 1500) });
   });
   const poll = setInterval(async () => {
     if (pending.size) return;   // never pull over a save in flight
+    if (unsentKeys().length && !(await flushUnsent(by).catch(() => false))) return;   // v7.37.0 (AUD3-B1): retried; still "offline" until it lands
     try {
       const versions: Row[] = await fetchRows("key,version,updated_by");
       const changed = versions.filter(r => DATA_KEYS.includes(r.key) && (known.get(r.key)?.version ?? 0) < r.version);
       if (!changed.length) { if (state.status === "offline") emit({ status: "synced" }); return; }
-      const rows = await fetchRows(); const by2 = { ...(state.by || {}) };
+      const rows = await fetchRows(undefined, changed.map(c => c.key)); const by2 = { ...(state.by || {}) };   // v7.41.0 (AUD3-A2): the changed lists only
       rows.filter(r => changed.some(c => c.key === r.key)).forEach(r => { known.set(r.key, { version: r.version, json: JSON.stringify(r.data) }); applyStoreFromRemote(r.key, r.data); by2[r.key] = r.updated_by || ""; });
       emit({ status: "synced", lastPull: new Date().toISOString(), by: by2 });
     } catch { emit({ status: "offline" }); }
   }, 20_000);
-  return () => { clearInterval(poll); setStoreWrittenHook(null); };
+  const online = () => { flushUnsent(by).catch(() => { /* the next poll retries */ }); };
+  window.addEventListener("online", online);
+  setTimeout(online, 0);   // v7.37.0 (AUD3-B1): what a closed tab or a reload left unsent goes up now
+  return () => { clearInterval(poll); setStoreWrittenHook(null); window.removeEventListener("online", online); };
 }
 export function clearConflict(key: string) { emit({ conflicts: state.conflicts.filter(c => c !== key) }); }
 
@@ -205,7 +228,7 @@ export const fileLabel = (): string => { const l = ENV_LABEL.toUpperCase().repla
 export async function replaceSharedStores(stores: Record<string, any>, by: string): Promise<number> {
   const current = await fetchRows("key,version"); const ver = new Map(current.map(r => [r.key, r.version]));
   const now = new Date().toISOString(); let n = 0;
-  for (const key of Object.keys(stores).filter(k => DATA_KEYS.includes(k))) {
+  for (const key of Object.keys(stores).filter(k => DATA_KEYS.includes(k) && k !== "auditLog")) {   // v7.37.0 (AUD3-B7): the audit trail only grows — never replaced by a backup's older one
     const data = stores[key]; const v = ver.get(key);
     const res = v == null
       ? await rest("stores", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify([{ key, data, version: 1, updated_by: by, updated_at: now }]) })

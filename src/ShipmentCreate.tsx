@@ -8,7 +8,7 @@ import { nextId } from "./ids";
 import { truckLoadPlaces } from "./shipmentModel.domain";
 import { appendSourceGoods, asSuppliersTruck } from "./shipments.domain";   // v6.99.94
 import { isExwSale, isDRulePurchase } from "./incoterms.domain";   // v7.19.1 / v7.19.2 (A-INC-1)
-import { placeForPrint , counterpartyLocations , unifiedLocations , placeGroup , locationById , isPortType } from "./locations";
+import { placeForPrint, counterpartyLocations, locationById, isPortType, ourMainWarehouse } from "./locations";
 import { catalogItems } from "./productCatalog";   // v7.18.4 (A-AU-9)
 import { Card, HEADER_MODES, Inp, Lbl, SectionTitle, Sel, buildManualShipment, buildShipmentFromPO, buildShipmentFromSO, countryOfLocation, fmtNum, locById, locText, mergedLocations, modeChangePatch, parseNum, todayISO } from "./Shipments";
 import { proposeJourney, legsFromJourney } from "./journeyProposal.domain";   // v7.29.0 (SC-15)
@@ -74,7 +74,7 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     if (sourceType === "Manual" || (!selectedPO && !selectedSO) || isDRule) { setJourneyLegs([]); setJourneyNote(""); return; }
     const contactOf = (p: any) => (contacts || []).find((c: any) => String(c.id) === String(p?.id)) || null;
     const siteOf = (p: any) => { const c = contactOf(p); const s = c ? counterpartyLocations([c])[0] : null; return s ? s.id : null; };
-    const own = () => { const o = unifiedLocations(contacts || []).find((l: any) => placeGroup(l) === "OWN"); return o ? o.id : null; };
+    const own = () => { const w = ourMainWarehouse(contacts || []); return w ? w.id : null; };   // v7.32.0 (FZ-04a): our main warehouse, from Parties
     const isPort = (id: any) => { const l = locationById(id, contacts || []); return !!l && isPortType(l); };
     // a sale's purchase is read through its lots (the shared rule, FZ-23) — and only while those lots are not in stock yet (a direct sale)
     const po = sourceType === "PO" ? selectedPO : (() => { const sp = posOfSale(selectedSO, pos || [], lots || []); const lotNos = (selectedSO?.items || []).map((it: any) => String(it.sourceRef || "")); const inStock = (lots || []).some((l: any) => lotNos.includes(String(l.number)) && Number(l.physicalKg) > 0); return sp.length === 1 && !inStock ? sp[0] : null; })();

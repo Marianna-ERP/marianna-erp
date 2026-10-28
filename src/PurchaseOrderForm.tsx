@@ -14,7 +14,7 @@ import { nextId } from "./ids";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
 import { readCountries } from "./Contacts";
 import { recordAudit } from "./audit";
-import { warehouseAddressLocations, unifiedLocations, locationById, counterpartyLocations, placeGroup } from "./locations";
+import { locationById, counterpartyLocations, ourMainWarehouse } from "./locations";
 import { CURRENCIES, FlowBadge, Inp, PO_STATUSES, QUALITY_GRADES, SUPPLIERS, Sel, StatusBadge, fmtMoney, fmtNum, netTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
 import { nbpRateBefore, orderBufferPct, orderRateFrom } from "./fx";   // v7.13.4 (A-AU-2)
 import { parseNum } from "./numbers";
@@ -110,7 +110,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
     }
     sf("status", newStatus);
   };
-  const WAREHOUSE_ADDRESS = ((unifiedLocations(contacts || []).find((l: any) => placeGroup(l) === "OWN") || {}) as any).address || (warehouseAddressLocations(contacts || [])[0] || {}).name || "";
+  const WAREHOUSE_ADDRESS = (() => { const w = ourMainWarehouse(contacts || []); return w ? [w.name, w.address].filter(Boolean).join(", ") : ""; })();   // v7.32.0 (FZ-04a): our main warehouse, from Parties
   const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const copyItem = (idx) => setOrder(o => ({ ...o, items: copyPOLine(o.items, idx, nextId()) }));   // v6.99.77 (A-POL-1)

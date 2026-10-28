@@ -12,6 +12,7 @@
 // converts in this batch as the pattern; every rebuilt screen adopts it.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useRef, useCallback } from "react";
+import { parseNum } from "./numbers";   // v7.38.0
 
 // v6.81.0 (D-53, owner ruling): ONE page-width standard — use the screen, cap at 1720 px
 // so 27" monitors do not stretch tables into unreadable lines. Every module root reads this.
@@ -243,4 +244,16 @@ export function notifySaved(what: string): void {
     host.appendChild(el); requestAnimationFrame(() => { el.style.opacity = "1"; });
     setTimeout(() => { el.style.opacity = "0"; setTimeout(() => el.remove(), 300); }, 2200);
   } catch { /* never let a toast break a save */ }
+}
+
+/** v7.38.0 (AUD3-B2 / B4, external audit 28 Oct: "the shipment editor turns an FX rate of 4.2650 into 42,650"): THE ONE NUMBER FIELD.
+ *  What is typed stays as typed (a dot, a comma, a space) while the field has the focus; it is read once, with the one number reader,
+ *  when the field is left or Enter is pressed. disabled / placeholder / title pass through, so a locked number field is locked. */
+export function NumInput({ value, onNumber, disabled = false, placeholder, title, style, ...rest }: any) {
+  const [text, setText] = React.useState<string | null>(null);
+  const commit = () => { if (text == null) return; const n = parseNum(text); setText(null); if (typeof onNumber === "function" && String(n) !== String(value ?? "")) onNumber(n); };
+  return <input {...rest} type="text" inputMode="decimal" disabled={disabled} placeholder={placeholder} title={title} style={style}
+    value={text != null ? text : (value ?? "")} onFocus={(e: any) => { if (!disabled) setText(String(value ?? "")); if (rest.onFocus) rest.onFocus(e); }}
+    onChange={(e: any) => setText(e.target.value)} onBlur={(e: any) => { commit(); if (rest.onBlur) rest.onBlur(e); }}
+    onKeyDown={(e: any) => { if (e.key === "Enter") commit(); if (rest.onKeyDown) rest.onKeyDown(e); }} />;
 }

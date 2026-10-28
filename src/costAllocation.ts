@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";   // v7.38.0 (AUD3-B6)
 // ─────────────────────────────────────────────────────────────────────────────
 // costAllocation.ts — pure shipment→lot cost allocation (Batch 1b, BP-52 groundwork)
 //
@@ -13,10 +14,7 @@
 // This is the first step toward BP-52 (lot costs as a fully derived cache).
 // ─────────────────────────────────────────────────────────────────────────────
 
-function num(v: any): number {
-  const x = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", "."));
-  return isFinite(x) ? x : 0;
-}
+function num(v: any): number { return parseNum(v); }   // v7.38.0 (AUD3-B6): the one number reader ("1.234,56" is 1234.56)
 
 export interface CostTypeMapper {
   inventoryType: (code: string) => string;

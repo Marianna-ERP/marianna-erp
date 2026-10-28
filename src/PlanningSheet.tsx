@@ -5,9 +5,9 @@ import { localTodayISO } from "./dates";
 // The weekly planning sheet: tabs · rows · cells, like her Excel, INSIDE the system and writing to NO module. Cells save as
 // typed (there are no gates here to bypass). Every change is logged for the study of how the sheet is filled.
 // ─────────────────────────────────────────────────────────────────────────────
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { SHEET_COLUMNS, SheetTab, SheetRow, SheetLogEntry, blankRow, sid, parseClipboard, pasteGrid, productText, tabToGrid, importWorkbookRows, sheetUsage, toISODate } from "./sheet.domain";
+import { SheetTab, SheetRow, SheetLogEntry, blankRow, sid, parseClipboard, productText, tabToGrid, importWorkbookRows, sheetUsage, setCellStyle, setColWidth, setRowHeight, TEXT_COLOURS, FILL_COLOURS, SHEET_COLUMNS, ShownCol, shownText, shownValue, pasteShownGrid, cellClipboardText, readSheetDate, ROW_HEAD_KEY, shownColumnsOf } from "./sheet.domain";
 import { HER_HEADERS } from "./board.domain";
 import { unifiedLocations , isPortType } from "./locations";
 import { S } from "./format";
@@ -22,22 +22,39 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   const tab = sorted.find(t => t.id === activeId) || sorted[sorted.length - 1] || null;
   const [sel, setSel] = useState<{ row: number; col: number }>({ row: 0, col: 0 });
   const [showUsage, setShowUsage] = useState(false);
+  // v7.30.17: sizes as they are dragged (saved on release), and the drag itself
+  const [liveW, setLiveW] = useState<Record<string, number>>({}); const [liveH, setLiveH] = useState<Record<string, number>>({});
+  const drag = useRef<any>(null);
+  useEffect(() => {
+  const move = (e: MouseEvent) => { const d = drag.current; if (!d) return;
+  if (d.kind === "col") setLiveW(w => ({ ...w, [d.key]: Math.max(50, Math.min(600, d.start + e.clientX - d.x)) }));
+  else setLiveH(h => ({ ...h, [d.id]: Math.max(24, Math.min(400, d.start + e.clientY - d.y)) })); };
+  const up = () => { const d = drag.current; if (!d) return; drag.current = null;
+  if (d.kind === "col") setLiveW(w => { const px = w[d.key]; if (px && d.tabId) setTabs((prev: SheetTab[]) => (prev || []).map(x => x.id === d.tabId ? setColWidth(x, d.key, px) : x)); const n = { ...w }; delete n[d.key]; return n; });
+  else setLiveH(h => { const px = h[d.id]; if (px && d.tabId) setTabs((prev: SheetTab[]) => (prev || []).map(x => x.id === d.tabId ? setRowHeight(x, d.id, px) : x)); const n = { ...h }; delete n[d.id]; return n; }); };
+  window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  }, [setTabs]);
   const who = userName || "user";
 
   // ── the Directory lists the dropdown cells choose from ──
   const lists = useMemo(() => {
     // v7.10.2 (A-RV-15 · CP-4) · v7.28.2: a note in the middle of this line had hidden its end since v7.10.2 — the lists held companies, not names
-    const by = (r: string) => activeParties(contacts).filter((c: any) => rolesOf(c).includes(r)).map((c: any) => c.name).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));
+    const by = (r: string) => activeParties(contacts).filter((c: any) => rolesOf(c).includes(r)).map((c: any) => String(c.name || "").trim()).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));   // v7.35.0: names trimmed
+    const everyone = activeParties(contacts).map((c: any) => String(c.name || "").trim()).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));
     const locs = unifiedLocations(contacts || []);
     const ports = locs.filter((l: any) => isPortType(l)).map((l: any) => l.name);   // v7.21.14 (A-RV-37): by the type — a place of type Other is no port
-    return { clients: by("Client"), suppliers: by("Supplier"), carriers: by("Carrier"), forwarders: Array.from(new Set([...by("Forwarder"), ...by("Shipping line")])),
-      ports: Array.from(new Set(ports)).sort(), places: Array.from(new Set(locs.map((l: any) => l.name))).sort(),
+    return { clients: by("Client"), suppliers: by("Supplier"), carriers: Array.from(new Set([...by("Carrier"), ...everyone])),   /* v7.35.0 (WB-7): carriers first, then every other company */ forwarders: Array.from(new Set([...by("Forwarder"), ...by("Shipping line")])),
+      ports: Array.from(new Set(ports)).sort(),
+      // v7.31.0 (WB-4, owner 21 Oct: "the loading place column refers once more to the supplier name and not the address"): each place with its address
+      places: Array.from(new Set(locs.map((l: any) => [S(l.name), S(l.address).replace(/\s*\n\s*/g, ", ")].filter(Boolean).join(" · ")))).sort(), placeNames: Array.from(new Set(locs.map((l: any) => S(l.name)))), archivedNames: (contacts || []).filter((c: any) => c && c.archived).map((c: any) => String(c.name || "").trim()),
       orders: (orders || []).filter((o: any) => o.status !== "Cancelled").map((o: any) => o.number),
       items: (catalog || []).map((c: any) => c.item), varieties: Array.from(new Set((catalog || []).flatMap((c: any) => c.varieties || []))) } as Record<string, string[]>;
   }, [contacts, orders, catalog]);
 
   const addLog = (entries: SheetLogEntry[]) => { if (setLog && entries.length) setLog((prev: any[]) => [...(prev || []), ...entries]); };
-  const updateTab = (id: string, fn: (t: SheetTab) => SheetTab) => setTabs((prev: SheetTab[]) => (prev || []).map(t => t.id === id ? fn(t) : t));
+  const undoRef = useRef<SheetTab[][]>([]);   // v7.36.0 (WB-8): Ctrl+Z — the tabs as they were before each change
+  const updateTab = (id: string, fn: (t: SheetTab) => SheetTab) => { undoRef.current = [...undoRef.current.slice(-29), (tabs || []) as SheetTab[]]; setTabs((prev: SheetTab[]) => (prev || []).map(t => t.id === id ? fn(t) : t)); };
 
   function commit(row: SheetRow, key: string, value: any) {
     if (!tab || row.frozen) return;
@@ -55,7 +72,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   }
   // ── rows ──
   function addRow(at?: number) { if (!tab) return; const r = blankRow(nowISO()); updateTab(tab.id, t => { const rows = [...t.rows]; rows.splice(at === undefined ? rows.length : at, 0, r); return { ...t, rows }; }); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: "row+" }]); }
-  function duplicateRow(i: number) { if (!tab) return; const src = tab.rows[i]; const r = { ...blankRow(nowISO()), cells: JSON.parse(JSON.stringify(src.cells)) }; updateTab(tab.id, t => { const rows = [...t.rows]; rows.splice(i + 1, 0, r); return { ...t, rows }; }); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: "row+" }]); }
+  function duplicateRow(i: number) { if (!tab) return; const src = tab.rows[i]; const r = { ...blankRow(nowISO()), cells: JSON.parse(JSON.stringify(src.cells)), ...(src.styles ? { styles: JSON.parse(JSON.stringify(src.styles)) } : {}), ...(src.height ? { height: src.height } : {}) }; updateTab(tab.id, t => { const rows = [...t.rows]; rows.splice(i + 1, 0, r); return { ...t, rows }; }); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: "row+" }]); }
   async function deleteRow(i: number) { if (!tab) return; const r = tab.rows[i]; if (r.frozen) { (await uiAlert({ message: "A frozen row cannot be deleted — unfreeze it first." })); return; } if (!(await uiConfirm({ title: "Please confirm", message: "Delete this row?" }))) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.filter((_, k) => k !== i) })); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: "row-" }]); }
   async function toggleFreeze(i: number) { if (!tab) return; const r = tab.rows[i]; if (r.frozen && !(await uiConfirm({ title: "Please confirm", message: "Unfreeze this row? It becomes editable again (recorded)." }))) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.map((x, k) => k === i ? { ...x, frozen: !x.frozen } : x) })); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: r.frozen ? "unfreeze" : "freeze" }]); }
   // ── tabs ──
@@ -64,58 +81,138 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   function moveTab(dir: -1 | 1) { if (!tab) return; const i = sorted.findIndex(t => t.id === tab.id); const j = i + dir; if (j < 0 || j >= sorted.length) return; const a = sorted[i], b = sorted[j]; setTabs((prev: SheetTab[]) => (prev || []).map(t => t.id === a.id ? { ...t, order: b.order } : t.id === b.id ? { ...t, order: a.order } : t)); }
   async function deleteTab() { if (!tab) return; if (tab.rows.some(r => r.frozen)) { (await uiAlert({ message: "This tab has frozen rows — unfreeze them before deleting the tab." })); return; } if (!(await uiConfirm({ title: "Please confirm", message: `Delete the tab "${tab.name}" and its ${tab.rows.length} row(s)?` }))) return; setTabs((prev: SheetTab[]) => (prev || []).filter(t => t.id !== tab.id)); addLog([{ at: nowISO(), who, tab: tab.id, action: "tab-", old: tab.name }]); setActiveId(""); }
   async function freezeTab() { if (!tab) return; if (!(await uiConfirm({ title: "Please confirm", message: `Freeze every row of "${tab.name}"?` }))) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.map(r => ({ ...r, frozen: true })) })); addLog(tab.rows.filter(r => !r.frozen).map(r => ({ at: nowISO(), who, tab: tab.id, row: r.id, action: "freeze" as const }))); }
-  // ── paste a block from Excel ──
-  function onPaste(e: React.ClipboardEvent) {
-    if (!tab) return; const text = e.clipboardData.getData("text/plain"); if (!/[\t\n]/.test(text)) return;   // a single value pastes normally into the cell
-    e.preventDefault();
-    const res = pasteGrid(tab.rows, sel, parseClipboard(text), nowISO(), new Date().getFullYear());
-    updateTab(tab.id, t => ({ ...t, rows: res.rows }));
-    addLog(res.changed.map(c => ({ at: nowISO(), who, tab: tab.id, row: c.row, col: c.col, old: c.old, now: c.now, action: "paste" as const })));
-  }
   // ── her workbook in, the sheet out ──
+  const [pickTabs, setPickTabs] = useState<null | { names: string[]; file: string; done: (n: string[]) => void }>(null);
+  const [tabTicks, setTabTicks] = useState<Record<string, boolean>>({});
   function importFile(f: any) {
     if (!f) return; const rd = new FileReader();
     rd.onload = async () => { const wb = XLSX.read(rd.result, { type: "array", cellDates: true }); let order = (sorted[sorted.length - 1]?.order ?? 0);
-      const added: SheetTab[] = wb.SheetNames.map(n => ({ ...importWorkbookRows(n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }) as any[][], HER_HEADERS, nowISO()), order: ++order }));
+      // v7.35.0 (WB-7): the workbook's tabs are offered — only the ones ticked are brought in
+      const chosen: string[] = wb.SheetNames.length > 1 ? await new Promise<string[]>(res => setPickTabs({ names: wb.SheetNames, file: f.name, done: res })) : wb.SheetNames;
+      if (!chosen.length) return;
+      const added: SheetTab[] = chosen.map(n => ({ ...importWorkbookRows(n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }) as any[][], HER_HEADERS, nowISO()), order: ++order }));
       if (!(await uiConfirm({ title: "Please confirm", message: `Import ${added.length} tab(s), ${added.reduce((s, t) => s + t.rows.length, 0)} row(s) from ${f.name}? Existing tabs are kept.` }))) return;
       setTabs((prev: SheetTab[]) => [...(prev || []), ...added]); addLog(added.map(t => ({ at: nowISO(), who, tab: t.id, action: "import" as const, now: `${t.name} · ${t.rows.length} rows from ${f.name}` }))); if (added[0]) setActiveId(added[0].id); };
     rd.readAsArrayBuffer(f);
   }
   function exportXlsx(all: boolean) {
     const wb = XLSX.utils.book_new(); const list = all ? sorted : (tab ? [tab] : []);
-    list.forEach(t => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([SHEET_COLUMNS.map(c => c.label), ...tabToGrid(t)]), t.name.slice(0, 31) || "sheet"));
+    list.forEach(t => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([[...SHEET_COLUMNS.map(c => c.label), ...(t.extraCols || []).map(x => x.label)], ...tabToGrid(t)]), t.name.slice(0, 31) || "sheet"));
     if (list.length) XLSX.writeFile(wb, `Planning_sheet_${all ? "all" : (tab?.name || "tab").replace(/\s+/g, "_")}_${localTodayISO()}.xlsx`);
   }
   function exportLog() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["when", "who", "action", "tab", "row", "column", "old", "new"], ...(log || []).map((e: SheetLogEntry) => [e.at, e.who, e.action, (sorted.find(t => t.id === e.tab)?.name) || e.tab, e.row || "", e.col || "", typeof e.old === "object" ? productText(e.old) : S(e.old), typeof e.now === "object" ? productText(e.now) : S(e.now)])]), "change log"); XLSX.writeFile(wb, `Planning_sheet_changes_${localTodayISO()}.xlsx`); }
 
-  const inp: any = { width: "100%", border: "1px solid transparent", background: "transparent", padding: "4px 5px", fontSize: 12, borderRadius: 4, boxSizing: "border-box" };
-  const amber = { ...inp, border: "1px solid #F59E0B", background: "#FFFBEB" };
   const btn: any = { fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 7, padding: "5px 10px", cursor: "pointer" };
 
-  // v6.99.82 (A-PS-3, owner 29 Sept — "I can move between cells but typing does nothing"): this was a COMPONENT declared
-  // inside the sheet, so every re-render of the sheet (the focus outline moving is one) gave React a new component type
-  // and it re-created the cell — the input you had just clicked was thrown away and the keystrokes went nowhere.
-  // It is a plain function now: the inputs live in the table and survive the sheet's re-renders.
-  function cell(r: SheetRow, ri: number, ci: number) {
-    const c = SHEET_COLUMNS[ci]; const v = r.cells[c.key]; const dis = !!r.frozen;
-    const focus = () => setSel({ row: ri, col: ci });
-    const k = `${r.id}-${c.key}-${JSON.stringify(v ?? "")}`;
-    // v6.99.80 (A-PS-2, owner 29 Sept): a cell saves when you LEAVE it — Tab, a click elsewhere, or now Enter (saves and
-    // moves down); Escape puts the stored value back. The date cell saved on every keystroke, and each save re-drew the
-    // cell, so typing a date by hand lost the cursor after the first key — it now saves on leaving like every other cell.
-    const keys = (e: any) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); const rows = Array.from(document.querySelectorAll("table tbody tr")); const tr = e.target.closest("tr"); const next = rows[rows.indexOf(tr) + 1] as any; const cellIdx = Array.from(tr?.children || []).indexOf(e.target.closest("td")); const nt = next && next.children[cellIdx]?.querySelector("input"); if (nt) nt.focus(); }
-      else if (e.key === "Escape") { e.preventDefault(); e.target.value = c.kind === "product" ? e.target.defaultValue : S(v); e.target.blur(); } };
-    if (c.kind === "product") { const p = typeof v === "object" && v ? v : { item: S(v), variety: "", size: "" }; const inCat = !p.item || (lists.items || []).includes(p.item);
-      return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 60px", gap: 2 }}>
-        <input key={k + "i"} list="ps-items" disabled={dis} defaultValue={p.item} placeholder="item" onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, { ...p, item: S(e.target.value) })} style={inCat ? inp : amber} title={inCat ? "" : "not in the product catalogue"} />
-        <input key={k + "v"} list="ps-varieties" disabled={dis} defaultValue={p.variety} placeholder="variety" onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, { ...p, variety: S(e.target.value) })} style={inp} />
-        <input key={k + "s"} disabled={dis} defaultValue={p.size} placeholder="size" onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, { ...p, size: S(e.target.value) })} style={inp} /></div>; }
-    if (c.kind === "date") { const iso = !S(v) || /^\d{4}-\d{2}-\d{2}$/.test(S(v));
-      return iso ? <input key={k} type="date" disabled={dis} defaultValue={S(v)} onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, e.target.value)} style={inp} />
-        : <input key={k} disabled={dis} defaultValue={S(v)} onFocus={focus} onKeyDown={keys} title="not a date — type dd/mm/yyyy" onBlur={e => { const t = toISODate(e.target.value); commit(r, c.key, t === null ? S(e.target.value) : t); }} style={amber} />; }
-    if (c.kind === "list") { const known = !S(v) || (lists[c.list!] || []).includes(S(v));
-      return <input key={k} list={"ps-" + c.list} disabled={dis} defaultValue={S(v)} onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, S(e.target.value))} style={known ? inp : amber} title={known ? "" : "not in the Directory"} />; }
-    return <input key={k} disabled={dis} defaultValue={S(v)} onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, S(e.target.value))} style={inp} />;
+  // ── v7.31.0 (WB-6, owner 21 Oct: "copy / paste from one cell to another does not work"): AS IN EXCEL — a click SELECTS a cell;
+  // Ctrl+C / Ctrl+X / Ctrl+V / Delete act on the whole selected cell; typing replaces it; a double-click or F2 edits it in place;
+  // the arrow keys, Tab and Enter move the selection. Every change is still recorded for the study. ──
+  const grid = useRef<HTMLDivElement | null>(null);
+  const [editing, setEditing] = useState<null | { seed?: string }>(null);
+  const editorRef = useRef<any>(null);
+  // v7.36.0 (WB-8): A BLOCK OF CELLS — from the anchor to the selected cell (Shift+click, Shift+arrows, a drag); a whole row from its number
+  const [anchor, setAnchor] = useState<null | { row: number; col: number }>(null); const dragSel = useRef(false); const dragRow = useRef<number | null>(null); const dragCol = useRef<string | null>(null);
+  const [colMenu, setColMenu] = useState<null | { key: string; x: number; y: number }>(null);
+  useEffect(() => { const up = () => { dragSel.current = false; }; document.addEventListener("mouseup", up); return () => document.removeEventListener("mouseup", up); }, []);
+  const rect = () => { const a = anchor || sel; return { r0: Math.min(a.row, sel.row), r1: Math.max(a.row, sel.row), c0: Math.min(a.col, sel.col), c1: Math.max(a.col, sel.col) }; };
+  const inRect = (ri: number, ci: number) => { if (!anchor) return false; const q = rect(); return ri >= q.r0 && ri <= q.r1 && ci >= q.c0 && ci <= q.c1; };
+  const many = () => { const q = rect(); return !!anchor && (q.r1 > q.r0 || q.c1 > q.c0); };
+  useEffect(() => { const el: any = typeof document !== "undefined" ? document.querySelector(`[data-sheet-cell="${sel.row}:${sel.col}"]`) : null; if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [sel.row, sel.col]);   // v7.36.0 (WB-8): the view follows the selection
+  function writeMany(list: Array<{ ri: number; ci: number; text: string }>, action: string) {
+    if (!tab || !list.length) return; const changed: any[] = [];
+    updateTab(tab.id, x => ({ ...x, rows: x.rows.map((r, idx) => { const mine = list.filter(w => w.ri === idx); if (!mine.length || r.frozen) return r; let cur: any = { ...r, cells: { ...r.cells } };
+      mine.forEach(w => { const c = cols[w.ci]; if (!c) return; const old = shownText(cur, c); if (old === w.text) return; const v = shownValue(cur, c, w.text, yearHint); cur = { ...cur, cells: { ...cur.cells, [v.key]: v.value } }; changed.push({ row: r.id, col: c.key, old, now: w.text }); }); return cur; }) }));
+    addLog(changed.map(c => ({ at: nowISO(), who, tab: tab.id, row: c.row, col: c.col, old: c.old, now: c.now, action: action as any })));
+  }
+  const fillRange = (text: string) => { const q = rect(); const list: any[] = []; for (let ri = q.r0; ri <= q.r1; ri++) for (let ci = q.c0; ci <= q.c1; ci++) list.push({ ri, ci, text }); writeMany(list, "paste"); };
+  const clearRange = () => fillRange("");
+  function moveRows(dir: number, to?: number) { if (!tab) return; const q = rect(); const from = anchor ? q.r0 : sel.row, till = anchor ? q.r1 : sel.row; const n = till - from + 1;
+    const target = to != null ? to : from + dir; if (target < 0 || target + n > tab.rows.length || target === from) return;
+    updateTab(tab.id, x => { const rows = [...x.rows]; const block = rows.splice(from, n); rows.splice(target, 0, ...block); return { ...x, rows }; });
+    addLog([{ at: nowISO(), who, tab: tab.id, action: "move" as any, now: `rows ${from + 1}–${till + 1} → ${target + 1}` } as any]);
+    setSel(s => ({ ...s, row: s.row + (target - from) })); setAnchor(a => a ? { ...a, row: a.row + (target - from) } : a); }
+  function undo() { const prev = undoRef.current.pop(); if (!prev) return; setTabs(() => prev); if (tab) addLog([{ at: nowISO(), who, tab: tab.id, action: "undo" as any, now: "undo" } as any]); }
+  // v7.36.0 (WB-9): COLUMNS per tab — an added column (free text) is inserted, renamed or deleted; a built-in one is hidden, never lost
+  async function insertCol(at: string, side: "left" | "right") { if (!tab) return; const name = await uiPrompt({ title: "New column", message: "Name of the column", defaultValue: "New column" } as any); if (name == null || !String(name).trim()) return;
+    const idx = cols.findIndex(c => c.key === at); const after = side === "right" ? at : (idx > 0 ? cols[idx - 1].key : undefined); const key = "x_" + sid("c").replace(/[^a-z0-9]/gi, "");
+    updateTab(tab.id, x => { const order = shownColumnsOf(x).map(c => c.key); const pos = side === "right" ? order.indexOf(at) + 1 : Math.max(0, order.indexOf(at)); order.splice(pos, 0, key); return { ...x, extraCols: [...(x.extraCols || []), { key, label: String(name).trim(), after }], colOrder: order }; }); setColMenu(null); }
+  async function renameCol(key: string) { if (!tab) return; const x0 = (tab.extraCols || []).find(x => x.key === key); if (!x0) return; const name = await uiPrompt({ title: "Rename the column", message: "Name", defaultValue: x0.label } as any); if (name == null || !String(name).trim()) return;
+    updateTab(tab.id, x => ({ ...x, extraCols: (x.extraCols || []).map(c => c.key === key ? { ...c, label: String(name).trim() } : c) })); setColMenu(null); }
+  async function deleteCol(key: string) { if (!tab) return; const extra = (tab.extraCols || []).some(x => x.key === key); setColMenu(null);
+    if (extra) { const filled = tab.rows.filter(r => String((r.cells || {})[key] ?? "").trim()).length; if (!(await uiConfirm({ title: "Please confirm", message: `Delete this column${filled ? ` and what ${filled} cell(s) hold` : ""}?`, confirmLabel: "Delete" } as any))) return;
+      updateTab(tab.id, x => ({ ...x, extraCols: (x.extraCols || []).filter(c => c.key !== key), colOrder: (x.colOrder || []).filter(k => k !== key), rows: x.rows.map(r => { if (!(key in (r.cells || {}))) return r; const cells = { ...r.cells }; delete cells[key]; return { ...r, cells }; }) })); }
+    else updateTab(tab.id, x => ({ ...x, hiddenCols: Array.from(new Set([...(x.hiddenCols || []), key])) }));
+    setSel(s => ({ ...s, col: Math.max(0, Math.min(s.col, cols.length - 2)) })); setAnchor(null); }
+  const showHidden = () => { if (!tab) return; updateTab(tab.id, x => ({ ...x, hiddenCols: [] })); setColMenu(null); };
+  const moveCol = (from: string, to: string) => { if (!tab || from === to) return; updateTab(tab.id, x => { const order = shownColumnsOf(x).map(c => c.key); const i = order.indexOf(from); if (i < 0) return x; order.splice(i, 1); const j = order.indexOf(to); order.splice(j < 0 ? order.length : j, 0, from); return { ...x, colOrder: order }; }); };   // v7.35.0 (WB-7): the open editor, so leaving the cell saves what it holds
+  const yearHint = new Date().getFullYear();
+  const cols: ShownCol[] = shownColumnsOf(tab);   // v7.36.0 (WB-9): the tab's own columns
+  const rowsOf = (): SheetRow[] => (tab ? tab.rows : []);
+  const move = (dr: number, dc: number) => setSel(s => ({ row: Math.max(0, Math.min(rowsOf().length - 1, s.row + dr)), col: Math.max(0, Math.min(cols.length - 1, s.col + dc)) }));
+  const backToGrid = () => { setTimeout(() => { try { if (grid.current && !(document.activeElement && (document.activeElement as any).dataset && (document.activeElement as any).dataset.sheetEditor)) grid.current.focus(); } catch { /* gone */ } }, 0); };
+  function writeShown(r: SheetRow, col: ShownCol, text: any) { const { key, value } = shownValue(r, col, text, yearHint); commit(r, key, value); }
+  function stopEdit(save: boolean, text?: any, then?: [number, number]) {
+    const r = rowsOf()[sel.row]; const col = cols[sel.col];
+    if (save && r && col && text !== undefined && String(text).replace(/\s+$/, "") !== shownText(r, col)) writeShown(r, col, String(text).replace(/\s+$/, ""));
+    setEditing(null); if (then) move(then[0], then[1]); backToGrid();
+  }
+  function gridKeys(e: React.KeyboardEvent) {
+    if (editing || e.target !== grid.current || !tab) return;
+    const r = rowsOf()[sel.row]; const col = cols[sel.col]; const k = e.key;
+    if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "z") { e.preventDefault(); undo(); return; }   // v7.36.0 (WB-8)
+    if (e.altKey && (k === "ArrowUp" || k === "ArrowDown")) { e.preventDefault(); moveRows(k === "ArrowUp" ? -1 : 1); return; }
+    if (k.startsWith("Arrow")) { if (e.shiftKey) { if (!anchor) setAnchor(sel); } else setAnchor(null); }
+    if ((k === "Delete" || k === "Backspace") && many()) { e.preventDefault(); clearRange(); return; }
+    if (k === "ArrowDown") { e.preventDefault(); move(1, 0); } else if (k === "ArrowUp") { e.preventDefault(); move(-1, 0); }
+    else if (k === "ArrowRight") { e.preventDefault(); move(0, 1); } else if (k === "ArrowLeft") { e.preventDefault(); move(0, -1); }
+    else if (k === "Tab") { e.preventDefault(); move(0, e.shiftKey ? -1 : 1); } else if (k === "Enter") { e.preventDefault(); move(e.shiftKey ? -1 : 1, 0); }
+    else if (k === "F2") { e.preventDefault(); if (r && !r.frozen) setEditing({}); }
+    else if (k === "Delete" || k === "Backspace") { e.preventDefault(); if (r && col && !r.frozen && shownText(r, col)) writeShown(r, col, ""); }
+    else if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); if (r && !r.frozen) setEditing({ seed: k }); }
+  }
+  const inGrid = () => { const a: any = typeof document !== "undefined" ? document.activeElement : null; return !!grid.current && !!a && (a === grid.current || grid.current.contains(a)) && !(a.dataset && a.dataset.sheetEditor) && !(a.dataset && a.dataset.sheetBar); };
+  function onCopy(e: any, cut = false) {
+    if (editing || !inGrid() || !tab) return;
+    if (many()) { e.preventDefault(); const q = rect(); const lines: string[] = []; for (let ri = q.r0; ri <= q.r1; ri++) lines.push(cols.slice(q.c0, q.c1 + 1).map(c => cellClipboardText(shownText(tab.rows[ri], c))).join("\t"));   // v7.36.0 (WB-8): a block, as Excel copies it
+      if (e.clipboardData) e.clipboardData.setData("text/plain", lines.join("\r\n")); if (cut) clearRange(); return; } const r = rowsOf()[sel.row]; const col = cols[sel.col]; if (!r || !col) return;
+    e.preventDefault(); e.clipboardData.setData("text/plain", cellClipboardText(shownText(r, col)));
+    if (cut && !r.frozen && shownText(r, col)) writeShown(r, col, "");
+  }
+  function onPaste(e: any) {
+    if (editing || !inGrid() || !tab) return; e.preventDefault();
+    const blocks = parseClipboard(e.clipboardData.getData("text/plain")); if (!blocks.length) return;
+    if (many() && blocks.length === 1 && (blocks[0] || []).length === 1) { fillRange(String(blocks[0][0] ?? "")); return; }   // v7.36.0 (WB-8): one value fills the block
+    const q = rect(); const res = pasteShownGrid(tab.rows, anchor ? { row: q.r0, col: q.c0 } : sel, blocks, nowISO(), yearHint, cols); if (!res.changed.length) return;
+    updateTab(tab.id, x => ({ ...x, rows: res.rows }));
+    addLog(res.changed.map(c => ({ at: nowISO(), who, tab: tab.id, row: c.row, col: c.col, old: c.old, now: c.now, action: "paste" as const })));
+  }
+  // v7.35.0 (WB-7, owner 26 Oct: "we cannot copy paste from one cell to the other"): listened for on the page, while the board has the focus
+  useEffect(() => { const c = (e: any) => onCopy(e), x = (e: any) => onCopy(e, true), p = (e: any) => onPaste(e);
+    document.addEventListener("copy", c); document.addEventListener("cut", x); document.addEventListener("paste", p);
+    return () => { document.removeEventListener("copy", c); document.removeEventListener("cut", x); document.removeEventListener("paste", p); }; });
+  // a cell to look at again — a name not in the Directory, a product not in the catalogue, a date that is neither a date nor a range
+  function doubtful(r: SheetRow, col: ShownCol): string {
+    const txt = shownText(r, col).trim(); if (!txt) return "";
+    if (col.kind === "date") return readSheetDate((r.cells || {})[col.dataKey], yearHint).iso === null ? "not a date — type dd/mm/yyyy, or a range such as 20-21/10" : "";
+    if (col.part === "item") return (lists.items || []).includes(txt) ? "" : "not in the product catalogue";
+    if (col.kind === "list" && col.list) { const known = (lists[col.list] || []).includes(txt) || (col.list === "places" && (lists.placeNames || []).includes(txt)); if (known) return ""; return (lists.archivedNames || []).includes(txt) ? "archived in Parties — restore it there to choose it" : "not in the Directory"; }
+    return "";
+  }
+  function editor(r: SheetRow, col: ShownCol) {
+    const seed = editing && editing.seed !== undefined ? editing.seed : undefined; const start = seed !== undefined ? seed : shownText(r, col);
+    const st: any = (r.styles || {})[col.key] || {}; const look: any = { ...(st.b ? { fontWeight: 800 } : {}), ...(st.color ? { color: st.color } : {}) };
+    const box: any = { width: "100%", height: "100%", minHeight: 24, border: "none", outline: "2px solid #2563EB", background: "#fff", padding: "4px 5px", fontSize: 12, boxSizing: "border-box", fontFamily: "inherit", lineHeight: 1.35, resize: "none", display: "block", ...look };
+    const keys = (e: any) => {
+      if (e.key === "Enter" && (e.altKey || e.shiftKey) && e.target.tagName === "TEXTAREA") { e.preventDefault(); const el = e.target; const a2 = el.selectionStart ?? el.value.length, b2 = el.selectionEnd ?? a2; el.value = el.value.slice(0, a2) + "\n" + el.value.slice(b2); el.selectionStart = el.selectionEnd = a2 + 1; return; }
+      if (e.key === "Enter") { e.preventDefault(); stopEdit(true, e.target.value, [1, 0]); return; }
+      if (e.key === "Tab") { e.preventDefault(); stopEdit(true, e.target.value, [0, e.shiftKey ? -1 : 1]); return; }
+      if (e.key === "Escape") { e.preventDefault(); stopEdit(false); }
+    };
+    const focusEnd = (el: any) => { editorRef.current = el; if (el && document.activeElement !== el) { el.focus(); const n = String(el.value || "").length; try { el.setSelectionRange(n, n); } catch { /* not a text box */ } } };
+    const listId = col.list ? "ps-" + col.list : undefined;
+    if (col.kind === "text" && !col.part) return <textarea data-sheet-editor="1" ref={focusEnd} defaultValue={start} onKeyDown={keys} onBlur={e => { if (editing) stopEdit(true, e.target.value); }} style={{ ...box, whiteSpace: "pre-wrap", overflow: "hidden" }} rows={Math.max(1, String(start).split("\n").length)} />;
+    const pickList: string[] = col.list ? ((lists as any)[col.list] || []) : [];
+    return <input data-sheet-editor="1" ref={focusEnd} list={listId} defaultValue={start} onKeyDown={keys} onInput={(e: any) => { const v = String(e.target.value || ""); if (pickList.length && pickList.includes(v) && v !== shownText(r, col)) stopEdit(true, v); }} onBlur={e => { if (editing) stopEdit(true, e.target.value); }} style={box} placeholder={col.kind === "date" ? "dd/mm/yyyy or 20-21/10" : undefined} />;
   }
 
   const usage = showUsage ? sheetUsage(sorted, log || []) : [];
@@ -141,6 +238,37 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
           <button style={btn} onClick={renameTab}>✎ Rename</button><button style={btn} onClick={freezeTab}>🔒 Freeze tab</button>
           <button style={{ ...btn, background: "#DC2626", color: "#fff", borderColor: "#DC2626" }} onClick={deleteTab}>Delete tab</button></span>}
       </div>
+      {tab && (() => { const row = tab.rows[sel.row]; const col = cols[sel.col]; if (!row || !col) return null; const st: any = (row.styles || {})[col.key] || {};
+      const apply = (patch: any) => updateTab(tab.id, x => setCellStyle(x, row.id, col.key, patch));
+      const sw = (bg: string, on: boolean, onClick: () => void, title: string, text = "") => <button key={title} title={title} onMouseDown={e => e.preventDefault()} onClick={onClick} style={{ width: 20, height: 20, borderRadius: 4, border: on ? "2px solid #0F172A" : "1px solid #CBD5E1", background: bg, cursor: "pointer", fontSize: 11, fontWeight: 800, color: "#fff", padding: 0 }}>{text}</button>;
+      return <div data-sheet-format="1" style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 16px", background: "#fff", borderBottom: "1px solid #EBEBEB", flexWrap: "wrap", fontSize: 11 }}>   {/* v7.30.17: the selected cell's look */}
+      <span style={{ color: "#64748B" }}>Cell {sel.row + 1} · {col.label}:</span>
+      <button title="bold" onMouseDown={e => e.preventDefault()} onClick={() => apply({ b: !st.b })} style={{ ...btn, padding: "2px 9px", fontWeight: 900, background: st.b ? "#0F172A" : "#fff", color: st.b ? "#fff" : "#111" }}>B</button>
+      <span style={{ color: "#64748B", marginLeft: 6 }}>Text</span>{TEXT_COLOURS.map(c2 => sw(c2, st.color === c2, () => apply({ color: st.color === c2 ? null : c2 }), "text " + c2))}
+      <span style={{ color: "#64748B", marginLeft: 6 }}>Fill</span>{FILL_COLOURS.map(c2 => sw(c2, st.fill === c2, () => apply({ fill: st.fill === c2 ? null : c2 }), "fill " + c2))}
+      <button onMouseDown={e => e.preventDefault()} onClick={() => apply(null)} style={{ ...btn, padding: "2px 8px", marginLeft: 6 }}>Clear format</button>
+          <span style={{ color: "#94A3B8", marginLeft: "auto" }}>Ctrl+C / Ctrl+V / Delete on the selected cell · double-click or F2 to edit · Alt+Enter: a new line · drag an edge to resize</span>
+        </div>; })()}
+      {tab && (() => { const row = tab.rows[sel.row]; const col = cols[sel.col]; if (!row || !col) return null;   /* v7.31.0 (WB-3): the selected cell's whole content, as Excel's formula bar */
+        return <div data-sheet-content="1" style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 16px", background: "#fff", borderBottom: "1px solid #EBEBEB" }}>
+          <span style={{ fontSize: 11, color: "#64748B", whiteSpace: "nowrap", paddingTop: 5, minWidth: 140 }}>{col.label} · row {sel.row + 1}</span>
+          <textarea key={row.id + col.key + shownText(row, col)} data-sheet-bar="1" disabled={!!row.frozen} defaultValue={shownText(row, col)} rows={Math.min(6, Math.max(1, shownText(row, col).split("\n").length))}
+            onKeyDown={(e: any) => { if (e.key === "Enter" && !e.altKey && !e.shiftKey) { e.preventDefault(); e.target.blur(); } else if (e.key === "Escape") { e.preventDefault(); e.target.value = shownText(row, col); e.target.blur(); } }}
+            onBlur={(e: any) => { const v = String(e.target.value || "").replace(/\s+$/, ""); if (v !== shownText(row, col)) writeShown(row, col, v); }}
+            style={{ flex: 1, border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12, fontFamily: "inherit", resize: "vertical", lineHeight: 1.35, background: row.frozen ? "#F8FAFC" : "#fff" }} />
+        </div>; })()}
+
+      {colMenu && tab && <div data-col-menu="1" onMouseLeave={() => setColMenu(null)} style={{ position: "fixed", left: colMenu.x, top: colMenu.y, zIndex: 8600, background: "#fff", border: "1px solid #E5E7EB", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.15)", padding: 4, fontSize: 12, minWidth: 190 }}>
+        {[["Insert column left", () => insertCol(colMenu.key, "left")], ["Insert column right", () => insertCol(colMenu.key, "right")], ...((tab.extraCols || []).some(x => x.key === colMenu.key) ? [["Rename", () => renameCol(colMenu.key)], ["Delete column", () => deleteCol(colMenu.key)]] : [["Hide column", () => deleteCol(colMenu.key)]]), ...((tab.hiddenCols || []).length ? [[`Show hidden columns (${(tab.hiddenCols || []).length})`, showHidden]] : []), ["Close", () => setColMenu(null)]].map(([label, fn]: any) => <div key={label} onClick={fn} style={{ padding: "6px 10px", cursor: "pointer", borderRadius: 6 }} onMouseEnter={(e: any) => { e.currentTarget.style.background = "#F1F5F9"; }} onMouseLeave={(e: any) => { e.currentTarget.style.background = "transparent"; }}>{label}</div>)}
+      </div>}
+      {pickTabs && <div data-pick-tabs="1" style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.35)", zIndex: 8500, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ background: "#fff", borderRadius: 12, padding: 16, width: 420, maxWidth: "95vw", fontSize: 12 }}>
+          <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>Which tabs of {pickTabs.file}?</div>
+          {pickTabs.names.map(n => <label key={n} style={{ display: "flex", gap: 8, padding: "3px 0" }}><input type="checkbox" checked={!!tabTicks[n]} onChange={e => setTabTicks(x => ({ ...x, [n]: e.target.checked }))} />{n}</label>)}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+            <button type="button" onClick={() => { pickTabs.done([]); setPickTabs(null); setTabTicks({}); }} style={btn}>Cancel</button>
+            <button type="button" onClick={() => { pickTabs.done(pickTabs.names.filter(n => tabTicks[n])); setPickTabs(null); setTabTicks({}); }} style={{ ...btn, background: "#111", color: "#fff" }}>Import the ticked tabs</button>
+          </div></div></div>}
       {showUsage && (
         <div style={{ margin: "10px 16px 0", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "8px 10px", maxHeight: 260, overflow: "auto" }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}><div style={{ fontSize: 12, fontWeight: 800 }}>How the sheet is used — from {(log || []).length} recorded change(s)</div><button style={{ ...btn, marginLeft: "auto" }} onClick={exportLog}>Export file (change log)</button></div>
@@ -150,26 +278,38 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
           </table>
         </div>
       )}
-      <div style={{ flex: 1, overflow: "auto", padding: "10px 16px" }} onPaste={onPaste}>
+      <div ref={grid} tabIndex={0} data-sheet-grid="1" style={{ flex: 1, overflow: "auto", padding: "10px 16px", outline: "none" }} onKeyDown={gridKeys}>
         {!tab && <div style={{ fontSize: 12, color: "#94A3B8", padding: 12 }}>No tab yet — ＋ New tab, or Import file to start from her real file.</div>}
         {tab && (
-          <table style={{ borderCollapse: "collapse", fontSize: 12, background: "#fff", minWidth: SHEET_COLUMNS.reduce((s, c) => s + c.width, 150) }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 12, background: "#fff", tableLayout: "fixed", width: cols.reduce((s, c) => s + (liveW[c.key] || (tab.widths || {})[c.key] || c.width), liveW[ROW_HEAD_KEY] || (tab.widths || {})[ROW_HEAD_KEY] || 150) }}>
             <thead><tr>
-              <th style={{ position: "sticky", top: 0, zIndex: 2, background: "#F1F5F9", border: "1px solid #E5E7EB", padding: "5px 6px", width: 150, textAlign: "left", fontSize: 11 }}>#</th>
-              {SHEET_COLUMNS.map(c => <th key={c.key} style={{ position: "sticky", top: 0, zIndex: 1, background: "#F1F5F9", border: "1px solid #E5E7EB", padding: "5px 6px", textAlign: "left", fontSize: 11, minWidth: c.width, whiteSpace: "nowrap" }}>{c.label}</th>)}
+{(() => { const w = liveW[ROW_HEAD_KEY] || (tab.widths || {})[ROW_HEAD_KEY] || 150;   /* v7.31.0 (WB-1): the first column is sized like the others */
+                return <th style={{ position: "sticky", top: 0, zIndex: 2, background: "#F1F5F9", border: "1px solid #E5E7EB", padding: "5px 6px", width: w, minWidth: w, maxWidth: w, textAlign: "left", fontSize: 11, overflow: "hidden" }}>#
+                  <span data-col-resize={ROW_HEAD_KEY} title="drag to change the width" onMouseDown={e => { e.preventDefault(); drag.current = { kind: "col", key: ROW_HEAD_KEY, x: e.clientX, start: w, tabId: tab.id }; }} style={{ position: "absolute", top: 0, right: 0, width: 6, height: "100%", cursor: "col-resize" }} /></th>; })()}
+              {cols.map(c => { const w = liveW[c.key] || (tab.widths || {})[c.key] || c.width;
+              return <th key={c.key} data-col-head={c.key} draggable onDragStart={() => { dragCol.current = c.key; }} onDragOver={(ev: any) => ev.preventDefault()} onDrop={() => { const f = dragCol.current; dragCol.current = null; if (f) moveCol(f, c.key); }} onContextMenu={(ev: any) => { ev.preventDefault(); setColMenu({ key: c.key, x: ev.clientX, y: ev.clientY }); }} onDoubleClick={() => renameCol(c.key)} style={{ position: "sticky", top: 0, zIndex: 1, background: "#F1F5F9", border: "1px solid #E5E7EB", padding: "5px 6px", textAlign: "left", fontSize: 11, width: w, minWidth: w, maxWidth: w, whiteSpace: "nowrap", overflow: "hidden" }}>{c.label}
+              <span data-col-resize={c.key} title="drag to change the width" onMouseDown={e => { e.preventDefault(); drag.current = { kind: "col", key: c.key, x: e.clientX, start: w, tabId: tab.id }; }} style={{ position: "absolute", top: 0, right: 0, width: 6, height: "100%", cursor: "col-resize" }} /></th>; })}
             </tr></thead>
             <tbody>
               {tab.rows.map((r, ri) => (
-                <tr key={r.id} style={{ background: r.frozen ? "#F1F5F9" : "#fff" }}>
-                  <td style={{ border: "1px solid #E5E7EB", padding: "2px 4px", whiteSpace: "nowrap", fontSize: 11 }}>
-                    <b style={{ display: "inline-block", width: 22 }}>{ri + 1}</b>
+                <tr key={r.id} style={{ background: r.frozen ? "#F1F5F9" : "#fff", height: liveH[r.id] || r.height || undefined }}>
+                <td style={{ border: "1px solid #E5E7EB", padding: "2px 4px", whiteSpace: "nowrap", fontSize: 11, position: "relative", verticalAlign: "top" }}>
+                <span data-row-resize={r.id} title="drag to change the height" onMouseDown={e => { e.preventDefault(); const trEl = (e.target as any).closest("tr"); drag.current = { kind: "row", id: r.id, y: e.clientY, start: (trEl && trEl.getBoundingClientRect().height) || r.height || 30, tabId: tab.id }; }} style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 5, cursor: "row-resize" }} />
+                    <b data-row-head={ri} draggable title="click: select the row (Shift: several) · drag: move it" style={{ display: "inline-block", width: 22, cursor: "pointer" }}
+                      onMouseDown={(ev: any) => { if (ev.shiftKey && anchor) setSel({ row: ri, col: cols.length - 1 }); else { setAnchor({ row: ri, col: 0 }); setSel({ row: ri, col: cols.length - 1 }); } backToGrid(); }}
+                      onDragStart={() => { dragRow.current = ri; }} onDragOver={(ev: any) => ev.preventDefault()} onDrop={() => { const f = dragRow.current; dragRow.current = null; if (f == null || f === ri) return; setAnchor(null); setSel(s => ({ ...s, row: f })); moveRows(0, ri); }}>{ri + 1}</b>
+                    <button title="move up (Alt+↑)" onClick={() => { setAnchor(null); setSel(s => ({ ...s, row: ri })); setTimeout(() => moveRows(-1), 0); }} style={{ border: "none", background: "none", cursor: "pointer", padding: 0 }}>▲</button>
+                    <button title="move down (Alt+↓)" onClick={() => { setAnchor(null); setSel(s => ({ ...s, row: ri })); setTimeout(() => moveRows(1), 0); }} style={{ border: "none", background: "none", cursor: "pointer", padding: 0 }}>▼</button>
                     <button title="insert a row above" onClick={() => addRow(ri)} style={{ border: "none", background: "none", cursor: "pointer" }}>↥</button>
                     <button title="insert a row below" onClick={() => addRow(ri + 1)} style={{ border: "none", background: "none", cursor: "pointer" }}>↧</button>
                     <button title="duplicate the row" onClick={() => duplicateRow(ri)} style={{ border: "none", background: "none", cursor: "pointer" }}>⧉</button>
                     <button title={r.frozen ? "unfreeze" : "freeze on loading day"} onClick={() => toggleFreeze(ri)} style={{ border: "none", background: "none", cursor: "pointer" }}>{r.frozen ? "🔒" : "🔓"}</button>
                     <button title="delete the row" onClick={() => deleteRow(ri)} style={{ border: "none", background: "none", cursor: "pointer", color: "#B91C1C", fontWeight: 800 }}>Delete</button>
                   </td>
-                  {SHEET_COLUMNS.map((c, ci) => <td key={c.key} style={{ border: "1px solid #E5E7EB", padding: 0, outline: sel.row === ri && sel.col === ci ? "2px solid #2563EB" : undefined }}>{cell(r, ri, ci)}</td>)}
+                  {cols.map((c, ci) => { const st: any = (r.styles || {})[c.key] || {}; const here = sel.row === ri && sel.col === ci; const txt = shownText(r, c); const doubt = doubtful(r, c);
+                    return <td key={c.key} data-sheet-cell={`${ri}:${ci}`} onMouseEnter={() => { if (dragSel.current) setSel({ row: ri, col: ci }); }} onMouseDown={(ev: any) => { if (!(editing && here)) { if (ev.shiftKey) { if (!anchor) setAnchor(sel); } else { setAnchor({ row: ri, col: ci }); dragSel.current = true; } if (editing) { const el: any = editorRef.current; const r0 = rowsOf()[sel.row], c0 = cols[sel.col]; if (el && r0 && c0) { const v = String(el.value ?? "").replace(/\s+$/, ""); if (v !== shownText(r0, c0)) writeShown(r0, c0, v); } setEditing(null); } setSel({ row: ri, col: ci }); backToGrid(); } }} onDoubleClick={() => { setSel({ row: ri, col: ci }); if (!r.frozen) setEditing({}); }}
+                      style={{ border: "1px solid #E5E7EB", padding: 0, verticalAlign: "top", background: st.fill || (inRect(ri, ci) && !here ? "#DBEAFE" : (doubt ? "#FFFBEB" : undefined)), outline: here ? "2px solid #2563EB" : undefined, outlineOffset: -2, overflow: "hidden", cursor: "cell" }} title={doubt || (txt.length > 24 || txt.includes("\n") ? txt : "")}>
+                      {here && editing ? editor(r, c) : <div style={{ padding: "4px 5px", minHeight: 24, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.35, fontWeight: st.b ? 800 : undefined, color: st.color || (r.frozen ? "#64748B" : undefined), boxShadow: doubt ? "inset 0 0 0 1px #F59E0B" : undefined }}>{txt}</div>}</td>; })}
                 </tr>
               ))}
             </tbody>

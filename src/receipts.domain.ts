@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";   // v7.38.0 (AUD3-B6)
 // ── RECEIPTS AND STOCK (v6.55.0) ────────────────────────────────────────────
 // User ruling, Aug 2026:
 //
@@ -28,11 +29,7 @@
 //   2. STOCK    — you cannot move more kilos out of a lot than the lot holds.
 //                 This one is a hard fact rather than a policy.
 
-function num(v: any): number {
-  if (v == null || v === "") return 0;
-  const n = parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
-  return isFinite(n) ? n : 0;
-}
+function num(v: any): number { return parseNum(v); }   // v7.38.0 (AUD3-B6): the one number reader ("1.234,56" is 1234.56)
 
 function cancelled(x: any): boolean {
   const s = String(x?.status || "").trim();

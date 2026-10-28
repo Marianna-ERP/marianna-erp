@@ -30,8 +30,12 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
   let locationId = lot.baseLocationId ?? lot.locationId;
   // v6.35.5: voided movements must not count toward the status decision — a lot whose
   // postings were all voided (cancelled shipment) honestly returns to "Expected".
+  // v7.40.0 (AUD3-B5, external audit: "same-day movements replay in typing order"): on the same day the goods come in before they move or
+  // go out — IN, then TRANSFER / RECLASS, then SHIP_OUT / DAMAGE / CLAIM, a REVERSAL last — whatever order they were typed in
+  const SAME_DAY_RANK: Record<string, number> = { IN: 0, TRANSFER: 1, RECLASS: 1, SHIP_OUT: 2, DAMAGE: 2, CLAIM: 2, REVERSAL: 3 };
+  const rankOf = (m: any) => SAME_DAY_RANK[String(m?.kind || m?.type || "").toUpperCase()] ?? 2;
   const ordered = [...movements].filter(m => !m.voided).sort(
-    (a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0)
+    (a, b) => String(a.date || "").slice(0, 10).localeCompare(String(b.date || "").slice(0, 10)) || rankOf(a) - rankOf(b) || String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0)
   );
   let status = lot.expectedKg && ordered.length === 0 ? "Expected" : (lot.status || "Expected");
   let sawIn = false, sawShipOut = false;
