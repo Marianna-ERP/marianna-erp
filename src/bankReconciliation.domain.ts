@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";   // v7.38.0 (AUD3-B6)
 import { localTodayISO } from "./dates";
 // ─────────────────────────────────────────────────────────────────────────────
 // bankReconciliation.domain.ts — v6.67.0 (D-33)
@@ -39,11 +40,7 @@ export interface ParsedStatement {
   skipped: number;            // unparseable rows
 }
 
-const num = (v: any): number => {
-  const s = String(v ?? "").replace(/\s/g, "").replace(",", ".");
-  const n = parseFloat(s);
-  return isFinite(n) ? n : 0;
-};
+const num = (v: any): number => parseNum(v);   // v7.38.0 (AUD3-B6): the one number reader ("1.234,56" is 1234.56)
 const digits = (v: any) => String(v || "").replace(/\D/g, "");
 const isoFrom = (v: string): string => {
   const s = String(v || "").trim();
@@ -287,7 +284,7 @@ export function upsertBankAccountFromStatement(accounts: BankAccount[], parsed: 
   if (!parsed?.account) return accounts || [];
   const bankName = parsed.format === "PKO" ? "PKO BP" : parsed.format === "SANTANDER" ? "Santander" : "Bank";
   const latestBalance = parsed.format === "SANTANDER" && parsed.lines.length
-    ? (() => { const raw = String(parsed.lines[0].raw || "").split(";"); const v = parseFloat(String(raw[6] || "").replace(",", ".")); return isFinite(v) ? v : null; })()
+    ? (() => { const raw = String(parsed.lines[0].raw || "").split(";"); const v = parseNum(String(raw[6] || "").replace(",", ".")); return isFinite(v) ? v : null; })()
     : null;
   const existing = (accounts || []).find(a => a.accountDigits === parsed.account);
   if (existing) {

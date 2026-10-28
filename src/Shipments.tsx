@@ -34,6 +34,7 @@ import { clientReportKg } from "./seasonOps.domain";   // v6.99.87   // v6.99.72
 import { CreateShipmentModal } from "./ShipmentCreate";
 import { ShipmentDetail } from "./ShipmentDetail";
 import { TransportOrderPrintModal, TransportOrderEmailModal } from "./ShipmentDocuments";
+import { parseNum as sharedParseNum } from "./numbers";   // v7.38.0 (AUD3-B6)
 import { RatesToReviewPanel } from "./RatesToReviewPanel";   // v7.33.2 (FX-1)
 import { PlaceRepairPanel } from "./PlaceRepairPanel";   // v7.28.8 (FZ-36)
 import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
@@ -230,10 +231,7 @@ export function fmtMoney(n, cur = "PLN") {
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ${cur}`;
 }
 
-export function parseNum(n, fallback = 0) {
-  const v = parseFloat(String(n));
-  return isNaN(v) ? fallback : v;
-}
+export function parseNum(n: any, fallback = 0) { const x = sharedParseNum(n); return Number.isFinite(x) && String(n ?? "").trim() !== "" ? x : fallback; }   // v7.38.0 (AUD3-B6): the one reader ("19 422" is 19422, "12,5" is 12.5)
 
 function uniq(arr) {
   return Array.from(new Set((arr || []).filter(Boolean)));
@@ -909,7 +907,7 @@ function buildManualShipment__raw(opts, shipments) {
 
 export function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "", max, list, min, noFuture }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
-  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder || undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} max={max} list={list} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
 }
 export function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {

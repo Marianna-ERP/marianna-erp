@@ -67,7 +67,7 @@ const SERVICE_COLORS: Record<string, { bg: string; color: string; icon: string }
 // v6.32.0 (R7b-5): demo seed INIT_COUNTERPARTIES moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED UI ATOMS (mirror FreshTradeERP.tsx) ─────────────────────────────
-function Inp({ value, onChange, type, placeholder, style, inputMode, min, max, noFuture, title }: any) {
+function Inp({ value, onChange, type, placeholder, style, inputMode, min, max, noFuture, title, disabled = false }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={undefined} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };

@@ -21,6 +21,7 @@ import { useUnsavedGuard } from "./unsaved";
 import { r0 } from "./format";
 import { LotDetail } from "./InventoryLot";
 import { MovementModal } from "./InventoryWindows";
+import { parseNum as sharedParseNum } from "./numbers";   // v7.38.0 (AUD3-B6)
 import { requestNoteInInvoices } from "./noteRequest";   // v7.34.0 (CN-2)
 import { unitLoadedAt, unitUnloadedAt } from "./shipmentModel.domain";   // v7.28.0 (Batch L)
 import { activeParties , rolesOf } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
@@ -439,9 +440,9 @@ function uniqStrings(arr) {
 // v6.32.0 (R7b-5): demo seed INIT_LOTS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED UI ATOMS ────────────────────────────────────────────────────────
-export function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max, min, noFuture, title }: any) {
+export function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max, min, noFuture, title, disabled = false }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={false} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
-  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder || undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} max={max} style={{ ...base, ...style }} />;
 }
@@ -535,10 +536,7 @@ export function VarianceBadge({ expected, actual, lot = null }: any) {
   );
 }
 
-export function parseNum(v, fallback = 0) {
-  const n = parseFloat(v);
-  return isNaN(n) ? fallback : n;
-}
+export function parseNum(v: any, fallback = 0) { const x = sharedParseNum(v); return Number.isFinite(x) && String(v ?? "").trim() !== "" ? x : fallback; }   // v7.38.0 (AUD3-B6): the one reader ("19 422" is 19422, "12,5" is 12.5)
 export function fmtMoney(n, cur = "PLN") {
   if (n === undefined || n === null || isNaN(n)) return "—";
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
@@ -604,8 +602,8 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
   // v6.3.0: direct-flow lots never enter our warehouse (physicalKg 0), so quality
   // write-offs validate against the expected/direct quantity instead.
   const lotIsDirect = !!lot.directFlow || lot.status === "Direct Expected";
-  const maxLoss = lotIsDirect ? Math.max(parseFloat(lot.expectedKg) || 0, lot.physicalKg || 0) : (lot.physicalKg || 0);
-  const lossNum = parseFloat(lossKg) || 0;
+  const maxLoss = lotIsDirect ? Math.max(parseNum(lot.expectedKg) || 0, lot.physicalKg || 0) : (lot.physicalKg || 0);
+  const lossNum = parseNum(lossKg) || 0;
   const lossInvalid = affectsStock && (lossNum <= 0 || lossNum > maxLoss);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 95, padding: 20 }}>
@@ -648,14 +646,14 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
           <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
             <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
             <button
-              disabled={lossInvalid || (proposeCN && (parseFloat(cnAmount) || 0) <= 0)}
+              disabled={lossInvalid || (proposeCN && (parseNum(cnAmount) || 0) <= 0)}
               onClick={() => onConfirm({
                 context, date, outcome,
                 lossKg: affectsStock ? lossNum : 0,
                 findings,
-                creditNote: proposeCN ? { amount: parseFloat(cnAmount) || 0, currency: cnCurrency } : null,
+                creditNote: proposeCN ? { amount: parseNum(cnAmount) || 0, currency: cnCurrency } : null,
               })}
-              style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: (lossInvalid || (proposeCN && (parseFloat(cnAmount) || 0) <= 0)) ? "#D1D5DB" : "#0E7490", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: (lossInvalid || (proposeCN && (parseNum(cnAmount) || 0) <= 0)) ? "#D1D5DB" : "#0E7490", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
               Save inspection
             </button>
           </div>
@@ -864,7 +862,7 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave, users
   const setCheck = (i: number, k: string, val: any) => set("externalChecks", checks.map((c, j) => j === i ? { ...c, [k]: val } : c));
   // v6.99.83 (A-QC-1, owner 30 Sept): the field kept snapping back to 0 — clearing it stored 0 at once. Keep the text as typed;
   // an empty or unfinished value counts as 0 only when the report is judged (inspectionVerdict).
-  const setTol = (categoryName: string, val: any) => set("tolerances", { ...(ins.tolerances || {}), [categoryName]: val === "" ? "" : (isFinite(parseFloat(val)) ? parseFloat(val) : val) });
+  const setTol = (categoryName: string, val: any) => set("tolerances", { ...(ins.tolerances || {}), [categoryName]: val === "" ? "" : (isFinite(parseNum(val)) ? parseNum(val) : val) });
   return (
     <QhWindow draft={ins} title="🔬 Quality inspection" subtitle={`${lot.number} · ${lot.product}${lot.variety ? " — " + lot.variety : ""}`} colour="#0E7490" onClose={onClose} onSave={() => onSave(ins)} saveLabel="Save report">
       <div style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>HEADER</div>
@@ -905,7 +903,7 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave, users
             {d.name && !defectsFor(cat, lot.product).some((x: any) => x.name === d.name) && <option value={d.name}>{d.name}</option>}
           </Sel>
           <input type="number" step="0.01" placeholder="% found" value={d.pct ?? ""} onChange={e => set("defects", ins.defects.map((x: any, k: number) => k === i ? { ...x, pct: e.target.value } : x))} style={qhInp} />
-          <div style={{ fontSize: 10, color: "#94A3B8", textAlign: "center" }}>tol. {parseFloat((ins.tolerances || {})[d.category]) || 0} %</div>
+          <div style={{ fontSize: 10, color: "#94A3B8", textAlign: "center" }}>tol. {parseNum((ins.tolerances || {})[d.category]) || 0} %</div>
           <ActionButton action="remove" onClick={() => set("defects", ins.defects.filter((_: any, k: number) => k !== i))} />
         </div>
       ))}
@@ -1276,8 +1274,8 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
       (sh.goods || []).some((g: any) => String(g.lotRef) === String(lotNo))
     ).map((sh: any) => sh.number);
 
-    const hasPhysical = (parseFloat(selected.receivedKg) || 0) > 0
-      || (parseFloat(selected.physicalKg) || 0) > 0
+    const hasPhysical = (parseNum(selected.receivedKg) || 0) > 0
+      || (parseNum(selected.physicalKg) || 0) > 0
       || (selected.movements || []).length > 0;
 
     const blockers: string[] = [];
@@ -1337,10 +1335,10 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
             // lot's destination, then the standard recompute. Fully visible and
             // voidable in the movement history like any other receipt.
             // v6.89.0 (G1, owner ruling): the receipt asks the ACTUAL kilos — every truck arrives with a discrepancy.
-            const expectedKg = parseFloat(String(selected?.expectedKg)) || 0;
+            const expectedKg = parseNum(String(selected?.expectedKg)) || 0;
             const typed = await uiPrompt({ title: `Receive ${selected.number} — actual quantity`, message: `Expected ${Math.round(expectedKg).toLocaleString("pl-PL")} kg. Enter the kilos actually received (the variance is recorded on the receipt):`, defaultValue: String(Math.round(expectedKg)), confirmLabel: "Continue" });
             if (typed === null) return;
-            const kg = parseFloat(String(typed).replace(",", ".")) || 0;
+            const kg = parseNum(String(typed).replace(",", ".")) || 0;
             if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No quantity", message: "Enter the kilos actually received — set the PO line quantity first." }); return; }
             const directCaveat = selected.status === "Direct Expected"
               ? "\n\n⚠ This lot is marked DIRECT FLOW (supplier → client, never our warehouse). Receiving it here converts it to a normal warehouse lot — do this only if the goods really arrived at OUR location (e.g. a DDP purchase)." : "";

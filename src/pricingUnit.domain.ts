@@ -29,11 +29,7 @@ import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 export type PricingUnit = "kg" | "box";
 
-function num(v: any): number {
-  if (v == null || v === "") return 0;
-  const n = parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
-  return isFinite(n) ? n : 0;
-}
+function num(v: any): number { return parseNum(v); }   // v7.38.0 (AUD3-B6): the one number reader ("1.234,56" is 1234.56)
 
 /** kg per box for a line, from the packaging it already names.
  *  0 when the packaging cannot be resolved — the caller must not guess. */

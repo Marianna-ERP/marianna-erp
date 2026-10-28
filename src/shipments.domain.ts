@@ -26,10 +26,7 @@ import { unitKg as derivedUnitKg, shipmentDates } from "./shipmentModel.domain";
 import { shipmentEndPlaceId } from "./tradeFlow.domain";   // v7.28.7
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-function num(v: any): number {
-  const x = parseFloat(String(v ?? "").replace(",", "."));
-  return isFinite(x) ? x : 0;
-}
+function num(v: any): number { return parseNum(v); }   // v7.38.0 (AUD3-B6): the one number reader ("1.234,56" is 1234.56)
 
 export type ShipmentPurpose = "INBOUND" | "OUTBOUND" | "TRANSFER" | "RETURN";
 
@@ -469,7 +466,7 @@ export function syncLegFreightCostLines(sh: any, payers?: Array<{ payer: string 
 export function carriedRefs(sh: any): { poRefs: string[]; soRefs: string[]; lotRefs: string[] } {
   const pos = new Set<string>(), sos = new Set<string>(), lots = new Set<string>();
   const goods = (sh?.goods || []).filter((g: any) => {
-    const n = parseFloat(String(g?.qtyKg ?? "").replace(",", "."));
+    const n = parseNum(String(g?.qtyKg ?? "").replace(",", "."));
     return isFinite(n) && n > 0;   // a zero-kg line moves nothing and links nothing
   });
   goods.forEach((g: any) => {

@@ -73,6 +73,14 @@ if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the 
   fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !["Invoices.tsx", "PurchaseOrders.tsx", "poSettlement.domain.ts"].includes(f)).forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/^\s*(\/\/|\*)/.test(l)) return; if (/[sS]etFinanceNotes\(\(prev: any\[\]\) => \[/.test(l)) off.push(`${f}:${i + 1}`); }));
   if (off.length) { failed++; console.log(`  ✗ a note is created only in Invoices: ${off.slice(0, 4).join(", ")}`); } else console.log("  ✓ a note is created only in Invoices: the other modules request one");
 }
+// v7.38.0 (AUD3-B2 / B6): NUMBERS — the shipment editor never reads a number on every keystroke (the one number field reads it when the
+// field is left), and the screens and engines the audit named read numbers with the one reader, never plain parseFloat
+{
+  checked++; const off = [];
+  const ed = fs.readFileSync(path.join(src, "ShipmentEditor.tsx"), "utf8"); if (/onChange=\{\(?e(?:: any)?\)? => [A-Za-z_]+\([^()]*?parseNum\(e\.target\.value\)\)\}/.test(ed)) off.push("ShipmentEditor reads a number on every keystroke");
+  ["Shipments.tsx", "Inventory.tsx", "ShipmentEditor.tsx", "shipments.domain.ts", "costAllocation.ts", "receipts.domain.ts", "pricingUnit.domain.ts", "bankReconciliation.domain.ts"].forEach(f => { const c = fs.readFileSync(path.join(src, f), "utf8"); if (/(?<!isNaN\()parseFloat\(/.test(c)) off.push(`${f} reads data with parseFloat`); });
+  if (off.length) { failed++; console.log(`  ✗ numbers: ${off.join("; ")}`); } else console.log("  ✓ numbers: one number field, one reader where the audit looked");
+}
 // v7.28.11 (Batch L · FZ-03, P-13): A COMPANY'S COUNTRY IS ITS CODE — no file reads a company record's country name except the
 // helpers (companyCountryName / companyCountryIso) and the company tidy-up; the copies on documents keep the printed name
 {

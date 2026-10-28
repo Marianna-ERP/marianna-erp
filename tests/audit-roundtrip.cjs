@@ -4914,7 +4914,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("FIN-1/2/3 (v7.33.0): Finance's panel lists operational costs only; the notes' typed parties are linked in Invoices; the App hands Finance the notes' setter; the cost form's columns never squeeze", () => {
     const fin = rd("Finance.tsx"); ok(/Operational costs with a typed supplier/.test(fin) && !/\(financeNotes \|\| \[\]\)\.forEach\(\(n: any\) => \{ if \(n && n\.partyId == null/.test(fin), "the panel still lists notes");
     ok(/gridTemplateColumns: "minmax\(0, 1fr\) minmax\(0, 1fr\)"/.test(fin), "the form's columns can still be squeezed");
-    ok(/setFinanceNotes=\{setFinanceNotes\}/.test(rd("App.tsx").split("\n").find(l => l.includes("<Finance packagingTypes")) || ""), "the App does not hand Finance the notes' setter");
+    ok(/setFinanceNotes=\{setFinanceNotesG?\}/.test(rd("App.tsx").split("\n").find(l => l.includes("<Finance packagingTypes")) || ""), "the App does not hand Finance the notes' setter");
     ok(/function UnlinkedNoteParties/.test(rd("Invoices.tsx")), "no notes' panel in Invoices");
   });
   t("INV-PDF (v7.33.1): the import writes an overhead invoice itself (its Fakturownia id kept) and adopts a registered twin without an id; no operational cost is copied into the register at start; plain PDF reasons, the skipped counted, the link field, 'No PDF in Fakturownia', a dropped PDF", () => {
@@ -5043,6 +5043,50 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const co = { id: 9, name: "Conbulk", roles: ["Forwarder"], countryIso: "SI", addr: { street: "Kolodvorska cesta 1", postcode: "6000", city: "Koper" }, extraAddresses: [{ label: "Mirage Trans d.o.o.", addr: { street: "Oic - Hrpelje", postcode: "6240", city: "Kozina", country: "Slovenia" } }], people: [] };
     const a = L.contactAddresses(co); eq(a.length, 2); ok(/^Mirage Trans d\.o\.o\., Oic - Hrpelje/.test(a[1].address), "the terminal's name is lost: " + a[1].address);
     const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Contacts.tsx"), "utf8"); ok(/extraAddresses: \[\.\.\.\(c\.extraAddresses \|\| \[\]\), entry\]/.test(src), "the card does not write onto the company");
+  });
+})();
+
+// ══ v7.39.0 — AUD3-B3 · A5 · B8 ══
+(function v73900(){
+  console.log("\n══ v7.39.0 — rates on cost lines; no source map; the suites' tools ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "..", f), "utf8");
+  t("AUD3-B3 / A5 / B8 (v7.39.0): a cost line's currency change takes the NBP rate of its own date and a foreign line is never valued at 1; the production build ships no source map; ts-node and jsdom are listed for a clean runner", () => {
+    const ed = rd("src/ShipmentEditor.tsx"); ok(/if \(k === "currency"\) \{ const cur = String\(v \|\| "PLN"\)\.toUpperCase\(\); if \(cur === "PLN"\) next\.fxRate = 1; else if \(!c\.fxAgreed\)/.test(ed) && !/next\.currency === "PLN" \? 1 : 1/.test(ed), "a currency change still keeps rate 1");
+    ok(/GENERATE_SOURCEMAP=false/.test(rd(".env.production")), "the source map is still built");
+    const p = JSON.parse(rd("package.json")); ok(p.devDependencies && p.devDependencies["ts-node"] && p.devDependencies.jsdom, "the suites' tools are not listed");
+  });
+})();
+
+// ══ v7.40.0 — AUD3-L1 · B5 · A4 ══
+(function v74000(){
+  console.log("\n══ v7.40.0 — closed months, same-day order, the server part ══");
+  const PC = B("periodClose.domain.js"), INV = B("inventory.domain.js");
+  t("AUD3-L1 (v7.40.0): a closed month is closed to every dated record — a note, a shipment cost line, a lot movement, a payment dated in it is not added, changed or removed; an open month passes", () => {
+    const closed = [{ period: "2026-09", closedAt: "2026-10-05" }];
+    const prev = [{ id: 1, date: "2026-09-10", amount: 100 }, { id: 2, date: "2026-10-02", amount: 50 }];
+    const r = PC.closedPeriodFilter(prev, [{ id: 1, date: "2026-09-10", amount: 999 }, { id: 2, date: "2026-10-02", amount: 60 }, { id: 3, date: "2026-09-20", amount: 5 }], x => x.date, closed);
+    eq(r.refused, 2); eq(r.list.find(x => x.id === 1).amount, 100); eq(r.list.find(x => x.id === 2).amount, 60); ok(!r.list.some(x => x.id === 3), "a record dated in a closed month was added");
+    const sh = [{ id: 7, costs: [{ id: 1, date: "2026-09-12", amount: 10 }] }];
+    const s2 = PC.closedPeriodFilter(sh, [{ id: 7, costs: [] }], c => c.date, closed, "costs"); eq(s2.refused, 1); eq(s2.list[0].costs.length, 1, "a closed month's cost line was removed");
+  });
+  t("AUD3-B5 (v7.40.0): same-day movements replay in event order — a ship-out typed before the receipt on the same day does not leave the lot over-issued", () => {
+    const lot = { id: 1, number: "L", expectedKg: 19422, status: "Expected", locationId: 1 };
+    const mv = [{ id: 1, kind: "SHIP_OUT", date: "2026-10-01", kg: 19422, fromId: 2 }, { id: 2, kind: "IN", date: "2026-10-01", kg: 19422, toId: 2 }];
+    const a = INV.lotStateFromMovements ? INV.lotStateFromMovements(lot, mv) : null; if (a) ok(!(a.physicalKg < 0), "over-issued: " + JSON.stringify(a));
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/inventory.domain.ts"), "utf8"); ok(/SAME_DAY_RANK/.test(src), "same-day order missing");
+  });
+})();
+
+// ══ v7.41.0 — AUD3-A2 · L2 · L3 · L5 ══
+(function v74100(){
+  console.log("\n══ v7.41.0 — changed lists only, missing rates, one sellable rule, the truck identity ══");
+  const IC = B("integrityCheck.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("AUD3-L2 (v7.41.0): a foreign-currency cost line or operational cost with no rate is a data issue, never silently PLN", () => {
+    const res = IC.checkIntegrity({ pos: [], lots: [], orders: [], shipments: [{ id: 1, number: "SHP-X", costs: [{ id: 1, amount: 8502, currency: "EUR", fxRate: 1 }] }], invoices: [], contacts: [], claims: [], operationalCosts: [{ id: 2, amount: 100, currency: "EUR" }] });
+    const n = (res.issues || res.items || []).filter(i => i.code === "FX_MISSING_COST").length; eq(n, 2);
+  });
+  t("AUD3-A2 / L3 / L5 (v7.41.0): the poll fetches only the changed lists; the SO screen sells a lot by lotSellableBasis; a truck without lots is identified by its PO lines", () => {
+    ok(/fetchRows\(undefined, changed\.map\(c => c\.key\)\)/.test(rd("remoteStore.ts")), "A2"); ok(/availableKg: rejectedByReport\(l, inspections\) \? 0 : lotSellableBasis\(l\)/.test(rd("SalesOrders.tsx")), "L3"); ok(/no lot yet → the PO line/.test(rd("integrityCheck.ts")), "L5");
   });
 })();
 

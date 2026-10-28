@@ -100,6 +100,13 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     contacts.flatMap((c: any) => arr(c.mergedFromIds).map(String))
   );
 
+  // v7.41.0 (AUD3-L2, external audit: "a missing exchange rate silently means 1.0"): a foreign-currency shipment cost line or operational
+  // cost with no rate (missing or 1) is listed — "Rates to review" sets the NBP rate of its date
+  shipments.forEach((s: any) => arr(s?.costs).forEach((c: any) => { const cur = String(c?.currency || "PLN").toUpperCase(); if (cur !== "PLN" && num(c?.amount) > 0 && !(num(c?.fxRate) > 1) && !c?.fxAgreed)
+    add("warning", "FX_MISSING_COST", "Shipments", s.number || "(shipment)", `A ${cur} cost line (${num(c.amount)} ${cur}) has no exchange rate — it counts as PLN until "Rates to review" sets the NBP rate of its date.`); }));
+  arr((inp as any).operationalCosts).forEach((c: any) => { const cur = String(c?.currency || "PLN").toUpperCase(); if (cur !== "PLN" && num(c?.amount) > 0 && !(num(c?.fxRate) > 1) && !c?.fxAgreed)
+    add("warning", "FX_MISSING_COST", "Finance", String(c?.invoiceNo || c?.supplierName || c?.id || "cost"), `An operational cost in ${cur} has no exchange rate — set it in Finance › "Rates to review".`); });
+
   // ── 1. Orphaned references ────────────────────────────────────────────────
   // Lot pointing at a PO that no longer exists.
   lots.forEach((lot: any) => {
@@ -644,7 +651,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
       const sos = arr(s.soRefs).filter(Boolean).map(String).sort().join("+");
       const kg = arr(s.goods).reduce((t: number, g: any) => t + num(g?.qtyKg), 0);
       const cost = arr(s.costs).reduce((t: number, c: any) => t + (num(c?.amountPLN) || num(c?.amount) * (num(c?.fxRate) || 1)), 0);
-      const lots = Array.from(new Set(arr(s.goods).map((g: any) => String(g?.lotRef || "")).filter(Boolean))).sort().join("+");
+      const lots = Array.from(new Set(arr(s.goods).map((g: any) => String(g?.lotRef || "") || (g?.poRef ? `${g.poRef}#${g.poLineId ?? g.lineId ?? g.productId ?? ""}` : "")).filter(Boolean))).sort().join("+");   // v7.41.0 (AUD3-L5): no lot yet → the PO line
       return sos ? `${sos}|${Math.round(kg)}|${Math.round(cost)}|${lots}` : null;
     };
     const seen = new Map<string, string>();

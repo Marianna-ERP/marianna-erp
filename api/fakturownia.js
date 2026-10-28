@@ -25,6 +25,19 @@ let u = null; try { u = await r.json(); } catch { u = null; } return { token: m[
 // v7.30.1 (Batch M · M-2): MAY THIS PERSON ISSUE A LIVE INVOICE — the users list of the shared copy (Settings › Users), read with the
 // caller's own sign-in: the owner, or a user with the Invoices module ticked. With no owner linked yet the users model is off and
 // everyone may, as in the app itself.
+// v7.40.0 (AUD3-A4, external audit: "reading invoices, bank accounts and PDFs needs a sign-in only"): reads need the same rights as issuing —
+// the owner or a user with the Invoices module; while no owner is linked (setup) a signed-in person may still read
+async function mayReadInvoices(who) {
+const url = originOf(env("REACT_APP_SUPABASE_URL")), key = env("REACT_APP_SUPABASE_ANON_KEY");
+try {
+const r = await fetch(`${url}/rest/v1/stores?key=eq.users&select=data`, { headers: { apikey: key, Authorization: `Bearer ${who.token}`, Accept: "application/json" } });
+if (!r.ok) return false;
+const rows = await r.json(); const users = Array.isArray(rows) && rows[0] && Array.isArray(rows[0].data) ? rows[0].data : [];
+if (!users.some(u => u && u.isOwner && String(u.email || "").trim() !== "")) return true;
+const me = users.find(u => u && String(u.email || "").trim().toLowerCase() === who.email);
+return !!(me && (me.isOwner || (me.modules && me.modules.invoices === true)));
+} catch { return false; }
+}
 async function mayIssueInvoices(who) {
 const url = originOf(env("REACT_APP_SUPABASE_URL")), key = env("REACT_APP_SUPABASE_ANON_KEY");
 try {
@@ -32,7 +45,7 @@ const r = await fetch(`${url}/rest/v1/stores?key=eq.users&select=data`, { header
 if (!r.ok) return false;
 const rows = await r.json(); const users = Array.isArray(rows) && rows[0] && Array.isArray(rows[0].data) ? rows[0].data : [];
 const linkedOwner = users.some(u => u && u.isOwner && String(u.email || "").trim() !== "");
-if (!linkedOwner) return true;
+if (!linkedOwner) return false;   // v7.37.0 (AUD3-A3): no linked owner = setup, and setup never issues a live invoice
 const me = users.find(u => u && String(u.email || "").trim().toLowerCase() === who.email);
 return !!(me && (me.isOwner || (me.modules && me.modules.invoices === true)));
 } catch { return false; }
@@ -49,6 +62,7 @@ module.exports = async function handler(req, res) {
     if (op === "status") return send(res, 200, { configured: !!(token && sub), account: sub ? `${sub}.fakturownia.pl` : "", testCopy });
     if (!token || !sub) return send(res, 503, { error: "Fakturownia isn't connected yet: the settings FAKTUROWNIA_API_TOKEN and FAKTUROWNIA_SUBDOMAIN are missing in Vercel. Until then, use the file import." });
     const base = `https://${sub}.fakturownia.pl`;
+    if (req.method === "GET" && (GET_PATHS[op] || op === "pdf") && !(await mayReadInvoices(who))) return send(res, 403, { error: "Only the owner or a user with the Invoices module (Settings › Users) can read Fakturownia." });   // v7.40.0 (AUD3-A4)
     if (req.method === "GET" && GET_PATHS[op]) {
       const url = new URL(base + GET_PATHS[op]);
       if (op === "test") { url.searchParams.set("page", "1"); url.searchParams.set("per_page", "1"); url.searchParams.set("period", "this_month"); }
@@ -72,7 +86,10 @@ module.exports = async function handler(req, res) {
       if (testCopy) return send(res, 403, { error: "This is the TEST copy: invoices are never created in Fakturownia from here." });
       if (!(await mayIssueInvoices(who))) return send(res, 403, { error: "Only the owner or a user with the Invoices module (Settings › Users) can issue an invoice in Fakturownia." });   // v7.30.1 (M-2)
       const body = await bodyOf(req); if (!body || typeof body !== "object" || !body.invoice) return send(res, 400, { error: "No invoice in the request." });
-      const payload = { ...body }; delete payload.api_token;
+      const inv = { ...body.invoice }; const kind = String(inv.kind || "vat");
+      if (!["vat", "correction"].includes(kind)) return send(res, 400, { error: `This server issues only VAT invoices and corrections, not "${kind}".` });   // v7.40.0 (AUD3-A4)
+      inv.gov_save_and_send = false;   // v7.40.0 (AUD3-A4): never sent to KSeF from here — KSeF stays a deliberate step in Fakturownia
+      const payload = { invoice: inv };
       const r = await fetch(`${base}/invoices.json`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ ...payload, api_token: token }) });
       const text = await r.text(); let data = null; try { data = JSON.parse(text); } catch { data = text || null; }
       if (!r.ok) return send(res, r.status, { error: (r.status === 422 ? "Fakturownia rejected the invoice data (HTTP 422)." : r.status === 401 ? "Fakturownia refused the token kept in Vercel — it may be read-only." : `Fakturownia answered HTTP ${r.status}.`) + detailOf(data) });

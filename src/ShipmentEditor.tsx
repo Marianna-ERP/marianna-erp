@@ -15,10 +15,11 @@ import { localTodayISO, formatDMY } from "./dates";
 import { nextId } from "./ids";
 import { appendSourceGoods, normalizeCustoms, syncLegFreightCostLines } from "./shipments.domain";
 import { recordAudit } from "./audit";
-import { resolveFxRate, defaultFxRate, documentFxDefault } from "./fx";
+import { resolveFxRate, defaultFxRate, documentFxDefault, fxRateFor } from "./fx";
 import { locationById, placeForPrint , isPortType } from "./locations";
 import { useUnsavedGuard, dirtyEntries } from "./unsaved";
 import { COST_TYPES, Card, HEADER_MODES, Inp, LEG_MODES, LEG_STATUSES, Lbl, ModeBadge, STATUS_ORDER, SectionTitle, Sel, Stage, allUnitsCarrierNames, blankTransportUnit, costLinesByCarrierLegApply, countryOfLocation, findUnitIn, fmtMoney, fmtNum, goodsRowCap, isFreightCostType, logisticsProviders, modeChangePatch, parseNum, shipmentCostPLN, shipmentVehicleCount, syncCustomsCostLine, todayISO, transportUnitsForLeg, withStandardDocs } from "./Shipments";
+import { NumInput } from "./ui";   // v7.38.0 (AUD3-B2)
 import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { carrierInvoiceOptions, exactInvoiceForTypedRef, costInvoiceDifference } from "./costInvoice.domain";   // v7.27.16 (A-AU-6)
 import { pickerParties, archivedMark } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
@@ -167,7 +168,11 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
     setDraft(prev => ({ ...prev, costs: (prev.costs || []).map((c, i) => {
       if (i !== idx) return c;
       const next = { ...c, [k]: v };
-      if (["amount", "fxRate", "currency"].includes(k)) next.amountPLN = Math.round(parseNum(next.amount) * parseNum(next.fxRate, next.currency === "PLN" ? 1 : 1) * 100) / 100;
+      // v7.39.0 (AUD3-B3, external audit: "a EUR 8,502 freight line booked at rate 1"): a currency change takes the NBP rate of the line's own
+      // date (the last working day before it), unless the rate was kept as agreed; PLN is 1; a typed rate stays as typed
+      if (k === "currency") { const cur = String(v || "PLN").toUpperCase(); if (cur === "PLN") next.fxRate = 1; else if (!c.fxAgreed) { const r = fxRateFor(cur, String(next.date || "").slice(0, 10) || undefined); next.fxRate = r ?? defaultFxRate(cur); } }
+      const rate = String(next.currency || "PLN").toUpperCase() === "PLN" ? 1 : (parseNum(next.fxRate) > 0 && parseNum(next.fxRate) !== 1 ? parseNum(next.fxRate) : (fxRateFor(next.currency, String(next.date || "").slice(0, 10) || undefined) ?? defaultFxRate(next.currency)));
+      if (["amount", "fxRate", "currency", "date"].includes(k)) next.amountPLN = Math.round(parseNum(next.amount) * rate * 100) / 100;
       return next;
     }) }));
   }
@@ -369,7 +374,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>SOURCES:</span>
             {[...(draft.poRefs || []), ...(draft.soRefs || [])].map((r: any) => <span key={r} style={{ fontSize: 10, fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: "#F1F5F9", color: "#334155" }}>{r}</span>)}
-            <span style={{ fontSize: 10, color: "#94A3B8" }}> · carrying {(draft.goods || []).length} row(s) · {(draft.goods || []).reduce((t: number, g: any) => t + (parseFloat(g.qtyKg) || 0), 0).toLocaleString("pl-PL")} kg{(() => { const docs = Array.from(new Set([...(draft.poRefs || []), ...(draft.soRefs || [])])); return docs.length ? ` (from ${docs.join(" and ")})` : ""; })()}</span>{/* v6.99.49 (H-1): the shipment's own goods, from every document it carries */}
+            <span style={{ fontSize: 10, color: "#94A3B8" }}> · carrying {(draft.goods || []).length} row(s) · {(draft.goods || []).reduce((t: number, g: any) => t + (parseNum(g.qtyKg) || 0), 0).toLocaleString("pl-PL")} kg{(() => { const docs = Array.from(new Set([...(draft.poRefs || []), ...(draft.soRefs || [])])); return docs.length ? ` (from ${docs.join(" and ")})` : ""; })()}</span>{/* v6.99.49 (H-1): the shipment's own goods, from every document it carries */}
           </div>
         </div>
         <button onClick={() => requestClose()} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#475569", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }} title="v6.99.59 (A-OW-5): close the editor — it asks first if something is not saved">Close</button>
@@ -702,12 +707,12 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   <div><Lbl>Kg{((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length) ? " (derived)" : ""}</Lbl>
                     {((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length)
                       ? <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F9FAFB", fontWeight: 600 }} title="v6.85.0 (D8): derived from the goods allocation / feeder trucks — never typed">{Math.round(unitKg(u, draft)).toLocaleString("pl-PL")}</div>
-                      : <Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} />}
+                      : <NumInput value={u.qtyKg || ""} onNumber={(v: number) => updateVehicle(i, ui, "qtyKg", v)} />}
                   </div>
                   <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10, color: "#64748B", paddingBottom: 8 }}>Actual dates for this unit (truck: loaded / unloaded; container: stuffed / discharged) — never in the future; planned dates live on the unit above.</div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "160px 90px 1fr", gap: 9, marginTop: 9 }}>   {/* v7.30.12 (owner test 21 Oct): the price first, then its currency */}
-                  {draft.arrangedBy !== "SUPPLIER" && <div><Lbl>Price for this unit{!(parseNum(u.costAmount) > 0) && draft.arrangedBy !== "SUPPLIER" && (legPayers[i]?.payer || "us") === "us" ? <span style={{ color: "#DC2626", fontWeight: 400 }}> · missing</span> : null}</Lbl><Inp type="number" value={u.costAmount || ""} onChange={e => updateVehicle(i, ui, "costAmount", parseNum(e.target.value))} placeholder="0" style={!(parseNum(u.costAmount) > 0) && draft.arrangedBy !== "SUPPLIER" ? { borderColor: "#DC2626", background: "#FEF2F2" } : {}} /></div>}   {/* v6.99.44 (L-6, owner): red until a price is in; Save warns, does not block · SD-4: a supplier's truck has no price of ours */}
+                  {draft.arrangedBy !== "SUPPLIER" && <div><Lbl>Price for this unit{!(parseNum(u.costAmount) > 0) && draft.arrangedBy !== "SUPPLIER" && (legPayers[i]?.payer || "us") === "us" ? <span style={{ color: "#DC2626", fontWeight: 400 }}> · missing</span> : null}</Lbl><NumInput value={u.costAmount || ""} onNumber={(v: number) => updateVehicle(i, ui, "costAmount", v)} placeholder="0" style={!(parseNum(u.costAmount) > 0) && draft.arrangedBy !== "SUPPLIER" ? { borderColor: "#DC2626", background: "#FEF2F2" } : {}} /></div>}   {/* v6.99.44 (L-6, owner): red until a price is in; Save warns, does not block · SD-4: a supplier's truck has no price of ours */}
                   {(() => { const cid = carrierOfUnit(draft, leg, u); const uc = unitCurrencyFrom(cid != null ? (contacts || []).find((c: any) => String(c.id) === String(cid)) : null, (draft.bookings || [])[0]);   // v7.27.9 (FZ-29, RM-2 F-5)
                     const typed = parseNum(u.costAmount) > 0; const cur = u.priceCurrency || leg.costCurrency || "PLN";
                     if (!typed && uc.currency) return <div><Lbl>Currency <span style={{ color: "#AAA", fontWeight: 400 }}>· the {uc.source}'s</span></Lbl><div style={{ padding: "7px 9px", border: "1px solid #F3F4F6", borderRadius: 6, fontSize: 13, fontWeight: 700, background: "#F8FAFC" }}>{uc.currency}</div></div>;
@@ -816,9 +821,9 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                           {customsProviders.map(p2 => <option key={p2.id} value={p2.id}>{p2.name}{archivedMark((contacts || []).find((c: any) => String(c.id) === String(p2.id)))}</option>)}
                         </Sel>
                       </div>
-                      <div><Lbl>Customs cost</Lbl><Inp type="number" value={c.cost ?? ""} onChange={e => setC("cost", parseNum(e.target.value))} /></div>
+                      <div><Lbl>Customs cost</Lbl><NumInput value={c.cost ?? ""} onNumber={(v: number) => setC("cost", v)} /></div>
                       <div><Lbl>Currency</Lbl><Sel value={c.currency || "PLN"} onChange={e => setC("currency", e.target.value)}>{["PLN", "EUR", "USD"].map(x => <option key={x}>{x}</option>)}</Sel></div>
-                      <div><Lbl>FX → PLN</Lbl><Inp type="number" value={c.fxRate ?? (!c.currency || c.currency === "PLN" ? 1 : "")} onChange={e => setC("fxRate", parseNum(e.target.value))} /></div>
+                      <div><Lbl>FX → PLN</Lbl><NumInput value={c.fxRate ?? (!c.currency || c.currency === "PLN" ? 1 : "")} onNumber={(v: number) => setC("fxRate", v)} /></div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 130px", gap: 10, marginTop: 10 }}>
                       {/* v6.99.44 (X-1, X-5…X-9, owner): the clearance belongs to the UNIT that crosses the border — one line per truck,
@@ -923,8 +928,8 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             }} /></div>
             {/* v6.50.0: the field itself sits in line with its siblings; the derivation
                 is explained on its own line beneath the whole row (see below). */}
-            <div><Lbl>Gross (kg)</Lbl><Inp type="number" value={g.grossKg || ""} onChange={e => updateGood(i, "grossKg", parseNum(e.target.value))} placeholder="0" title="Gross weight incl. packaging and pallets — printed on the transport order" /></div>
-            <div><Lbl>Pallets{!g.pallets ? " (derived)" : ""}</Lbl><Inp type="number" value={g.pallets || (grossForGoodsLine(g, packagingTypes || []).pallets || "")} onChange={e => updateGood(i, "pallets", parseNum(e.target.value))} placeholder="0" title="v6.93.0 (A-R8-11): derived per line from its packaging type (boxes ÷ boxes per pallet); type to override" /></div>
+            <div><Lbl>Gross (kg)</Lbl><NumInput value={g.grossKg || ""} onNumber={(v: number) => updateGood(i, "grossKg", v)} placeholder="0" title="Gross weight incl. packaging and pallets — printed on the transport order" /></div>
+            <div><Lbl>Pallets{!g.pallets ? " (derived)" : ""}</Lbl><NumInput value={g.pallets || (grossForGoodsLine(g, packagingTypes || []).pallets || "")} onNumber={(v: number) => updateGood(i, "pallets", v)} placeholder="0" title="v6.93.0 (A-R8-11): derived per line from its packaging type (boxes ÷ boxes per pallet); type to override" /></div>
             {/* v6.93.0 (A-R8-11): "on leg / carrier" column retired — the allocation of goods to TRUCKS (unit loads) says who carries what */}
             <div style={{ fontSize: 10, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>
             {/* v6.50.0: the gross-weight derivation, on its own line beneath the row so
@@ -943,7 +948,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
           </div>
                   {trucks.length > 1 && <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 11, padding: "4px 0 8px 4px", color: "#475569" }}>
                     <span style={{ fontWeight: 700, color: "#94A3B8" }}>on trucks:</span>
-                    {trucks.map((u: any, ti: number) => { const a = (u.load || []).find((x: any) => String(x.goodsLineId) === String(g.id)); return <span key={ti} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{u.truckPlate || `truck ${ti + 1}`} <input type="number" value={a ? a.qtyKg : ""} onChange={e => setLoad(ti, g.id, parseNum(e.target.value))} disabled={loaded} style={{ width: 80, border: "1px solid #E5E7EB", borderRadius: 5, padding: "3px 6px", fontSize: 11 }} /> kg</span>; })}
+                    {trucks.map((u: any, ti: number) => { const a = (u.load || []).find((x: any) => String(x.goodsLineId) === String(g.id)); return <span key={ti} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{u.truckPlate || `truck ${ti + 1}`} <NumInput value={a ? a.qtyKg : ""} onNumber={(v: number) => setLoad(ti, g.id, v)} disabled={loaded} style={{ width: 80, border: "1px solid #E5E7EB", borderRadius: 5, padding: "3px 6px", fontSize: 11 }} /> kg</span>; })}
                     {(() => { const alloc = trucks.reduce((s: number, u: any) => s + parseNum(((u.load || []).find((x: any) => String(x.goodsLineId) === String(g.id)) || {}).qtyKg), 0); const un = Math.round(parseNum(g.qtyKg) - alloc); return <span style={{ fontWeight: 800, color: un === 0 ? "#16A34A" : "#DC2626" }}>unallocated {fmtNum(un)} kg</span>; })()}
                   </div>}
                 </div>; })}

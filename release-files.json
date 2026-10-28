@@ -1,6 +1,7 @@
 {
- "version": "7.36.2",
+ "version": "7.41.0",
  "files": [
+  ".env.production",
   ".npmrc",
   "HOW_TO_DEPLOY.md",
   "README.md",
@@ -200,6 +201,7 @@
   "tests/source-gates.allowlist.json",
   "tests/source-gates.cjs",
   "tests/sql/security.test.sql",
+  "tests/sync-unsent.cjs",
   "tests/tsconfig.json",
   "tests/unsaved-guard.cjs",
   "tsconfig.json",
