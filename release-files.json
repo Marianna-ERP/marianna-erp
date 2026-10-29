@@ -1,5 +1,5 @@
 {
- "version": "7.50.1",
+ "version": "7.50.2",
  "files": [
   ".env.production",
   ".npmrc",

@@ -59,9 +59,14 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
           }}>
             {/* v6.99.51 (A-FS-2, owner): repairs for the leftovers of a season reset done by hand */}
             {onRepair && (() => { const D: any = data; const ol = orphanLotsToRemove(D.lots || [], D.allPos || D.pos || []); const dl = danglingLinks(D.invoices || [], D.claims || [], D.allPos || D.pos || [], D.allOrders || D.orders || [], D.allShipments || D.shipments || []);   /* v7.34.2: existence over every record */
-              if (!ol.length && !dl.invoices.length && !dl.claims.length) return null;
+              // v7.50.2 (owner 29 Oct: "there is no box called Repairs"): the box shows when ANY repair applies — it used to look only at the
+              // first two, so the later ones (imported twice, corrections twice, imported drafts) were never offered
+              const twAny = importedTwice((data as any).invoices || [], (data as any).operationalCosts || []).invoices.length;
+              const ntAny = (() => { const x = notesImportedTwice((data as any).invoices || [], (data as any).financeNotes || (data as any).notes || []); return x.notes.length + x.invoices.length; })();
+              const drAny = importedDrafts((data as any).invoices || []).length;
+              if (!ol.length && !dl.invoices.length && !dl.claims.length && !twAny && !ntAny && !drAny) return null;
               return <div style={{ padding: "10px 14px", background: "#FFFBEB", borderBottom: "1px solid #FDE68A", display: "grid", gap: 6 }}>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#92400E" }}>REPAIRS — leftovers of documents deleted by hand</div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#92400E" }}>REPAIRS — click one at a time; each asks first, then says what it did</div>
                 {ol.length > 0 && <button onClick={() => onRepair("orphanLots")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🧹 Remove {ol.length} orphan lot(s) — their PO no longer exists and they hold no stock: {ol.slice(0, 4).map((l: any) => l.number).join(", ")}{ol.length > 4 ? "…" : ""}</button>}
                 {(dl.invoices.length > 0 || dl.claims.length > 0) && <button onClick={() => onRepair("danglingLinks")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🔗 Unlink {dl.invoices.length} invoice(s) and {dl.claims.length} claim(s) from documents that no longer exist</button>}
                 {(() => { const tw = importedTwice((data as any).invoices || [], (data as any).operationalCosts || []); return tw.invoices.length > 0 ? <button data-repair-twice="1" onClick={() => onRepair("importedTwice")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>⧉ Remove {tw.invoices.length} invoice(s) imported twice — the original kept</button> : null; })()}

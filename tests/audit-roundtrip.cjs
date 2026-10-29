@@ -5110,6 +5110,17 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.50.2 — the REPAIRS box shows for any repair; the audit trail is merged before it is sent ══
+(function v75002(){
+  console.log("\n══ v7.50.2 — repairs box; audit trail merged ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("v7.50.2 (owner 29 Oct): the REPAIRS box appears when any repair applies (it looked only at the first two); the audit trail is merged with the shared one before it is sent (never cut, so never refused); the refusal says its real reason", () => {
+    ok(/if \(!ol\.length && !dl\.invoices\.length && !dl\.claims\.length && !twAny && !ntAny && !drAny\) return null;/.test(rd("IntegrityBadge.tsx")), "the box still hides the later repairs");
+    const rs = rd("remoteStore.ts"); ok(/const sent = key === "auditLog" \? await mergeAuditWithShared\(json\) : json;/.test(rs) && /const merged = \[\.\.\.shared, \.\.\.mine\.filter\(e => !have\.has\(keyOf\(e\)\)\)\];/.test(rs), "the audit trail is not merged before it is sent");
+    ok(/the audit trail only grows — this window was behind/.test(rd("SharedStoreGate.tsx")), "the refusal message still blames the owner");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

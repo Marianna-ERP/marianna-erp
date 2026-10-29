@@ -128,7 +128,25 @@ async function flushUnsent(by: string): Promise<boolean> {
   for (const [k, v] of Object.entries(u)) { if (pending.has(k)) continue; try { await pushNow(k, v.json, by); } catch { emit({ status: "offline", unsent: Object.keys(readUnsent()).length } as any); return false; } }
   return !Object.keys(readUnsent()).length;
 }
-async function pushNow(key: string, json: string, by: string, attempt = 0): Promise<void> { await pushInner(key, json, by, attempt); clearUnsent(key, json); }
+async function pushNow(key: string, json: string, by: string, attempt = 0): Promise<void> {
+  const sent = key === "auditLog" ? await mergeAuditWithShared(json) : json;   // v7.50.2 (BUG-1): the audit trail is merged, never cut
+  await pushInner(key, sent, by, attempt); clearUnsent(key, json);
+}
+/** v7.50.2 (BUG-1, owner 29 Oct: "a change to auditLog was refused"): the audit trail only grows — a window that is behind (the same person
+ *  in another tab or device added lines) would send a copy without those lines and be refused. So before it is sent, the shared trail is read
+ *  and this window's new lines are added AFTER it: every shared line stays, in its place; this window is brought up to date too. */
+async function mergeAuditWithShared(json: string): Promise<string> {
+  try {
+    const res = await rest("stores?key=eq.auditLog&select=data,version"); if (!res.ok) return json;
+    const rows: any[] = await res.json(); const row = Array.isArray(rows) ? rows[0] : null; const shared: any[] = row && Array.isArray(row.data) ? row.data : [];
+    const mine: any[] = JSON.parse(json); if (!Array.isArray(mine)) return json;
+    const keyOf = (e: any) => (e && e.id != null ? `id:${e.id}` : JSON.stringify(e));
+    const have = new Set(shared.map(keyOf)); const merged = [...shared, ...mine.filter(e => !have.has(keyOf(e)))];
+    if (row && row.version != null) known.set("auditLog", { ...(known.get("auditLog") || {}), version: row.version, json: JSON.stringify(shared) } as any);
+    if (merged.length !== mine.length) applyStoreFromRemote("auditLog", merged);
+    return JSON.stringify(merged);
+  } catch { return json; }
+}
 async function pushInner(key: string, json: string, by: string, attempt = 0): Promise<void> {
   const k = known.get(key);
   if (k && k.json === json) return;   // an echo of what was pulled — nothing to push

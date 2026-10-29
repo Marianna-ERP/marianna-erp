@@ -11,7 +11,7 @@ const ok = (c, m) => { if (!c) throw new Error(m || "not ok"); };
   console.log("SYNC — UNSENT CHANGES (imitation server)");
   const src = require("fs").readFileSync(path.resolve("./src/remoteStore.ts"), "utf8");
   await t("a change is written to the unsent queue before its push, cleared only when the push lands; the poll retries it first; the first pull never applies over it; a network blip keeps the session", async () => {
-    ok(/markUnsent\(key, json\);/.test(src) && /async function pushNow\(key: string, json: string, by: string, attempt = 0\): Promise<void> \{ await pushInner\(key, json, by, attempt\); clearUnsent\(key, json\); \}/.test(src), "the queue is not written / cleared as it should");
+    ok(/markUnsent\(key, json\);/.test(src) && /await pushInner\(key, sent, by, attempt\); clearUnsent\(key, json\);/.test(src), "the queue is not written / cleared as it should");
     ok(/if \(unsentKeys\(\)\.length && !\(await flushUnsent\(by\)\.catch\(\(\) => false\)\)\) return;/.test(src), "the poll does not retry first");
     ok(/!unsent\.has\(r\.key\)\) applyStoreFromRemote/.test(src), "the first pull applies over an unsent change");
     ok(/if \(e && \(e\.status === 400 \|\| e\.status === 401\)\) saveSession\(null\)/.test(src), "a network blip still signs out");
