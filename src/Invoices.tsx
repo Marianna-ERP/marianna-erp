@@ -69,6 +69,7 @@ const CATEGORY_META: Record<InvoiceCategory, { label: string; color: string; bg:
 const catKey = (c: any): InvoiceCategory => (({ SINV: "SALES", FORWARDER: "FREIGHT", TRANSPORT: "FREIGHT", BROKER: "CUSTOMS", LOGISTICS: "FREIGHT" } as any)[String(c || "")] || String(c || "OTHER")) as InvoiceCategory;
 const CHARGED_TO: Record<string, string> = { SALES: "the sale", PURCHASE: "the PO's lots", SHIPMENT: "a shipment (its lots)", OVERHEAD: "overheads", OTHER: "nothing — not allocated" };
 const STATUS_META: Record<PaymentStatus, { bg: string; color: string }> = {
+  Received: { bg: "#E0F2FE", color: "#0369A1" },   // v7.51.0 (BUG-3): a received purchase invoice — offered in the filter
   Draft: { bg: "#F3F4F6", color: "#6B7280" }, Issued: { bg: "#DBEAFE", color: "#2563EB" },
   Sent: { bg: "#E0F2FE", color: "#0284C7" }, "Partially paid": { bg: "#FEF3C7", color: "#D97706" },
   Paid: { bg: "#DCFCE7", color: "#16A34A" }, Overdue: { bg: "#FEF3C7", color: "#B45309" },
@@ -1029,14 +1030,21 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Invoices</button>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>   {/* v7.51.0 (BUG-4): the buttons keep one size */}
           {inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark issued</button>}
           {inv.paymentStatus === "Issued" && <button onClick={() => onMarkStatus("Sent")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0284C7", color: "#0284C7", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Locks the invoice permanently">Mark sent 🔒</button>}
           {inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete invoice</button>}
           {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
           {onAllocate && inv.paymentStatus !== "Cancelled" && <SmallButton kind="amber" onClick={onAllocate} title="v6.99.109 (A-ST-7): spread this warehouse invoice over the lots that were at the warehouse in its period, by kilo-days — the lots' warehouse cost lines feed the settlement">{allocatedLots.length ? `Allocated to ${allocatedLots.length} lot${allocatedLots.length === 1 ? "" : "s"} · change` : "Allocate to lots"}</SmallButton>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
-          {(() => {
+          {/* v7.51.0 (BUG-4): the payments box moved into the page, under the header */}
+          {inv.kind === "SALES" && inv.paymentStatus === "Issued" && <button onClick={onSend} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#0284C7", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>→ Send to Fakturownia</button>}
+          {/* v6.65.0: duplicate "Mark Issued" removed — the status buttons above are the single path. */}
+          <button onClick={onNote} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>↩ Credit/Debit note</button>
+        </div>
+      </div>
+      <div data-invoice-payments="1" style={{ padding: "0 28px" }}>
+        {(() => {
             const evts = normalizeInvoicePayments(inv);
             if (!evts.length) return null;
             return (
@@ -1054,10 +1062,6 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
               </div>
             );
           })()}
-          {inv.kind === "SALES" && inv.paymentStatus === "Issued" && <button onClick={onSend} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#0284C7", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>→ Send to Fakturownia</button>}
-          {/* v6.65.0: duplicate "Mark Issued" removed — the status buttons above are the single path. */}
-          <button onClick={onNote} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>↩ Credit/Debit note</button>
-        </div>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "24px 32px" }}>

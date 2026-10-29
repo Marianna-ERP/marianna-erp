@@ -51,7 +51,7 @@ import { linkSpellingOnDocs } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { linkSaleDestinationOn } from "./locations";   // v7.18.1 (A-AU-3)
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
-import { importedTwice, notesImportedTwice, importedDrafts } from "./invoicing";   // v7.34.1
+import { importedTwice, notesImportedTwice, importedDrafts, notesOffOriginalRate } from "./invoicing";   // v7.34.1
 import { IdleSignOut } from "./IdleSignOut";   // v7.30.3 (Batch M · M-4)
 import { shapingSetter, shapeWritten, shapeShipment, shapeClaim } from "./storeShapes";   // v7.24.3 (FZ-01 step 2): a save writes the clean shape
 import { withLiveCompanies } from "./counterparty.domain";   // v7.25.0 (A-RV-13 / FZ-02)
@@ -558,6 +558,10 @@ export default function App() {
           onNavigate={navigate}
           onRepair={async (kind: any) => {   // v6.99.51 (A-FS-2)
             if (kind === "orphanLots") { const ol = orphanLotsToRemove(live.lots, pos); if (!ol.length) { await uiAlert({ tone: "info", title: "Nothing to repair", message: "No lot points at a purchase order that does not exist (last season's archived orders count as existing)." }); return; } if (!(await uiConfirm({ title: "Please confirm", message: `Delete ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock. They stay on record, struck through.` }))) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).map((l: any) => ids.has(l.id) ? { ...l, status: "Cancelled", deletedAt: localTodayISO(), deletedReason: "orphan — its PO no longer exists" } : l));   /* v7.17.1 (A-RV-07): marked Deleted, not removed */ recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) deleted (kept on record): ${ol.map((l: any) => l.number).join(", ")}` }); }
+            if (kind === "notesRate") { const fix = notesOffOriginalRate(invoices, financeNotes); if (!fix.length) { await uiAlert({ tone: "info", title: "Nothing to repair", message: "Every correction note carries its original invoice's rate." }); return; }
+              if (!(await uiConfirm({ title: "Please confirm", message: `Give ${fix.length} credit / debit note(s) the exchange rate of the invoice each corrects (your decision of 29 Oct)? Their PLN value follows.`, confirmLabel: "Apply" }))) return;
+              const m = new Map(fix.map((x: any) => [String(x.id), x])); setFinanceNotes((p: any[]) => (p || []).map((n: any) => { const x: any = m.get(String(n?.id)); return x ? { ...n, fxRate: x.fxRate, amountPLN: x.amountPLN } : n; }));
+              recordAudit({ module: "System", docType: "Repair", docNumber: "NOTES-RATE", action: "updated", summary: `${fix.length} correction note(s) given their original invoice's rate — owner decision 29 Oct` }); await uiAlert({ tone: "info", title: "Done", message: `${fix.length} note(s) now carry their original invoice's rate.` }); return; }
             if (kind === "notesTwice") { const tw = notesImportedTwice(invoices, financeNotes); const n = tw.notes.length + tw.invoices.length; if (!n) { await uiAlert({ tone: "info", title: "Nothing to repair", message: "No correction was imported twice." }); return; }
               if (!(await uiConfirm({ title: "Please confirm", message: `Remove ${tw.notes.length} duplicate credit / debit note(s) and ${tw.invoices.length} negative invoice(s) that a note already records?`, confirmLabel: "Remove" }))) return;
               const gn = new Set(tw.notes.map(String)), gi = new Set(tw.invoices.map(String)); setFinanceNotes((p: any[]) => (p || []).filter((x: any) => !gn.has(String(x?.id)))); setInvoices((p: any[]) => (p || []).filter((x: any) => !gi.has(String(x?.id))));

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { orphanLotsToRemove, danglingLinks, checkIntegrity, IntegrityInputs, IntegrityIssue } from "./integrityCheck";
-import { importedTwice, notesImportedTwice, importedDrafts } from "./invoicing";   // v7.34.1
+import { importedTwice, notesImportedTwice, importedDrafts, notesOffOriginalRate } from "./invoicing";   // v7.34.1
 
 // A small always-visible badge that runs the pure integrity checker over current
 // app state and summarises problems. Click to open a panel listing each issue.
@@ -64,7 +64,8 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
               const twAny = importedTwice((data as any).invoices || [], (data as any).operationalCosts || []).invoices.length;
               const ntAny = (() => { const x = notesImportedTwice((data as any).invoices || [], (data as any).financeNotes || (data as any).notes || []); return x.notes.length + x.invoices.length; })();
               const drAny = importedDrafts((data as any).invoices || []).length;
-              if (!ol.length && !dl.invoices.length && !dl.claims.length && !twAny && !ntAny && !drAny) return null;
+              const nrAny = notesOffOriginalRate((data as any).invoices || [], (data as any).financeNotes || (data as any).notes || []).length;   // v7.51.0
+              if (!ol.length && !dl.invoices.length && !dl.claims.length && !twAny && !ntAny && !drAny && !nrAny) return null;
               return <div style={{ padding: "10px 14px", background: "#FFFBEB", borderBottom: "1px solid #FDE68A", display: "grid", gap: 6 }}>
                 <div style={{ fontSize: 11, fontWeight: 800, color: "#92400E" }}>REPAIRS — click one at a time; each asks first, then says what it did</div>
                 {ol.length > 0 && <button onClick={() => onRepair("orphanLots")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🧹 Remove {ol.length} orphan lot(s) — their PO no longer exists and they hold no stock: {ol.slice(0, 4).map((l: any) => l.number).join(", ")}{ol.length > 4 ? "…" : ""}</button>}
@@ -72,6 +73,7 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
                 {(() => { const tw = importedTwice((data as any).invoices || [], (data as any).operationalCosts || []); return tw.invoices.length > 0 ? <button data-repair-twice="1" onClick={() => onRepair("importedTwice")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>⧉ Remove {tw.invoices.length} invoice(s) imported twice — the original kept</button> : null; })()}
                 {(() => { const D: any = data; const tw = notesImportedTwice(D.invoices || [], D.financeNotes || D.notes || []); const n = tw.notes.length + tw.invoices.length; return n > 0 ? <button onClick={() => onRepair("notesTwice")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>⧉ Remove {n} correction(s) imported twice — the note kept</button> : null; })()}
                 {(() => { const D: any = data; const ids = importedDrafts(D.invoices || []); return ids.length > 0 ? <button onClick={() => onRepair("importedDrafts")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>✓ Mark {ids.length} imported purchase invoice(s) as Issued (left as Draft)</button> : null; })()}
+                {nrAny > 0 && <button onClick={() => onRepair("notesRate")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>⇄ Give {nrAny} correction note(s) their original invoice's rate</button>}
               </div>; })()}
             <div style={{ padding: "12px 16px", borderBottom: "1px solid #F3F4F6", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <strong style={{ fontSize: 13 }}>Data integrity</strong>

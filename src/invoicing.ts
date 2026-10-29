@@ -27,7 +27,7 @@ export type CostScope = "SALES" | "PURCHASE" | "SHIPMENT" | "OVERHEAD" | "OTHER"
 // SALES invoice with this category; it was previously outside the union and
 // unmapped in the Invoices UI (CATEGORY_META lookup crashed the list render).
 export type InvoiceCategory = "SALES" | "COMMISSION" | "PURCHASE" | "FREIGHT" | "CUSTOMS" | "WAREHOUSE" | "OVERHEAD" | "OTHER";
-export type PaymentStatus = "Draft" | "Issued" | "Sent" | "Partially paid" | "Paid" | "Overdue" | "Cancelled";
+export type PaymentStatus = "Draft" | "Issued" | "Sent" | "Partially paid" | "Paid" | "Overdue" | "Cancelled" | "Received";   // v7.51.0 (BUG-3): a received purchase invoice
 
 export interface InvoiceLink { type: "SO" | "PO" | "Shipment" | "Lot"; number: string; }
 export interface InvoicePosition { name: string; quantity: number; unit?: string; vatRate: number; netPrice?: number; grossTotal?: number; 
@@ -370,4 +370,15 @@ export function notesImportedTwice(invoices: any[], notes: any[]): { notes: any[
  *  received invoices: Issued. */
 export function importedDrafts(invoices: any[]): any[] {
   return (invoices || []).filter((i: any) => i && i.kind === "COST" && String(i.paymentStatus) === "Draft" && (String(i.source || "").startsWith("fakturownia") || (i.fakturownia && (i.fakturownia.fktId != null)))).map((i: any) => i.id);
+}
+
+/** v7.51.0 (owner 29 Oct, Decision 2 applied to what is already there): a correction note carries the rate of the invoice it corrects —
+ *  the notes made before that rule (converted in the banner, or imported) that carry another rate, with the rate and PLN they should carry. */
+export function notesOffOriginalRate(invoices: any[], notes: any[]): Array<{ id: any; fxRate: number; amountPLN: number }> {
+  const byId = new Map((invoices || []).filter(Boolean).map((i: any) => [String(i.id), i]));
+  return (notes || []).filter((n: any) => n && /^(converted:|fakturownia-correction:)/.test(String(n.source || "")) && n.invoiceId != null && !/Cancelled/i.test(String(n.status || ""))).map((n: any) => {
+    const inv: any = byId.get(String(n.invoiceId)); const r = Number(inv?.fxRate);
+    if (!inv || !(r > 0) || String(inv.currency || "PLN") !== String(n.currency || "PLN") || Math.abs(r - Number(n.fxRate || 0)) <= 0.00005) return null;
+    return { id: n.id, fxRate: r, amountPLN: Math.round(Math.abs(Number(n.amount) || 0) * r * 100) / 100 };
+  }).filter(Boolean) as any[];
 }

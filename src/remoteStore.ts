@@ -275,3 +275,14 @@ export async function readSnapshot(takenAt: string): Promise<Record<string, any>
 }
 /** Today's shared data as stores (for the comparison). */
 export async function readSharedNow(): Promise<Record<string, any>> { const rows = await fetchRows("key,data"); const out: Record<string, any> = {}; rows.forEach(r => { out[r.key] = r.data; }); return out; }
+
+/** v7.51.0 (BUG-2, owner 29 Oct): what differs between the version kept and this window's set-aside one — field names and both values,
+ *  so "Use mine" is chosen knowing what it changes. */
+export function clashDiff(key: string, id: string): Array<{ field: string; kept: string; mine: string }> {
+  try {
+    const mine = JSON.parse(window.localStorage.getItem(clashKey(key, id)) || "null"); const list = readStoreValue(key);
+    const kept = Array.isArray(list) ? list.find((x: any) => x && String(x.id) === String(id)) : null; if (!mine || !kept) return [];
+    const show = (v: any) => { const s = typeof v === "object" ? JSON.stringify(v) : String(v ?? ""); return s.length > 60 ? s.slice(0, 57) + "…" : s; };
+    return Array.from(new Set([...Object.keys(kept), ...Object.keys(mine)])).filter(k => JSON.stringify(kept[k]) !== JSON.stringify(mine[k])).slice(0, 8).map(k => ({ field: k, kept: show(kept[k]), mine: show(mine[k]) }));
+  } catch { return []; }
+}

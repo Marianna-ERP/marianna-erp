@@ -5115,9 +5115,21 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ v7.50.2 — repairs box; audit trail merged ══");
   const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
   t("v7.50.2 (owner 29 Oct): the REPAIRS box appears when any repair applies (it looked only at the first two); the audit trail is merged with the shared one before it is sent (never cut, so never refused); the refusal says its real reason", () => {
-    ok(/if \(!ol\.length && !dl\.invoices\.length && !dl\.claims\.length && !twAny && !ntAny && !drAny\) return null;/.test(rd("IntegrityBadge.tsx")), "the box still hides the later repairs");
+    ok(/if \(!ol\.length && !dl\.invoices\.length && !dl\.claims\.length && !twAny && !ntAny && !drAny(?: && !nrAny)?\) return null;/.test(rd("IntegrityBadge.tsx")), "the box still hides the later repairs");
     const rs = rd("remoteStore.ts"); ok(/const sent = key === "auditLog" \? await mergeAuditWithShared\(json\) : json;/.test(rs) && /const merged = \[\.\.\.shared, \.\.\.mine\.filter\(e => !have\.has\(keyOf\(e\)\)\)\];/.test(rs), "the audit trail is not merged before it is sent");
     ok(/the audit trail only grows — this window was behind/.test(rd("SharedStoreGate.tsx")), "the refusal message still blames the owner");
+  });
+})();
+
+// ══ v7.51.0 — BUG-2, BUG-3, BUG-4 and the correction notes' rate ══
+(function v75100(){
+  console.log("\n══ v7.51.0 — the approved four ══");
+  const IV = B("invoicing.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("v7.51.0 (owner approved 29 Oct): a correction note takes its original invoice's rate (repair); your own other window is named as such, with what differs; 'Received' is in the filter; the payments box sits in the page, not among the buttons", () => {
+    const fix = IV.notesOffOriginalRate([{ id: 1, currency: "EUR", fxRate: 4.30 }], [{ id: 9, source: "converted:5", invoiceId: 1, currency: "EUR", fxRate: 4.37, amount: 100 }, { id: 10, source: "converted:6", invoiceId: 1, currency: "EUR", fxRate: 4.30, amount: 50 }]);
+    eq(fix.length, 1); eq(fix[0].fxRate, 4.30); eq(fix[0].amountPLN, 430);
+    const sg = rd("SharedStoreGate.tsx"); ok(/you changed it in another window or device at the same time/.test(sg) && /clashDiff\(n\.key, n\.id\)/.test(sg), "BUG-2");
+    const inv = rd("Invoices.tsx"); ok(/Received: \{ bg: "#E0F2FE"/.test(inv), "BUG-3"); ok(/data-invoice-payments="1"/.test(inv), "BUG-4");
   });
 })();
 
