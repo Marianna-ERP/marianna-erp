@@ -134,6 +134,10 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
 const TAG_LABELS: Record<string, string> = { GOODS: "Goods purchase", FREIGHT: "Freight", CUSTOMS: "Customs", WAREHOUSE: "Warehouse", OVERHEAD: "Overhead", SKIP: "Skip" };
 const OP_CATEGORIES = ["salary", "office_rent", "accountant", "petrol", "software", "bank_fees", "insurance", "phone_internet", "office_supplies", "other"];
 
+const lineless = (row: any, invoices: any[]) => { if (!Array.isArray(row?.positions) || !row.positions.length) return null; const no = String(row.number || "").replace(/\s+/g, "").toUpperCase();
+  const twin = (invoices || []).find((i: any) => i && ((row.fktId != null && i.fakturownia && String(i.fakturownia.fktId ?? i.fakturownia.ref) === String(row.fktId)) || String(i.number || "").replace(/\s+/g, "").toUpperCase() === no));
+  return twin && !(Array.isArray(twin.positions) && twin.positions.length) ? twin.id : null; };   // v7.53.1: the invoice already registered without its lines
+
 function ImportFakturowniaModal({ invoices = [], notes = [], contacts = [], shipments = [], pos = [], onClose, onPost }: any) {
   const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [rows, setRows] = useState<any[]>([]);
@@ -252,7 +256,8 @@ function ImportFakturowniaModal({ invoices = [], notes = [], contacts = [], ship
     });
     // v7.33.1 (INV-PDF): the adopted ones — their Fakturownia id, NIP and address onto the registered invoice
     const adopts = rows.filter((r: any) => r.include && r.adopt != null).map((r: any) => ({ invoiceId: r.adopt, fktId: r.fktId, taxNo: r.sellerTaxNo || "", addr: r.sellerAddr || null }));
-    onPost({ regs, flips, opCosts, fixes, adopts, notesIn });
+    const fills = rows.filter((r: any) => r.dup).map((r: any) => ({ invoiceId: lineless(r, invoices), positions: r.positions })).filter((x: any) => x.invoiceId != null);   // v7.53.1
+    onPost({ regs, flips, opCosts, fixes, adopts, notesIn, fills });
   }
 
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12 };
@@ -385,7 +390,8 @@ function ImportIssuedModal({ invoices = [], notes = [], contacts = [], orders = 
     const coOf = (r: any) => (contacts || []).find((c: any) => String(c.id) === String(r.companyId)) || null;
     const notesIn = rows.filter((r: any) => r.include && r.isCorrection).map((r: any) => noteFromCorrection(r, "outgoing", invoices, coOf(r), nextId));   // v7.35.0 (CR-1): a correction is a note
     const regs = rows.filter((r: any) => r.include && !r.isCorrection).map(r => buildIssuedSalesInvoice(r, r.so, coOf(r)));
-    onPost({ regs, flips: [], opCosts: [], fixes: [], notesIn });
+    const fills = rows.filter((r: any) => r.dup).map((r: any) => ({ invoiceId: lineless(r, invoices), positions: r.positions })).filter((x: any) => x.invoiceId != null);   // v7.53.1
+    onPost({ regs, flips: [], opCosts: [], fixes: [], notesIn, fills });
   }
   const inp: React.CSSProperties = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 10px", fontSize: 12 };
   return (
@@ -604,7 +610,12 @@ export default function Invoices(props: any) {
     if (saved.length) { setInvoices((prev: any[]) => (prev || []).map((i: any) => { const s = saved.find(x => x.id === i.id); return s ? { ...i, pdfSavedAs: s.name, pdfSavedAt: localTodayISO() } : i; })); recordAudit({ module: "Invoices", docType: "PDF", docNumber: `${saved.length} invoice(s)`, action: "updated", summary: `Invoice PDFs saved in the folder: ${saved.map(s => s.name).slice(0, 10).join(", ")}${saved.length > 10 ? ` +${saved.length - 10}` : ""} (A-INV-2)` }); }
     await invAlert({ tone: failed.length ? "warn" : "info", title: "Invoice PDFs", message: `${saved.length} PDF(s) saved in the folder.${noLink ? `\n\n${noLink} invoice(s) have no Fakturownia link yet — typed by hand or made from an operational cost. The next "Import from Fakturownia" links the Polish ones; a foreign one gets its PDF dropped on its page.` : ""}${todo.length === 40 ? " Press again for the next ones." : ""}${failed.length ? `\n\nNot saved:\n${failed.slice(0, 8).join("\n")}` : ""}` });
   }
-  async function handleImportPost({ regs, flips, opCosts, fixes = [], adopts = [], notesIn = [] }: any) {
+  async function handleImportPost({ regs, flips, opCosts, fixes = [], adopts = [], notesIn = [], fills = [] }: any) {
+  if (fills.length) {   // v7.53.1 (PL-1 prerequisite completed): the lines (and kilos) of invoices registered before v7.52.0
+    const byId = new Map(fills.map((x: any) => [String(x.invoiceId), x.positions]));
+    setInvoices((prev: any[]) => (prev || []).map((i: any) => byId.has(String(i?.id)) && !(Array.isArray(i.positions) && i.positions.length) ? { ...i, positions: byId.get(String(i.id)) } : i));
+    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "updated", summary: `${fills.length} registered invoice(s) given their lines (kilos) from Fakturownia — PL-1 prerequisite` });
+  }
   if (notesIn.length && typeof setNotes === "function") {   // v7.34.0 (CN-1): correcting invoices as notes, each once
     setNotes((prev: any[]) => { const have = new Set((prev || []).map((n: any) => String(n.source || ""))); return [...(prev || []), ...notesIn.filter((n: any) => !have.has(String(n.source)))]; });
     // v7.45.0 (O5): no creditNoteIds written back — the note points at its invoice
@@ -1091,7 +1102,7 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
               <Row k="Net" v={money(inv.netAmount, inv.currency)} /><Row k={`VAT ${fmtRate(inv.vatRate)}%`} v={money(inv.vatAmount, inv.currency)} /><Row k="Gross" v={money(inv.grossAmount, inv.currency)} bold />
               {inv.currency !== "PLN" && <Row k="Gross (PLN)" v={money(inv.grossPLN, "PLN")} />}
               {inv.kind === "COST" && <Row k="Charged to" v={CHARGED_TO[scopeOf(catKey(inv.category))] || "—"} />}
-              {inv.pdfSavedAs && <Row k="PDF in the folder" v={`${inv.pdfSavedAs}${inv.pdfSavedAt ? ` · ${formatDMY(inv.pdfSavedAt)}` : ""}`} />}
+              {inv.pdfSavedAs && <Row k="PDF in the folder" v={<span><PdfLink name={inv.pdfSavedAs} />{inv.pdfSavedAt ? ` · ${formatDMY(inv.pdfSavedAt)}` : ""}</span>} />}   {/* v7.54.0 (INV-PDF-LINK) */}
               {setInvoices && <InvoicePdfTools inv={inv} setInvoices={setInvoices} />}   {/* v7.33.1 (INV-PDF) */}
             </Card>
           </div>
@@ -1153,6 +1164,19 @@ function InvoicePdfTools({ inv, setInvoices }: any) {
     </div>
     {msg && <div style={{ marginTop: 4, color: "#475569" }}>{msg}</div>}
   </div>;
+}
+/** v7.54.0 (INV-PDF-LINK, owner 29 Oct): the name of a PDF saved in the folder opens it — read from the folder the system saves into
+ *  (Chrome / Edge ask once for permission to read it); a file moved or renamed is said so. */
+function PdfLink({ name }: { name: string }) {
+  const [msg, setMsg] = useState("");
+  const open = async () => {
+    try {
+      const folder: any = await pdfFolder(); if (!folder) { setMsg("No PDF folder chosen on this computer — choose it with 'Folder…' in Invoices."); return; }
+      if (folder.queryPermission && (await folder.queryPermission({ mode: "read" })) !== "granted" && folder.requestPermission && (await folder.requestPermission({ mode: "read" })) !== "granted") { setMsg("Permission to read the folder was not given."); return; }
+      const fh = await folder.getFileHandle(name); const file = await fh.getFile(); const url = URL.createObjectURL(file); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); setMsg("");
+    } catch (e: any) { setMsg(e && e.name === "NotFoundError" ? "Not found in the folder — moved or renamed? Drop the PDF on this invoice again." : "This browser cannot open files from the folder — use Chrome or Edge."); }
+  };
+  return <><button type="button" data-pdf-link="1" onClick={open} title="open the PDF from the folder" style={{ border: "none", background: "none", padding: 0, color: "#1D4ED8", textDecoration: "underline", cursor: "pointer", font: "inherit", textAlign: "right" }}>{name}</button>{msg && <div style={{ fontSize: 11, color: "#B45309" }}>{msg}</div>}</>;
 }
 function Row({ k, v, bold }: any) { return <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #F7F7F7" }}><span style={{ fontSize: 12, color: "#666" }}>{k}</span><span style={{ fontSize: 13, fontWeight: bold ? 700 : 500 }}>{v}</span></div>; }
 
@@ -1307,6 +1331,7 @@ function NoteForm({ form, setForm, onSave, onCancel, contacts, invoices, orders,
               <div><Lbl>Note type</Lbl><Sel value={form.noteType} onChange={(e: any) => sf("noteType", e.target.value)}><option value="CREDIT">Credit note (reduces amount)</option><option value="DEBIT">Debit note (increases amount)</option></Sel></div>
               <div><Lbl>Direction</Lbl><Sel value={form.direction} onChange={(e: any) => sf("direction", e.target.value)}><option value="outgoing">Outgoing (to a client)</option><option value="incoming">Incoming (from a supplier/carrier)</option></Sel></div>
               <div data-note-corrects="1" style={{ gridColumn: "span 2", padding: "8px 10px", borderRadius: 8, background: corrected ? "#EFF6FF" : "#FFFBEB", border: `1px solid ${corrected ? "#BFDBFE" : "#FDE68A"}`, fontSize: 12 }}>{corrected ? <>Corrects invoice <b>{corrected.number}</b> · {corrected.counterparty?.name} · {formatDMY(String(corrected.issueDate || "").slice(0, 10))} · {money(corrected.grossAmount, corrected.currency)}{corrected.fxRate ? ` · rate ${corrected.fxRate}` : ""}</> : <>Not linked to the invoice it corrects — choose it below</>}</div>   {/* v7.50.1 (owner 29 Oct: "no reference to which invoice it belongs to") */}
+              {form.pdfSavedAs && <div data-note-pdf="1" style={{ gridColumn: "span 2", fontSize: 12 }}>PDF in the folder: <PdfLink name={form.pdfSavedAs} /></div>}   {/* v7.54.0 (INV-PDF-LINK) */}
               <div style={{ gridColumn: "span 2" }}><Lbl>Against invoice (optional but recommended)</Lbl><Sel value={form.invoiceId ?? ""} onChange={(e: any) => { const id = e.target.value ? parseInt(e.target.value) : null; const inv = invoiceOptions.find((x: Invoice) => x.id === id); setForm((f: any) => ({ ...f, invoiceId: id, partyName: inv?.counterparty?.name || f.partyName, currency: inv?.currency || f.currency, relatedRef: inv?.links?.[0]?.number || f.relatedRef })); }}><option value="">— not linked —</option>{invoiceOptions.map((i: Invoice) => <option key={i.id} value={i.id}>{i.number || "(no number)"} · {i.counterparty?.name} · {money(i.grossAmount, i.currency)}</option>)}</Sel></div>
               <div><Lbl>Counterparty</Lbl><Sel value={form.partyId != null ? String(form.partyId) : ""} onChange={(e: any) => { const c: any = (contacts || []).find((x: any) => String(x.id) === e.target.value); setForm((f0: any) => ({ ...f0, partyId: c ? c.id : null, partyName: c ? c.name : "" })); }}><option value="">{form.partyId == null && form.partyName ? `"${form.partyName}" — typed, not linked: pick its company` : "— select —"}</option>{partyOptions.map((c: any) => <option key={String(c.id)} value={String(c.id)}>{c.name}</option>)}</Sel></div>
               <div><Lbl>Reason</Lbl><Sel value={form.category} onChange={(e: any) => sf("category", e.target.value)}>{["Quality complaint", "Short delivery", "Pricing correction", "Returned goods", "Damaged in transit", "Additional charge", "Other"].map(r => <option key={r}>{r}</option>)}</Sel></div>

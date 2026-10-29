@@ -67,6 +67,7 @@ module.exports = async function handler(req, res) {
       const url = new URL(base + GET_PATHS[op]);
       if (op === "test") { url.searchParams.set("page", "1"); url.searchParams.set("per_page", "1"); url.searchParams.set("period", "this_month"); }
       else PASS_PARAMS.forEach(p => { const v = q[p]; if (v !== undefined && v !== null && v !== "") url.searchParams.set(p, String(v)); });
+      if (op === "invoices") url.searchParams.set("include_positions", "true");   // v7.52.0 (PL-1 prerequisite): the invoice lines (their kilos) come too
       url.searchParams.set("api_token", token);
       const r = await fetch(url.toString(), { headers: { Accept: "application/json" } });
       const text = await r.text(); let data = null; try { data = JSON.parse(text); } catch { data = null; }

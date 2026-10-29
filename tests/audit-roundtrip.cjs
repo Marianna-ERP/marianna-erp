@@ -5133,6 +5133,44 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.52.0 — PL-1 prerequisite: the kilos on an invoice; sales invoices linked to their SO ══
+(function v75200(){
+  console.log("\n══ v7.52.0 — the kilos on an invoice ══");
+  const FK = B("fakturownia.js"), FI = B("fakturowniaImport.domain.js"), IC = B("integrityCheck.js");
+  t("v7.52.0 (PL-1 prerequisite): Fakturownia's invoice lines are kept; the kilos on an invoice are read from them (kg, t); a sales invoice without its SO is a data issue", () => {
+    const m = FK.mapInvoice({ id: 5, number: "FV2026/10/12", kind: "vat", positions: [{ name: "Apples", quantity: "19422", quantity_unit: "kg", price_net: "4.16", total_price_gross: "80853.33", tax: "0" }, { name: "Pallets", quantity: "26", quantity_unit: "szt" }] });
+    eq(m.positions.length, 2); eq(FI.kgOnInvoice({ positions: m.positions }), 19422); eq(FI.kgOnInvoice({ positions: [{ quantity: 2.5, unit: "t" }] }), 2500);
+    const r = IC.checkIntegrity({ pos: [], lots: [], orders: [], shipments: [], contacts: [], claims: [], invoices: [{ id: 1, kind: "SALES", number: "FV1", paymentStatus: "Issued", grossAmount: 100, links: [] }] });
+    ok((r.issues || []).some(i => i.code === "SALES_NO_SO"), "a sales invoice without its SO is not listed");
+  });
+})();
+
+// ══ v7.53.0 — PL-1: the P/L rule ══
+(function v75300(){
+  console.log("\n══ v7.53.0 — PL-1 ══");
+  const CC = B("correctionCosts.domain.js");
+  t("PL-1 (v7.53.0): cargo from the PO's goods invoices (the PO price until invoiced), lost kilos carried by the kilos sold; transport lines at their invoices; overheads per kg invoiced in the month", () => {
+    const lots = [{ id: 1, poRef: "PO-1", receivedKg: 1000, physicalKg: 0, costs: [{ type: "purchase", pln: 4000 }, { type: "freight", pln: 500 }], movements: [{ type: "SHIP_OUT", qtyKg: 900 }] }];
+    eq(Math.round(CC.lotCostPerKgByDocuments(lots[0], lots, [], []) * 100) / 100, 5, "PO price: 4,500 PLN ÷ 900 kg sold");
+    const inv = [{ id: 7, kind: "COST", paymentStatus: "Issued", netPLN: 3600, links: [{ type: "PO", number: "PO-1" }] }];
+    eq(Math.round(CC.lotCostPerKgByDocuments(lots[0], lots, inv, []) * 100) / 100, 4.56, "invoice: (3,600 + 500) ÷ 900 kg");
+    const sh = CC.shipmentsWithInvoicedCosts([{ id: 1, costs: [{ id: "a", amountPLN: 1000, currency: "PLN", invoiceRef: "F/1" }, { id: "b", amountPLN: 3000, currency: "PLN", invoiceRef: "F/1" }, { id: "c", amountPLN: 200, currency: "PLN" }] }], [{ number: "F/1", kind: "COST", paymentStatus: "Issued", netPLN: 4400 }]);
+    eq(sh[0].costs.map(c => c.amountPLN).join(), "1100,3300,200");
+    const per = CC.overheadPerKgByMonth([{ date: "2026-09-10", amountPLN: 1000 }], [{ kind: "SALES", paymentStatus: "Issued", grossAmount: 10, issueDate: "2026-09-20", positions: [{ quantity: 4000, unit: "kg" }] }], i => (i.positions || []).reduce((s, p) => s + p.quantity, 0));
+    eq(per["2026-09"], 0.25);
+  });
+})();
+
+// ══ v7.53.1 / v7.54.0 — invoice lines for registered invoices; the saved PDF opens from its name ══
+(function v75400(){
+  console.log("\n══ v7.53.1 / v7.54.0 ══");
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("v7.53.1 (owner approved 29 Oct): an invoice registered without its lines gets them (and its kilos) from the next import; v7.54.0: the saved PDF's name opens it from the folder, on the invoice and the note page", () => {
+    ok(/const lineless = \(row: any, invoices: any\[\]\) =>/.test(src) && /onPost\(\{ regs, flips: \[\], opCosts: \[\], fixes: \[\], notesIn, fills \}\)/.test(src) && /given their lines \(kilos\) from Fakturownia/.test(src), "the lines are not filled for registered invoices");
+    ok(/function PdfLink\(/.test(src) && /<PdfLink name=\{inv\.pdfSavedAs\} \/>/.test(src) && /data-note-pdf="1"/.test(src), "the PDF name does not open the PDF");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

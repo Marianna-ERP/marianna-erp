@@ -1,4 +1,6 @@
 import { computeSOMargin, MarginMode, MarginBreakdown } from "./marginCalculations";
+import { kgOnInvoice } from "./invoiceKg";   // v7.53.0 (PL-1)
+import { overheadPerKgByMonth } from "./correctionCosts.domain";   // v7.53.0 (PL-1)
 import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
 import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 
@@ -121,145 +123,14 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function orderPeriod(order: any): string {
-  return String(order.orderDate || order.deliveryDate || "").substring(0, 7) || "—";
-}
 
-function activeForOverhead(order: any): boolean {
-  return !!order && order.status !== "Draft" && order.status !== "Cancelled";
-}
 
-function countableCost(cost: OperationalCost, mode: MarginMode): boolean {
-  if (!cost || cost.allocationMethod === "not_allocated") return false;
-  if (mode === "forecast") return ["Budget", "Expected", "Received", "Posted", "Paid"].includes(cost.status || "Expected");
-  // Batch 5d (BP-38): in ACTUAL mode the honest evidence of spend is a real cost
-  // invoice — an entry linked to one (invoiceRef) counts regardless of its status
-  // label. The status path remains for entries not yet linked (legacy data).
-  if ((cost as any).invoiceRef) return true;
-  return ["Received", "Posted", "Paid"].includes(cost.status || "Expected");
-}
 
-function kgForOrder(order: any, mode: MarginMode): number {
-  if (mode === "actual" && !["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status)) return 0;
-  return (order.items || []).reduce((s: number, it: any) => s + safe(it.qty), 0);
-}
 
-function shipmentCountForOrder(order: any, shipments: any[]): number {
-  const number = String(order.number || "");
-  const linked = (shipments || []).filter((s: any) => (s.soRefs || []).includes(number)); // v6.32.0 (R7b-5): dead linkedSORefs condition removed (field never existed)
-  return linked.length || 1;
-}
 
-function basisForOrder(
-  method: OperationalAllocationMethod,
-  order: any,
-  lots: any[],
-  pos: any[],
-  shipments: any[],
-  mode: MarginMode
-): number {
-  if (!activeForOverhead(order)) return 0;
-  if (method === "by_order_count") return 1;
-  if (method === "by_kg_sold") return Math.max(0, kgForOrder(order, mode));
-  if (method === "by_shipment_count") return Math.max(0, shipmentCountForOrder(order, shipments));
-  const base = computeSOMargin(order, lots, pos, shipments, mode);
-  if (method === "by_gross_margin") return Math.max(0, base.marginPLN);
-  // Default: by revenue
-  return Math.max(0, base.revenuePLN);
-}
 
 // ─── v6.32.0 (R7b-6): allocation-basis memoization ──────────────────────────
-// Nested WeakMaps keyed on the four state-array references; inner Map keyed on
-// method|order|mode (basis) or method|period|mode (denominator). New arrays
-// from a React state update start a fresh cache — no manual invalidation.
-const _basisCache = new WeakMap<any, WeakMap<any, WeakMap<any, WeakMap<any, Map<string, number>>>>>();
-function _cacheFor(allOrders: any[], lots: any[], pos: any[], shipments: any[]): Map<string, number> {
-  const a: any = allOrders || [], l: any = lots || [], p: any = pos || [], sh: any = shipments || [];
-  let m1 = _basisCache.get(a); if (!m1) { m1 = new WeakMap(); _basisCache.set(a, m1); }
-  let m2 = m1.get(l); if (!m2) { m2 = new WeakMap(); m1.set(l, m2); }
-  let m3 = m2.get(p); if (!m3) { m3 = new WeakMap(); m2.set(p, m3); }
-  let m4 = m3.get(sh); if (!m4) { m4 = new Map(); m3.set(sh, m4); }
-  return m4;
-}
-function memoBasis(method: OperationalAllocationMethod, order: any, lots: any[], pos: any[], shipments: any[], mode: MarginMode, allOrders: any[]): number {
-  const cache = _cacheFor(allOrders, lots, pos, shipments);
-  const k = `b|${method}|${order?.number}|${mode}`;
-  if (cache.has(k)) return cache.get(k)!;
-  const v = basisForOrder(method, order, lots, pos, shipments, mode);
-  cache.set(k, v);
-  return v;
-}
-function memoDenominator(method: OperationalAllocationMethod, periodOrders: any[], lots: any[], pos: any[], shipments: any[], mode: MarginMode, allOrders: any[]): number {
-  const cache = _cacheFor(allOrders, lots, pos, shipments);
-  const period = periodOrders.length ? orderPeriod(periodOrders[0]) : "";
-  const k = `d|${method}|${period}|${mode}|${periodOrders.length}`;
-  if (cache.has(k)) return cache.get(k)!;
-  const v = periodOrders.reduce((s: number, o: any) => s + memoBasis(method, o, lots, pos, shipments, mode, allOrders), 0);
-  cache.set(k, v);
-  return v;
-}
 
-function computeAllocatedOverhead(
-  order: any,
-  allOrders: any[],
-  lots: any[],
-  pos: any[],
-  shipments: any[],
-  operationalCosts: OperationalCost[] = [],
-  mode: MarginMode
-): OverheadAllocationResult {
-  const period = orderPeriod(order);
-  const lines: OverheadLine[] = [];
-  const warnings: string[] = [];
-  let totalPLN = 0;
-
-  if (!activeForOverhead(order)) return { period, totalPLN: 0, lines, warnings };
-
-  const periodOrders = (allOrders && allOrders.length ? allOrders : [order]).filter((o: any) => activeForOverhead(o) && orderPeriod(o) === period);
-  const periodCosts = (operationalCosts || []).filter((c: OperationalCost) => String(c.period || "") === period && countableCost(c, mode));
-
-  periodCosts.forEach((cost: OperationalCost) => {
-    const amountPLN = safe(cost.amountPLN) || safe(cost.amount) * (safe(cost.fxRate) || 1);
-    if (amountPLN <= 0) return;
-
-    if (cost.allocationMethod === "manual") {
-      const manual = (cost.allocations || []).find(a => String(a.soNumber) === String(order.number));
-      const manualAmount = manual ? safe(manual.amountPLN) : 0;
-      if (manualAmount > 0) {
-        totalPLN += manualAmount;
-        lines.push({
-          label: `${cost.description || cost.category} · manual allocation`,
-          amountPLN: round2(manualAmount),
-          note: `${cost.status} · ${cost.costCenter}`,
-          costId: cost.id,
-        });
-      }
-      return;
-    }
-
-    const method = (cost.allocationMethod || "by_revenue") as OperationalAllocationMethod;
-    // v6.32.0 (R7b-6): memoized — basisForOrder calls computeSOMargin, and the
-    // aggregate Finance view calls this per SO × per cost × per period order
-    // (O(n²·m)). The cache is keyed on the state array REFERENCES, so any React
-    // state update (new array) invalidates it naturally.
-    const denominator = memoDenominator(method, periodOrders, lots, pos, shipments, mode, allOrders);
-    const numerator = memoBasis(method, order, lots, pos, shipments, mode, allOrders);
-    if (denominator <= 0 || numerator <= 0) {
-      warnings.push(`Overhead "${cost.description || cost.category}" could not be allocated by ${method.replace(/_/g, " ")} because allocation basis is zero.`);
-      return;
-    }
-    const allocated = round2(amountPLN * numerator / denominator);
-    totalPLN += allocated;
-    lines.push({
-      label: `${cost.description || cost.category} · ${method.replace(/_/g, " ")}`,
-      amountPLN: allocated,
-      note: `${cost.status} · ${cost.costCenter} · ${period}`,
-      costId: cost.id,
-    });
-  });
-
-  return { period, totalPLN: round2(totalPLN), lines, warnings };
-}
 
 export function computeSOMarginWithOverhead(
   order: any,
@@ -273,7 +144,14 @@ export function computeSOMarginWithOverhead(
   financeNotes: any[] = []
 ): MarginWithOverhead {
   const base = computeSOMargin(order, lots, pos, shipments, mode, invoices, financeNotes)   /* v6.99.132 (AUD-34) */;
-  const overhead = computeAllocatedOverhead(order, allOrders && allOrders.length ? allOrders : [order], lots, pos, shipments, operationalCosts, mode);
+  // v7.53.0 (PL-1, owner 29 Oct): ONE OVERHEAD RULE — the month's operational costs ÷ the kilos on sales invoices dated that month, times this
+  // sale's kilos on its own invoices of that month (the per-cost method is retired); a sale not yet invoiced carries no overhead yet
+  const perKg = overheadPerKgByMonth(operationalCosts, invoices, kgOnInvoice);
+  const mine = (invoices || []).filter((i: any) => i && i.kind === "SALES" && !["Cancelled", "Draft"].includes(String(i.paymentStatus)) && Number(i.grossAmount) > 0 && (i.links || []).some((l: any) => l && l.type === "SO" && String(l.number) === String(order?.number)));
+  const ovLines: any[] = []; let ovTotal = 0;
+  mine.forEach((i: any) => { const m = String(i.issueDate || "").slice(0, 7); const kg = kgOnInvoice(i); const rate = perKg[m]; if (!(kg > 0) || !(rate > 0)) return; const pln = round2(kg * rate); ovTotal += pln;
+    ovLines.push({ label: `Overheads ${m} — ${kg.toLocaleString("pl-PL")} kg × ${rate.toFixed(3)} PLN/kg (invoice ${i.number})`, amountPLN: pln }); });
+  const overhead = { totalPLN: round2(ovTotal), lines: ovLines, warnings: mine.some((i: any) => !(kgOnInvoice(i) > 0)) ? ["A sales invoice of this sale carries no kilos — its share of the month's overheads is unknown"] : [] } as any;
   const contributionMarginPLN = base.marginPLN;
   const contributionMarginSO = base.marginSO;
   const contributionMarginPct = base.marginPct;

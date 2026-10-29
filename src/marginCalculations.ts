@@ -25,7 +25,7 @@ import { resolveFxRate , rateOf } from "./fx";
 // branching at render time.
 
 import { shippedKgByLine } from "./salesOrders.domain";
-import { correctionsPLNFor, poCorrectionPerKg } from "./correctionCosts.domain";   // v7.47.0 (INV-C)
+import { correctionsPLNFor, lotCostPerKgByDocuments, shipmentsWithInvoicedCosts } from "./correctionCosts.domain";   // v7.47.0 (INV-C)
 import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 
 export type MarginMode = "forecast" | "actual";
@@ -77,14 +77,6 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-// COGS per kg for a lot — total cost divided by received qty (not physical).
-// This matters because once received, the cost basis is fixed; ship-outs simply
-// allocate that cost proportionally.
-function lotCostPerKg(lot: any): number {
-  const totalPLN = (lot.costs || []).reduce((s: number, c: any) => s + safe(c.pln), 0);
-  const denom = safe(lot.receivedKg) || safe(lot.expectedKg);
-  return denom > 0 ? totalPLN / denom : 0;
-}
 
 // Sum SHIP_OUT kg from this lot for the given SO. Prefers the structured `soRef`
 // field; falls back to substring-matching the SO number in the note for legacy
@@ -109,7 +101,7 @@ function lotNetShippedForSO(lot: any, soNumber: string): number {
 
 // ─── REVENUE ────────────────────────────────────────────────────────────────
 
-function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipments: any[] = []): { lines: MarginLine[]; totalSO: number; warnings: string[] } {
+function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipments: any[] = [], notes: any[] = []): { lines: MarginLine[]; totalSO: number; warnings: string[] } {
   const lines: MarginLine[] = [];
   const warnings: string[] = [];
   let totalSO = 0;
@@ -163,7 +155,10 @@ function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipment
   // additive and reversible — the line prices themselves are never rewritten, so a
   // closed deal's margin moves legitimately when a claim settles later. Adjustments
   // are held in PLN; convert back to SO currency for the revenue total.
-  const adj = (order.claimAdjustments || []).reduce((s: number, a: any) => s + safe(a?.amountPLN), 0);
+  // v7.53.0 (PL-1, part 6): a claim posted to revenue AND documented by its credit note counts ONCE — the note (a document) wins, so the
+  // adjustment of a claim whose note exists is left out here
+  const noted = (a: any) => { const src = String(a?.source || ""); const no = src.startsWith("claim:") ? src.slice(6) : ""; return !!no && (notes || []).some((n: any) => n && String(n.source || "") === `claim:${no}` && !/Cancelled/i.test(String(n.status || ""))); };
+  const adj = (order.claimAdjustments || []).filter((a: any) => !noted(a)).reduce((s: number, a: any) => s + safe(a?.amountPLN), 0);
   if (adj) {
     const fx = safe(order.fxRate) || 1;
     const adjSO = round2(adj / (fx || 1));
@@ -197,7 +192,7 @@ function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode, invo
         hasMissingData = true;
         return;
       }
-      const costPerKg = lotCostPerKg(lot) + poCorrectionPerKg(lot.poRef, lots, invoices, notes);   // v7.47.0 (INV-C): the PO's corrections, read from their notes
+      const costPerKg = lotCostPerKgByDocuments(lot, lots, invoices, notes);   // v7.53.0 (PL-1): the PO's goods invoices (PO price until invoiced), its corrections; lost kilos carried by the kilos sold
       let attributableKg = qty;
       if (mode === "actual") {
         // For ACTUAL view, only attribute the kg actually shipped from this lot for this SO
@@ -338,9 +333,9 @@ export function computeSOMargin(
   const currency = order.currency || "PLN";
   const fxRate = rateOf(order);   // v7.44.0 (AUD3-L2)
 
-  const rev = computeRevenue(order, mode, lots, shipments);
+  const rev = computeRevenue(order, mode, lots, shipments, financeNotes);   // v7.53.0 (PL-1 part 6)
   const cogs = computeCOGS(order, lots, pos, mode, invoices, financeNotes);
-  const direct = computeDirectCosts(order, shipments, mode, lots, invoices, financeNotes);
+  const direct = computeDirectCosts(order, shipmentsWithInvoicedCosts(shipments, invoices), mode, lots, invoices, financeNotes);   // v7.53.0 (PL-1): an invoiced line counts at its invoice
 
   // v6.99.132 (AUD-34): the invoice owns the value once issued — revenue = the sale's invoices' net (excl. VAT) at their rates,
   // less the client's credit / debit notes on them; the order's lines only until invoiced (the rule the settlement follows)

@@ -158,6 +158,7 @@ export interface MappedInvoice {
   description: string;
   oid: string;
   ksefNo: string;
+  positions?: Array<{ name: string; quantity: number; unit: string; netPrice?: number; grossTotal?: number; vatRate?: any }>;   // v7.52.0
 }
 
 function num(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
@@ -196,6 +197,8 @@ export function mapInvoice(raw: any): MappedInvoice {
     description: str(raw?.description),
     oid: str(raw?.oid),
     ksefNo: str(raw?.ksef_number ?? raw?.ksef_no ?? raw?.ksef_reference_number),
+    // v7.52.0 (PL-1 prerequisite, owner approved 29 Oct): the invoice's lines — with their quantity and unit, so a sale's kilos are known
+    positions: Array.isArray(raw?.positions) ? raw.positions.map((p: any) => ({ name: str(p?.name), quantity: Number(String(p?.quantity ?? "").replace(",", ".")) || 0, unit: str(p?.quantity_unit), netPrice: Number(p?.price_net) || undefined, grossTotal: Number(p?.total_price_gross) || undefined, vatRate: p?.tax })) : [],
   };
 }
 

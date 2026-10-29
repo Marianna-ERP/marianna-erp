@@ -108,6 +108,11 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   arr((inp as any).operationalCosts).forEach((c: any) => { const cur = String(c?.currency || "PLN").toUpperCase(); if (cur !== "PLN" && num(c?.amount) > 0 && !(num(c?.fxRate) > 1) && !c?.fxAgreed)
     add("warning", "FX_MISSING_COST", "Finance", String(c?.invoiceNo || c?.supplierName || c?.id || "cost"), `An operational cost in ${cur} has no exchange rate — set it in Finance › "Rates to review".`); });
 
+  // v7.52.0 (PL-1 prerequisite, owner approved 29 Oct): a sales invoice not linked to its SO counts in no sale's margin, and without its lines
+  // its kilos are unknown — so the month's overheads per kilo cannot be spread on it
+  arr(inp.invoices).forEach((i: any) => { if (!i || i.kind !== "SALES" || i.paymentStatus === "Cancelled" || i.paymentStatus === "Draft" || !(num(i.grossAmount) > 0)) return;
+    if (!arr(i.links).some((l: any) => l && l.type === "SO")) add("warning", "SALES_NO_SO", "Invoices", i.number || "(sales invoice)", "Sales invoice not linked to its SO — it counts in no sale's margin. Link it to its SO."); });
+
   // ── 1. Orphaned references ────────────────────────────────────────────────
   // Lot pointing at a PO that no longer exists.
   lots.forEach((lot: any) => {

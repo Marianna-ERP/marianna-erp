@@ -1,5 +1,5 @@
 {
- "version": "7.51.0",
+ "version": "7.54.0",
  "files": [
   ".env.production",
   ".npmrc",
@@ -106,6 +106,7 @@
   "src/index.tsx",
   "src/integrityCheck.ts",
   "src/inventory.domain.ts",
+  "src/invoiceKg.ts",
   "src/invoiceNotes.domain.ts",
   "src/invoicePdfFolder.ts",
   "src/invoicePlus.domain.ts",

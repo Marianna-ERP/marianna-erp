@@ -421,6 +421,7 @@ export function salesRowFromMapped(m: any, idx: number): any {
     date: m.issueDate || m.sellDate || localTodayISO(), dueDate: m.dueDate || "", net: num(m.netTotal), gross: num(m.grossTotal),
     currency: String(m.currency || "PLN").toUpperCase(), fxRate: num(m.exchangeRate), fktId: m.fktId, description: String(m.description || ""),
     kind: String(m.kind || "vat"), correctedFktId: m.correctedFktId ?? null, ksefNo: String(m.ksefNo || ""),   // v7.45.0 (INV2-1 / O4): kept, not dropped
+    positions: Array.isArray(m.positions) ? m.positions : [],   // v7.52.0: the invoice lines (kilos)
     ...(isCorrectionRow({ kind: m.kind, gross: m.grossTotal, number: m.number, description: m.description }) ? { isCorrection: true } : {}) };
 }
 /** Already in the register (a sales invoice of the same number, not cancelled)? */
@@ -447,6 +448,7 @@ export function buildIssuedSalesInvoice(row: any, soNumber: string, contact: any
     id: nextId(), kind: "SALES", category: "SALES", costScope: "SALES", number: row.number,
     counterparty: contact ? { id: contact.id, name: contact.name, ...(contact.nip ? { nip: contact.nip } : {}) } : { name: row.buyer, ...(row.buyerTaxNo ? { taxNo: row.buyerTaxNo } : {}) },   // v7.35.0 (CR-2): the NIP kept on the copy
     ...(row.ksefNo ? { ksefNo: String(row.ksefNo) } : {}),   // v7.45.0 (O4)
+    ...(Array.isArray(row.positions) && row.positions.length ? { positions: row.positions } : {}),   // v7.52.0: the kilos invoiced
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "", paymentMethod: "Transfer",
     currency: row.currency, fxRate: own ? num(row.fxRate) : resolveFxRate(defaultFxRate(row.currency), row.currency), ...(own ? { fxTableDate: row.date, fxSource: "fakturownia" } : {}),
     netAmount: net, vatRate: vatRateOf(row.net, row.gross), ...(!num(row.net) || !num(row.gross) ? { amountsIncomplete: true } : {}),
@@ -480,3 +482,5 @@ export function linkForTag(row: StagedRow, tag: string, contacts: any[], shipmen
   const s: any = suggestForRow(row, [{ ...c, type: role[tag][0], roles: role[tag] }], shipments, pos);
   return s && s.tag === tag ? { shipmentNumber: s.shipmentNumber, costLineId: s.costLineId, poNumber: s.poNumber, reason: s.reason } : {};
 }
+
+export { kgOnInvoice } from "./invoiceKg";   // v7.53.0: moved to a leaf file (no import loop)
