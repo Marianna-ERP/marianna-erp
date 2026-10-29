@@ -153,7 +153,7 @@ export function lotWarnings(lot: any, todayISO: string, ctx: { orders?: any[] } 
 /** v7.10.3 (A-RV-15, owner 8 Oct): the lot warnings shown on screen — the two the owner approved (a lot still expected after
  *  ten days; received kilos 5 % or more off the order). The other two of lotWarnings (unexplained movements, ageing stock)
  *  wait for the owner (registered A-RV-24). Shown in amber: they are hints, not errors. */
-export const LOT_WARNINGS_SHOWN = ["still expected", "variance", "unexplained movements", "ageing stock"];   // v7.11.2 (A-RV-24, owner 8 Oct): all four
+const LOT_WARNINGS_SHOWN = ["still expected", "variance", "unexplained movements", "ageing stock"];   // v7.11.2 (A-RV-24, owner 8 Oct): all four
 export function lotWarningsShown(lot: any, todayISO: string, ctx: { orders?: any[] } = {}): Warning[] {
   if (/Cancelled|Deleted/.test(S(lot?.status))) return [];
   // v7.11.5 (A-RV-28, owner 8 Oct): a lot received twice (kept as history by ruling) already says so with its +100 % badge — no ±5 % warning on top
@@ -185,7 +185,3 @@ export function newestFirst<T extends Record<string, any>>(rows: T[], numberKey 
   });
 }
 
-/** Reference data: A→Z, Polish collation so ą, ć, ł sort where a reader expects. */
-export function alphabetical<T extends Record<string, any>>(rows: T[], nameKey = "name"): T[] {
-  return [...(rows || [])].sort((a, b) => S(a?.[nameKey]).localeCompare(S(b?.[nameKey]), "pl", { sensitivity: "base" }));
-}

@@ -6,7 +6,7 @@ import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export interface ClosedPeriod { period: string; closedAt: string; closedBy: string; snapshot: any; }
-export function isDateInClosedPeriod(dateISO: any, closed: ClosedPeriod[]): string | null {
+function isDateInClosedPeriod(dateISO: any, closed: ClosedPeriod[]): string | null {
   const p = S(dateISO).slice(0, 7); if (!p) return null;
   return (closed || []).some(c => c.period === p) ? p : null;
 }

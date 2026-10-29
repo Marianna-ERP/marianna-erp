@@ -15,7 +15,7 @@
 import { nextId } from "./ids";
 import { resolveFxRate } from "./fx";
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
-import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6): the scope follows the category
+
 import { countryIso, isEU } from "./counterparty.domain";   // v7.27.4 (AUD-16)
 
 export type InvoiceKind = "SALES" | "COST";
@@ -177,72 +177,10 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
   } as Invoice;
 }
 
-export function migrateLegacyInvoices(opts: {
-  existing: Invoice[];
-  operationalCosts: any[];
-}): Invoice[] {
-  const existing = arr<Invoice>(opts.existing);
-  const haveSource = new Set(existing.map(i => i.source).filter(Boolean));
-  const out: Invoice[] = [...existing];
-
-  const pushIf = (source: string, build: () => Invoice) => {
-    if (haveSource.has(source)) return;
-    out.push(build());
-    haveSource.add(source);
-  };
-
-  // v7.28.12 (Batch L · FZ-01): the folds of the old sales drafts (SO pendingInvoices) and of the old warehouse-invoice store are gone
-  // — neither exists in the data any more; what stays is the operational cost that carries an invoice number
-  // v6.64.1 (D-17): number-level twin guard — a register invoice written DIRECTLY (e.g. by an import) with the same legal number +
-  // counterparty is not folded again; the same number from a DIFFERENT counterparty is legitimate and still folds
-  const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
-  const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
-  const registerTwins = new Set(arr(opts.existing).filter((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim()).map((i: any) => normNo(i.number) + "|" + normParty(i.counterparty?.name)));
-  const hasTwin = (number: any, party: any) => registerTwins.has(normNo(number) + "|" + normParty(party));
-  // COST from operationalCosts that carry an invoice number
-  arr(opts.operationalCosts).forEach((c: any) => {
-    if (!String(c.invoiceNo || "").trim()) return; // payroll/taxes without an invoice stay out
-    if (String(c.source || "").startsWith("invoice:")) return; // v6.68.0 (D-34): this opCost IS a mirror of a register invoice — folding it back would loop
-    if (hasTwin(c.invoiceNo, c.supplierName)) return; // v6.64.1 (D-17)
-    const src = `migrated:opCost:${c.id}`;
-    pushIf(src, () => {
-      const fx = resolveFxRate(c.fxRate, c.currency);
-      const net = r2(n(c.amount));
-      const rate = n(c.vatRate);   // v7.26.0 (A-INV-1): the VAT the import found on the invoice (0 for a cost typed by hand)
-      const grossAmt = r2(net + r2(net * rate / 100));
-      const cat: InvoiceCategory =
-        /forward|transport|freight|carrier/i.test(c.category || "") ? "FREIGHT" :
-        /custom|broker|cło|clo/i.test(c.category || c.description || "") ? "CUSTOMS" :
-        /warehouse|storage|magazyn/i.test(c.category || "") ? "WAREHOUSE" :
-        /purchase|goods|towar/i.test(c.category || "") ? "PURCHASE" : "OTHER";
-      const scope: CostScope = cat === "OTHER" && c.costCenter === "general" ? "OVERHEAD" : scopeOf(cat);   // v7.26.1: the scope follows the category
-      return {
-        id: nextId(), kind: "COST", category: (cat === "OTHER" && scope === "OVERHEAD" ? "OVERHEAD" : cat) as InvoiceCategory, costScope: scope,
-        number: c.invoiceNo, counterparty: { name: c.supplierName || c.seller || "—" },
-        issueDate: c.date || "", saleDate: c.date || "", dueDate: c.dueDate || "",
-        paymentMethod: "Transfer", currency: c.currency || "PLN", fxRate: fx,
-        netAmount: net, vatRate: rate, vatAmount: r2(grossAmt - net), grossAmount: grossAmt,
-        netPLN: r2(net * fx), grossPLN: r2(grossAmt * fx),
-        periodFrom: c.period ? `${c.period}-01` : undefined,
-        positions: [], links: [],
-        paymentStatus: (c.status as PaymentStatus) || "Issued", paidAmount: 0,
-        notes: c.notes || c.description || "", attachment: null,
-        allocation: null, fakturownia: { exported: false },
-        source: src, createdAt: c.date || "",
-      };
-    });
-  });
-
-  // 4. (retired v7.22.1 — FZ-12, Batch F) A firm PO in Arrived / Received / Closed used to become an invented PURCHASE invoice
-  //    ("Awaiting the supplier's invoice number"). Those statuses are retired by normalisePO, so it could only fire on an old
-  //    backup restored into TEST — and a purchase invoice is never invented from an order: it comes from Fakturownia or is entered.
-
-  return out;
-}
 
 /** v7.16.4 (AUD-17): the one summary line of an invoice that has no lines is named from what it is for — its linked
  *  documents — never from the notes, which are free text and would become a line of a legal invoice. */
-export function fallbackLineName(inv: any): string {
+function fallbackLineName(inv: any): string {
   const refs = arr<any>(inv?.links).map((l: any) => String(l?.number || "").trim()).filter(Boolean);
   return refs.length ? `Sales invoice — ${refs.join(", ")}`.slice(0, 120) : "Sales invoice";
 }
@@ -253,7 +191,7 @@ export function fallbackLineName(inv: any): string {
 /** v7.27.4 (AUD-16): the buyer as Fakturownia (and later KSeF) needs it — address, ISO country and the KIND of its tax number: a Polish
 *  NIP (kind left empty = NIP), an EU VAT number of another member state ('nip_ue'), another country's tax number ('other'), or none
 *  ('empty'). Read from the live company (by id) the caller passes. */
-export function buyerFields(inv: any, company: any): Record<string, any> {
+function buyerFields(inv: any, company: any): Record<string, any> {
 const S = (v: any) => String(v ?? "").trim();
 const iso = countryIso(company?.countryIso || company?.addr?.country || company?.country || "");
 const nip = S(inv?.counterparty?.nip || company?.nip), eu = S(company?.vatEuId);

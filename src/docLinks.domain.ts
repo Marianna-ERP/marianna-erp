@@ -42,11 +42,10 @@ export function inspectLink(raw: any): LinkInfo {
 export function isUsableLink(raw: any): boolean { return inspectLink(raw).ok; }
 
 /** A document row counts as "on file" when it has a working link. */
-export function hasFile(doc: any): boolean { return isUsableLink(doc?.link); }
 
 /** Rows that are settled (we have them, or they don't apply). */
 const SETTLED = new Set(["have it", "sent", "n/a"]);
-export function isSettled(doc: any): boolean {
+function isSettled(doc: any): boolean {
   return SETTLED.has(String(doc?.status || "").trim().toLowerCase());
 }
 
@@ -90,16 +89,3 @@ export function summariseDocs(docs: any[]): DocRegisterSummary {
   };
 }
 
-/** Is this document set strong enough to support a claim? Evidence needs the
- *  actual paper, not just a tick. */
-export function claimEvidenceGaps(docs: any[], required: string[] = ["CMR"]): string[] {
-  const rows = docs || [];
-  const gaps: string[] = [];
-  required.forEach(want => {
-    const row = rows.find(d => String(d?.type || "").trim().toLowerCase() === want.toLowerCase());
-    if (!row) { gaps.push(`${want}: not on the document list`); return; }
-    if (!isSettled(row)) { gaps.push(`${want}: not received yet`); return; }
-    if (!hasFile(row)) gaps.push(`${want}: received but no scan linked — a claim needs the signed copy`);
-  });
-  return gaps;
-}

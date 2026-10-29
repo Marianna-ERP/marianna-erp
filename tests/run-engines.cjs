@@ -858,7 +858,6 @@ T("A5 dedup: a broken shipment PO ref produces ONE issue, not two", () => {
 console.log("── v6.32.0: canonical matcher (A1), per-line revenue (P1-1), parsers, checker ──");
 const { findLotForSOLine, shippedKgByLine } = require("./build/salesOrders.domain.js");
 const { parseNum } = require("./build/numbers.js");
-const { lineSourcesLot } = require("./build/consignment.js");
 T("shippedKgByLine: movements + Delivered-unposted safety net; Loaded is NOT revenue", () => {
   const order = { number: "SO-1", items: [{ product: "Apples", qty: 10000, sourceType: "STOCK", sourceRef: "LOT-A" }] };
   const lots = [{ number: "LOT-A", poRef: "PO-1", product: "Apples", movements: [
@@ -928,7 +927,7 @@ T("checker: stale 'Cost allocated' flag caught; real allocation not", () => {
 });
 
 console.log("── v6.33.0: Invoices sole owner (A3-6) + legacy credit-notes fold (A3-5) ──");
-const { salesInvoiceFromSODraft, salesInvoiceSourceTag, migrateLegacyInvoices } = require("./build/invoicing.js");   // v7.21.0 (A-RV-19): the credit-note fold went with the repairs
+const { salesInvoiceFromSODraft, salesInvoiceSourceTag } = require("./build/invoicing.js");   // v7.21.0 (A-RV-19): the credit-note fold went with the repairs
 
 T("A3-6: SO draft → canonical register invoice (shape + source tag + SO link)", () => {
   const so = { number: "SO-9", currency: "EUR", client: { name: "Client X" }, items: [{ product: "Apples", qty: 1000 }] };
@@ -940,15 +939,6 @@ T("A3-6: SO draft → canonical register invoice (shape + source tag + SO link)"
   assert.equal(inv.grossPLN, 9030);
   assert.equal(inv.source, salesInvoiceSourceTag("SO-9", "FV2026/07/01"));
   assert.ok(inv.links.some(l => l.type === "SO" && l.number === "SO-9"));
-});
-T("A3-6: importing an old backup can NOT duplicate an API-created invoice (same source tag)", () => {
-  const so = { number: "SO-9", currency: "EUR", client: {}, items: [] };
-  const draft = { number: "FV2026/07/01", netAmount: 2000, vatRate: 5, fxRate: 4.3, currency: "EUR" };
-  const apiCreated = salesInvoiceFromSODraft(so, draft);
-  // old backup: the SO still carries the same invoice as a pendingInvoice
-  const legacyOrder = { ...so, pendingInvoices: [draft] };
-  const merged = migrateLegacyInvoices({ existing: [apiCreated], orders: [legacyOrder], warehouseInvoices: [], operationalCosts: [] });
-  assert.equal(merged.length, 1); // deduped by source tag
 });
 
 // ── v6.34.0: shipment direction from real ends — the Koper case (BP-61) ──
@@ -1489,16 +1479,6 @@ T("register summary separates outstanding from unproduceable", () => {
   assert.deepEqual(s.settledWithoutFile.sort(), ["Invoice", "Phytosanitary"], "N/A needs no file");
   assert.deepEqual(s.badLinks, ["Phytosanitary"]);
 });
-T("claim evidence: a tick without a scan is not evidence", () => {
-  const ticked = [{ type: "CMR", status: "Have it", link: "" }];
-  const gaps = DL.claimEvidenceGaps(ticked, ["CMR"]);
-  assert.equal(gaps.length, 1);
-  assert.ok(gaps[0].includes("no scan linked"));
-  const linked = [{ type: "CMR", status: "Have it", link: "https://www.dropbox.com/s/a/cmr.pdf?dl=0" }];
-  assert.equal(DL.claimEvidenceGaps(linked, ["CMR"]).length, 0);
-  assert.ok(DL.claimEvidenceGaps([], ["CMR"])[0].includes("not on the document list"));
-  assert.ok(DL.claimEvidenceGaps([{ type: "CMR", status: "Missing" }], ["CMR"])[0].includes("not received"));
-});
 
 // ── v6.48.0: claims re-homed to their own store (Phase 1) ──
 const CL = require("./build/claims.domain.js");
@@ -1516,8 +1496,6 @@ T("queries find claims by lot, SO and shipment", () => {
     CL.blankClaim({ id: 2, number: "CLM-2026-0002", subjects: [{ kind: "SHIPMENT", ref: "SHP-9" }, { kind: "LOT", ref: "LOT-4", affectedKg: 200 }] }),
   ];
   assert.equal(CL.claimsForLot(claims, "LOT-4").length, 2);
-  assert.equal(CL.claimsForSO(claims, "SO-2").length, 1);
-  assert.equal(CL.claimsForShipment(claims, "SHP-9").length, 1);
 });
 T("incident net: conceded minus recovered, gap reported not flagged", () => {
   // client conceded 6000; recovered 4000 from the supplier and 1000 from the line
@@ -2743,14 +2721,6 @@ T("one candidate settles itself; several without a default do NOT", () => {
   assert.ok(FD.departmentBlockReason(eur) !== "", "the push is blocked until it is settled");
 });
 
-T("a second legal entity never issues on the other's account", () => {
-  // Marianna SLO is a different company (SI46357335). Currency would have offered
-  // it three Polish EUR accounts.
-  const c = FD.chooseDepartment({ currency: "EUR", sellerTaxNo: "SI46357335" }, DEPTS, {});
-  assert.equal(c.department.name, "Marianna SLO EUR PKO");
-  assert.equal(c.ambiguous, false, "scoping to the entity leaves exactly one");
-  assert.deepEqual(FD.entitiesOf(DEPTS).sort(), ["5252842787", "SI46357335"]);
-});
 
 T("an explicit choice wins, and a currency mismatch is questioned not obeyed", () => {
   const ok = FD.chooseDepartment({ currency: "EUR", fakturowniaDepartmentId: 3 }, DEPTS, { EUR: 1 });
@@ -2795,18 +2765,6 @@ T("the account LABEL is the shortcut, not the legal name", () => {
   assert.equal(m[0].legalName, "Marianna Hazem Osman", "kept, but not used as the label");
 });
 
-T("an unreadable currency is left BLANK, never defaulted to PLN", () => {
-  const m = FD.mapDepartments([{ id: 9, shortcut: "Nieznane konto", name: "Marianna Hazem Osman", bank_account: "PL11" }]);
-  assert.equal(m[0].currency, "", "a wrong guess here is a wrong account number on a real invoice");
-  assert.equal(FD.departmentsNeedingCurrency(m).length, 1);
-  // Set by hand in Settings, and the correction always sticks.
-  const fixed = FD.applyDepartmentCurrencies(m, { "9": "usd" });
-  assert.equal(fixed[0].currency, "USD");
-  assert.equal(FD.departmentsNeedingCurrency(fixed).length, 0);
-  // A hand-set currency overrides even one that was read.
-  const over = FD.applyDepartmentCurrencies(FD.mapDepartments([{ id: 1, shortcut: "Marianna EUR PKO", name: "X" }]), { "1": "PLN" });
-  assert.equal(over[0].currency, "PLN");
-});
 
 T("a VOIDED movement does not lock a purchase order", () => {
   // Record a receipt on a direct-DDP lot, void it because it was wrong, and the
@@ -2959,15 +2917,6 @@ T("variance, unexplained movements and ageing stock", () => {
   assert.ok(stale.find(w => w.field === "ageing stock").why.includes("storage is charged"));
 });
 
-T("LIST ORDER: documents newest first, reference data A-Z", () => {
-  // Owner ruling. A register is a record of what happened and the thing you want
-  // is almost always the thing you just made; reference data is looked up by name.
-  const docs = [{ number: "PO-2026-0002" }, { number: "PO-2026-0010" }, { number: "PO-2026-0001" }];
-  assert.deepEqual(MG.newestFirst(docs).map(d => d.number), ["PO-2026-0010", "PO-2026-0002", "PO-2026-0001"],
-    "0010 sorts above 0002 — numeric, not lexical");
-  const refs = [{ name: "Zielona" }, { name: "Jani" }, { name: "Adam" }];
-  assert.deepEqual(MG.alphabetical(refs).map(r => r.name), ["Adam", "Jani", "Zielona"], "Polish collation puts Ł where a reader expects");
-});
 
 // ══ v7.13 (A-AU-2 / A-AU-11, owner 9 Oct): the NBP rate of the last working day BEFORE the document's date ══
 console.log("── v7.13: NBP rates of the day before ──");

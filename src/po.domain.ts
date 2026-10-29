@@ -79,7 +79,7 @@ export function poExpectedArrival(po: any, shipments: any[] = []): string {
 }
 
 // ── PO-3 / PO-4 / PO-5: one-time normalisation (idempotent) ─────────────────
-export const LEGACY_PO_STATUSES = ["Shipped", "Arrived", "Received", "Closed"];
+const LEGACY_PO_STATUSES = ["Shipped", "Arrived", "Received", "Closed"];
 export function normalisePO(po: any, ctx: { orders?: any[]; directFromSOs?: (po: any, orders: any[]) => boolean } = {}): { po: any; changed: boolean } {
   let p: any = { ...po }; let changed = false;
   const drop = (k: string) => { if (k in p) { delete p[k]; changed = true; } };

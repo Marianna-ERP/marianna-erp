@@ -48,7 +48,7 @@ const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader fo
 const lc = (s: any) => String(s ?? "").trim().toLowerCase();
 
 /** Fallback flat gross factor when packaging/capacity is unknown (≈6%). */
-export const FALLBACK_GROSS_FACTOR = 1.06;
+const FALLBACK_GROSS_FACTOR = 1.06;
 
 /** Look a packaging type up by id, else by label. */
 export function findPackaging(types: PackagingType[], idOrLabel: any): PackagingType | null {
@@ -65,7 +65,7 @@ export function defaultPackagingForProduct(types: PackagingType[], product: any)
 }
 
 /** Number of packaging units needed to hold netKg (whole boxes, rounded up). */
-export function boxesForNet(netKg: number, capacityKg: number): number {
+function boxesForNet(netKg: number, capacityKg: number): number {
   if (!(capacityKg > 0) || !(netKg > 0)) return 0;
   return Math.ceil(netKg / capacityKg);
 }

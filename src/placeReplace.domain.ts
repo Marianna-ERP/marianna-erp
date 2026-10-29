@@ -5,7 +5,7 @@ import { readCustomLocations, isPublicPlaceType } from "./locations";
 
 const S = (v: any) => String(v ?? "").trim();
 /** The fields that hold a place, wherever they sit (a PO's named place, a lot's place and its movements, a shipment's legs, units and booking ports). */
-export const PLACE_FIELD = /^(.*LocationId|locationId|toId|fromId|polId|podId|originId|destinationId|loadingPlaceId|unloadingPlaceId|placeId)$/;
+const PLACE_FIELD = /^(.*LocationId|locationId|toId|fromId|polId|podId|originId|destinationId|loadingPlaceId|unloadingPlaceId|placeId)$/;
 export interface PlaceUses { pos: string[]; orders: string[]; lots: string[]; shipments: string[] }
 export interface OldPlace { place: any; uses: PlaceUses; total: number }
 export type Stores = { pos?: any[]; orders?: any[]; lots?: any[]; shipments?: any[] };
@@ -16,7 +16,7 @@ function walkUses(o: any, id: string, hit: () => void): void {
   for (const [k, v] of Object.entries(o)) { if (PLACE_FIELD.test(k)) { if (v != null && S(v) === id) hit(); } else if (v && typeof v === "object") walkUses(v, id, hit); }
 }
 /** Where one place is used, document by document. */
-export function usesOfPlace(id: any, data: Stores): PlaceUses {
+function usesOfPlace(id: any, data: Stores): PlaceUses {
   const out: PlaceUses = { pos: [], orders: [], lots: [], shipments: [] };
   (["pos", "orders", "lots", "shipments"] as const).forEach(store => (data[store] || []).forEach((rec: any) => { let n = 0; walkUses(rec, S(id), () => { n++; }); if (n) out[store].push(S(rec?.number || rec?.id)); }));
   return out;

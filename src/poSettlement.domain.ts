@@ -287,10 +287,6 @@ export function commissionRun(settlements: POSettlementRecord[], pos: any[], cal
   return { invoices, settlements: next, runId };
 }
 
-export function nextSettlementNumberPO(settlements: POSettlementRecord[], year: number): string {
-  const n = (settlements || []).map(s => String(s.number || "")).filter(x => x.startsWith(`SET-${year}-`)).map(x => parseInt(x.slice(-4), 10) || 0).reduce((a, b) => Math.max(a, b), 0);
-  return `SET-${year}-${String(n + 1).padStart(4, "0")}`;
-}
 
 
 // ─── v6.99.85 (A-CS-1, owner 30 Sept): the producer's provisional invoice comes from the register, not from typing ───

@@ -88,7 +88,7 @@ function clientsFromContacts(contacts) {
 // check — saw whatever the last render had left. They are now ONE value built from the props (buildSalesData), handed down
 // through a React context; the helpers that need it take it as their last parameter.
 export interface SalesData { lots: any[]; rawLots: any[]; poRefs: any[]; contacts: any[]; shipments: any[]; packagingTypes: any[] }
-export const EMPTY_SALES_DATA: SalesData = { lots: [], rawLots: [], poRefs: [], contacts: [], shipments: [], packagingTypes: PACKAGING_SEED };
+const EMPTY_SALES_DATA: SalesData = { lots: [], rawLots: [], poRefs: [], contacts: [], shipments: [], packagingTypes: PACKAGING_SEED };
 export const SalesDataContext = React.createContext<SalesData>(EMPTY_SALES_DATA);
 export const useSalesData = (): SalesData => React.useContext(SalesDataContext);
 function reserveCtx(sd: SalesData) { return sd.rawLots.length ? { lots: sd.rawLots, shipments: sd.shipments } : undefined; }

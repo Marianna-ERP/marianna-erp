@@ -11,7 +11,7 @@ export const TERMS_REVIEW = "Terms to review";
 
 /** One finding. `here` is the record being viewed (its own number is not repeated as a link); a shipment record opens with
  *  `onOpenShipment` when the Shipments module gives one, every other record through its document link. */
-export function TermsFindingLine({ f, here = "", onOpenShipment = null, onChangeRule = null }: any) {
+function TermsFindingLine({ f, here = "", onOpenShipment = null, onChangeRule = null }: any) {
   const rec = String(f?.record || ""), doc = String(f?.doc || "");
   const link = (n: string) => <DocLink num={n}><span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700}}>{n}</span></DocLink>;
   const recNode = !rec || rec === here || rec === doc ? null

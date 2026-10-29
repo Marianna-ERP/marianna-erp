@@ -120,7 +120,7 @@ export const PEPPER_DEFECTS: DefectCatalogueEntry[] = [
 
 // ── v6.99.31 (owner): TOLERANCE per category decides Acceptable / Not acceptable. Unacceptable is always 0 %;
 // the other three are editable per product in Settings. These defaults make the report work from the first day.
-export const DEFAULT_TOLERANCES: Record<string, number> = { Unacceptable: 0, Progressive: 1, Major: 5, Minor: 10 };
+const DEFAULT_TOLERANCES: Record<string, number> = { Unacceptable: 0, Progressive: 1, Major: 5, Minor: 10 };
 // v6.99.33: tolerancesFor() retired with the Settings panel — a report carries its own tolerances (tolerancesFromLast seeds a new one).
 /** The verdict of a quality report: per-category totals against their tolerance, then the whole sheet. */
 export function inspectionVerdict(ins: Inspection, tolerances?: Record<string, number>): {
@@ -237,21 +237,6 @@ export function normaliseLot(lot: any, ctx: { po?: any; poSettlements?: any[] } 
 }
 
 // ── v6.96.0 (IN-5): the quay is inventory — unloading at the POL / clearance at the POD posts a TRANSFER to the port location ──
-export function portStageTransfers(sh: any, lots: any[], portLocationId: any, dateISO: string, deps: { nextId: () => any }, kind: "unloaded" | "cleared" = "unloaded"): { lots: any[]; posted: number } {
-  const refs = new Set<string>();
-  (sh?.goods || []).forEach((g: any) => { if (g.lotRef) refs.add(String(g.lotRef)); });
-  (sh?.lotRefs || []).forEach((r: any) => refs.add(String(r)));
-  let posted = 0;
-  const source = `unit_event:${kind}:${sh?.number}`;
-  const next = (lots || []).map(lot => {
-    if (!refs.has(String(lot.number))) return lot;
-    if ((lot.movements || []).some((m: any) => m.source === source)) return lot;   // idempotent
-    if (String(lot.locationId ?? "") === String(portLocationId ?? "")) return lot;
-    posted++;
-    return { ...lot, movements: [...(lot.movements || []), { id: deps.nextId(), date: dateISO, type: "TRANSFER", qtyKg: r0(num(lot.physicalKg)), fromId: lot.locationId ?? null, toId: portLocationId ?? null, shipmentRef: sh.number, note: `${kind === "unloaded" ? "Unloaded at the port of loading" : "Discharged & cleared at the port of discharge"} — ${sh.number}`, source }] };
-  });
-  return { lots: next, posted };
-}
 
 // ── v6.99.22 (G-1…G-4, owner approval 14 Sept): GRADE IS PART OF THE PROMISE ──
 // Sorting turns sound fruit into class II. What is in stock is therefore not one number but
@@ -317,7 +302,7 @@ export function gradeCommitmentWarning(lot: any, orders: any[]): string {
 
 /** QH-3: what we ordered against what arrived — size, unit pack weight, labelling. */
 export interface ExternalCheck { name: string; expected?: any; max?: any; avg?: any; min?: any; status?: "Correct" | "Not correct" | "Not checked"; }
-export function blankExternalChecks(lot: any, po: any): ExternalCheck[] {
+function blankExternalChecks(lot: any, po: any): ExternalCheck[] {
   const line = (po?.items || []).find((it: any) => String(it.id) === String(lot?.poLineId)) || (po?.items || [])[0] || {};
   return [
     { name: "Size (mm / calibre)", expected: lot?.size || line.size || "", max: "", avg: "", min: "", status: "Not checked" },

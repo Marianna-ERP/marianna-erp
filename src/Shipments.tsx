@@ -127,7 +127,7 @@ export function legDisplayStatus(legStatus: any, shipmentStatus: any): string {
   return lr < fr ? floor : ls;
 }
 
-export const MODE_CONFIG = {
+const MODE_CONFIG = {
   Road:       { bg: "#EFF6FF", color: "#2563EB", label: "Road", icon: "🚚" },
   Sea:        { bg: "#CFFAFE", color: "#0E7490", label: "Sea", icon: "🚢" },
   Rail:       { bg: "#DCFCE7", color: "#15803D", label: "Rail", icon: "🚆" },
@@ -294,7 +294,7 @@ function standardDocTypesFor(shipment) {
 // v6.99.49 (SD-2, owner): a supplier's truck is not arranged by us — its ladder reads Announced → In transit → Arrived → Closed
 // (stored statuses unchanged: Booked · Loaded · Delivered · Closed, so every posting and report keeps working). Arrived = the receipt.
 const SUPPLIER_STATUS_LABEL: Record<string, string> = { Draft: "Announced", Booked: "Announced", Loaded: "In transit", "In transit": "In transit", Delivered: "Arrived", Closed: "Closed", Cancelled: "Cancelled" };
-export function shipmentStatusLabel(sh: any): string { return String(sh?.arrangedBy || "").toUpperCase() === "SUPPLIER" ? (SUPPLIER_STATUS_LABEL[String(sh?.status)] || String(sh?.status || "")) : String(sh?.status || ""); }
+function shipmentStatusLabel(sh: any): string { return String(sh?.arrangedBy || "").toUpperCase() === "SUPPLIER" ? (SUPPLIER_STATUS_LABEL[String(sh?.status)] || String(sh?.status || "")) : String(sh?.status || ""); }
 
 export function findUnitIn(sh: any, id: any): any { for (const l of (sh?.legs || [])) for (const u of (l.vehicles || [])) if (String(u.id) === String(id)) return u; return null; }   // v6.99.59 (A-SU-1)
 
@@ -312,7 +312,7 @@ export function withStandardDocs(shipment) {
 // Header soRefs ∪ per-goods soRef ∪ SOs whose lines source from this shipment's
 // POs. Fixes the header not showing the SO when the link lives on goods rows or
 // when the SO was attached to the PO after the shipment was created.
-export function shipmentSORefs(shipment, orders = []) {
+function shipmentSORefs(shipment, orders = []) {
   const set = new Set(
     [...(shipment.soRefs || []), ...((shipment.goods || []).map((g: any) => g.soRef))]
       .map(x => String(x || "")).filter(Boolean)
@@ -545,7 +545,7 @@ export function costTypeLabel(code) {
   return COST_TYPES.find(t => t.code === code)?.label || code || "Cost";
 }
 
-export function costInventoryType(code) {
+function costInventoryType(code) {
   return COST_TYPES.find(t => t.code === code)?.inventoryType || "freight";
 }
 

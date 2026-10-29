@@ -45,7 +45,7 @@ export interface PostDeps { todayISO: () => string; nextId: () => number;
   deliveredKgFor?: (lotNumber: string) => number | null; }
 
 /** v6.99.22 (G-2): which grade this shipment takes out of the lot — from the goods row (copied from the SO line); "I" when not stated. */
-export function gradeOfGoodsForLot(sh: any, lot: any): "I" | "II" {
+function gradeOfGoodsForLot(sh: any, lot: any): "I" | "II" {
   const g = (sh?.goods || []).find((x: any) => String(x?.lotRef) === String(lot?.number)) || (sh?.goods || [])[0];
   return String(g?.grade || "I").toUpperCase() === "II" ? "II" : "I";
 }

@@ -99,7 +99,7 @@ export function removePaymentEvent(inv: any, evtId: any): any {
 // COUNTERPARTY), which reproduces the old behaviour EXACTLY. The new capability
 // this unlocks: a DEBIT note WE issue to a supplier/carrier (claim recovery)
 // now correctly REDUCES the payable instead of increasing it.
-export function noteIssuedBy(nt: any): "US" | "COUNTERPARTY" {
+function noteIssuedBy(nt: any): "US" | "COUNTERPARTY" {
   const v = String(nt?.issuedBy || "").toUpperCase();
   if (v === "US" || v === "COUNTERPARTY") return v as any;
   return nt?.direction === "incoming" ? "COUNTERPARTY" : "US";

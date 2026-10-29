@@ -33,7 +33,7 @@ export function dropLegacySnapshots(): number {
   gone.forEach(k => { try { ls.removeItem(k); } catch { /* best effort */ } });
   return gone.length;
 }
-export const STORAGE_BUDGET_CHARS = 5 * 1024 * 1024 / 2;
+const STORAGE_BUDGET_CHARS = 5 * 1024 * 1024 / 2;
 const NAMESPACE = "marianna-erp";
 
 function storageKey(name: string): string {

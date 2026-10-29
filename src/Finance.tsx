@@ -271,7 +271,7 @@ function ClientRiskCard({ invoices = [], orders = [], contacts = [] }: any) {
 // ── v6.98.1: STATEMENT OF ACCOUNT — per client or supplier, per currency, printable ──
 
 // ─── v6.99.85 (A-CS-5, owner 30 Sept): every consignment position at a glance — the figures the settlement box computes ──
-export function ConsignmentPositionsCard({ pos = [], lots = [], orders = [], invoices = [], shipments = [], claims = [], financeNotes = [], poSettlements = [] }: any) {
+function ConsignmentPositionsCard({ pos = [], lots = [], orders = [], invoices = [], shipments = [], claims = [], financeNotes = [], poSettlements = [] }: any) {
   const rows = consignmentPositions({ pos, lots, orders, invoices, shipments, claims, financeNotes, poSettlements });
   if (!rows.length) return null;
   const m = (v: number, c = "PLN") => `${(v || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${c}`;

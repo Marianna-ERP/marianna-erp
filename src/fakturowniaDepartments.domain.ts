@@ -40,7 +40,7 @@ export interface FktDepartment {
 const CUR = (v: any) => S(v).toUpperCase() || "PLN";
 
 /** Departments that can issue in this currency. */
-export function departmentsForCurrency(all: FktDepartment[], currency: any): FktDepartment[] {
+function departmentsForCurrency(all: FktDepartment[], currency: any): FktDepartment[] {
   const c = CUR(currency);
   return (all || []).filter(d => CUR(d.currency) === c);
 }
@@ -142,24 +142,5 @@ export function mapDepartments(raw: any[]): FktDepartment[] {
   }).filter(d => d.id != null);
 }
 
-/** Apply the currencies the user set by hand in Settings. Parsing a label is
- *  guesswork; seven rows set once is not. The stored map wins over anything
- *  derived, so a correction always sticks. */
-export function applyDepartmentCurrencies(all: FktDepartment[], overrides: Record<string, any>): FktDepartment[] {
-  return (all || []).map(d => {
-    const o = (overrides || {})[String(d.id)];
-    return o ? { ...d, currency: CUR(o) } : d;
-  });
-}
 
-/** Accounts whose currency is still unknown — they cannot be chosen until it is
- *  set, and saying so is better than silently treating them as PLN. */
-export function departmentsNeedingCurrency(all: FktDepartment[]): FktDepartment[] {
-  return (all || []).filter(d => !S(d.currency));
-}
 
-/** Distinct legal entities in the department list — a different tax id is a
- *  different company, and its invoices must never issue on the other's account. */
-export function entitiesOf(all: FktDepartment[]): string[] {
-  return Array.from(new Set((all || []).map(d => S(d.taxNo)).filter(Boolean)));
-}

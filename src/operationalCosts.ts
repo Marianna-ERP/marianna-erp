@@ -199,7 +199,7 @@ function memoDenominator(method: OperationalAllocationMethod, periodOrders: any[
   return v;
 }
 
-export function computeAllocatedOverhead(
+function computeAllocatedOverhead(
   order: any,
   allOrders: any[],
   lots: any[],
@@ -362,7 +362,7 @@ export function groupAndAggregateNetMargins(
 // operational costs — salaries, ZUS, taxes, anything without an invoice — are
 // untouched. The reverse mirror (import-tag OVERHEAD → opCost → folded invoice)
 // is excluded by source on both sides, so the two mirrors can never loop.
-export function opCostFromOverheadInvoice(inv: any, keepId?: any): OperationalCost {
+function opCostFromOverheadInvoice(inv: any, keepId?: any): OperationalCost {
   const period = String(inv.issueDate || inv.saleDate || "").slice(0, 7);
   const amount = safe(inv.grossAmount) || safe(inv.netAmount);
   const fx = safe(inv.fxRate) || 1;

@@ -10,7 +10,7 @@ import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // ── IV-3: ONE classification ──────────────────────────────────────────────────
-export const CATEGORIES = ["SALES", "COMMISSION", "PURCHASE", "FREIGHT", "CUSTOMS", "WAREHOUSE", "OVERHEAD", "OTHER"] as const;
+const CATEGORIES = ["SALES", "COMMISSION", "PURCHASE", "FREIGHT", "CUSTOMS", "WAREHOUSE", "OVERHEAD", "OTHER"] as const;
 export type Category = typeof CATEGORIES[number];
 export function scopeOf(category: any): "SALES" | "PURCHASE" | "SHIPMENT" | "OVERHEAD" | "OTHER" {
   const c = S(category).toUpperCase();

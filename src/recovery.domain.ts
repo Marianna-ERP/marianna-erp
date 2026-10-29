@@ -4,7 +4,7 @@
 // bring back; each chosen record returns WITH what it needs that is missing too (its company, its place, its PO, its lots…).
 // Nothing that exists now is removed; a record that differs is replaced only when it is ticked. Master data is never removed.
 
-export const RECOVERABLE: Array<{ key: string; label: string }> = [
+const RECOVERABLE: Array<{ key: string; label: string }> = [
   { key: "contacts", label: "Companies" }, { key: "customLocations", label: "Locations" },
   { key: "pos", label: "Purchase orders" }, { key: "lots", label: "Lots" }, { key: "orders", label: "Sales orders" },
   { key: "shipments", label: "Shipments" }, { key: "invoices", label: "Invoices" }, { key: "financeNotes", label: "Credit / debit notes" },

@@ -40,7 +40,7 @@ function readPrefs(): Prefs { try { const raw = window.localStorage.getItem(PREF
 function writePrefs(p: Prefs): void { try { window.localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch { /* a preference must never break the app */ } }
 function patchPrefs(p: Partial<Prefs>): Prefs { const next = { ...readPrefs(), ...p }; writePrefs(next); return next; }
 
-export function folderBackupSupported(): boolean {
+function folderBackupSupported(): boolean {
   return typeof window !== "undefined" && typeof (window as any).showDirectoryPicker === "function";
 }
 
@@ -100,7 +100,7 @@ let started = false;
 let timer: any = null;
 
 /** The fingerprint of what is stored right now (raw strings — no parsing). */
-export function currentFingerprint(): string {
+function currentFingerprint(): string {
   try { return fingerprint(DATA_KEYS.map(k => [k, window.localStorage.getItem(dataKey(k))] as [string, string | null])); } catch { return ""; }
 }
 

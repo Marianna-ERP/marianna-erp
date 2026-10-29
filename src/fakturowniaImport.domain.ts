@@ -469,3 +469,14 @@ export function noteFromCorrection(row: any, direction: "incoming" | "outgoing",
     amountPLN: Math.round(Math.abs(gross) * fx * 100) / 100, status: "Issued", reason: `Correcting invoice ${String(row.number || "")} from Fakturownia`, source: `fakturownia-correction:${row.fktId ?? row.number}`,
     fakturownia: { fktId: row.fktId ?? null }, ...(row.ksefNo ? { ksefNo: String(row.ksefNo) } : {}) };
 }
+
+/** v7.49.0 (INV2-8, Invoices analysis: "when the last invoice and the supplier's role disagree, the link still follows the role"): THE LINK
+ *  FOLLOWS THE CHOSEN CATEGORY — the same matching as the proposal, run as if the seller held the role that category means (Freight → a
+ *  carrier's expected freight line, Customs → a customs line, Goods → the supplier's PO, Warehouse / Overhead → no document link). */
+export function linkForTag(row: StagedRow, tag: string, contacts: any[], shipments: any[], pos: any[]): { shipmentNumber?: string; costLineId?: any; poNumber?: string; reason?: string } {
+  const role: Record<string, string[]> = { FREIGHT: ["Carrier"], CUSTOMS: ["Customs", "Customs agent"], GOODS: ["Supplier"], WAREHOUSE: ["Warehouse"] };
+  if (!role[tag]) return {};
+  const c = contactForSeller(row as any, contacts) || { id: "__seller", name: row.seller, nip: String(row.sellerTaxNo || "").replace(/^PL/i, "") };
+  const s: any = suggestForRow(row, [{ ...c, type: role[tag][0], roles: role[tag] }], shipments, pos);
+  return s && s.tag === tag ? { shipmentNumber: s.shipmentNumber, costLineId: s.costLineId, poNumber: s.poNumber, reason: s.reason } : {};
+}

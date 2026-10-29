@@ -1,6 +1,6 @@
 // v7.8.0 (A-PO-REF-1, owner 8 Oct): the producer's reference is unique, like the import permit and the ACID number.
 // Compared without spaces, dashes, dots, slashes and letter case; deleted POs and trucks do not count.
-export const refKey = (v: any) => String(v ?? "").toLowerCase().replace(/[\s\-_./]/g, "");
+const refKey = (v: any) => String(v ?? "").toLowerCase().replace(/[\s\-_./]/g, "");
 /** Where else this reference is already used (PO numbers), excluding the PO being edited. */
 export function supplierRefUsedOn(ref: any, exceptPO: any, pos: any[], shipments: any[]): string[] {
   const k = refKey(ref); if (!k) return [];

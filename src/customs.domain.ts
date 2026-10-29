@@ -35,7 +35,7 @@ export const CUSTOMS_PARTIES: Record<string, string> = {
   SUPPLIER: "The supplier",
 };
 
-export const CUSTOMS_DOCS: Record<string, string> = {
+const CUSTOMS_DOCS: Record<string, string> = {
   EX1: "Export declaration (EX-1)",
   T1: "T1 transit",
   SAD: "Import SAD",

@@ -56,7 +56,7 @@ export function lotArrivedCell(lot: any, todayISO: string): { kind: "stock" | "d
 }
 
 /** A lot received by more than one shipment: the two (or more) shipments, so the badge can say so. */
-export function lotLoadedBy(lot: any): string[] {
+function lotLoadedBy(lot: any): string[] {
   return Array.from(new Set(liveIns(lot).map((m: any) => S(m.shipmentRef || m.ref)).filter(Boolean)));
 }
 export function lotLoadedTwice(lot: any): string[] | null { const by = lotLoadedBy(lot); return by.length > 1 && num(lot?.receivedKg) > num(lot?.expectedKg) ? by : null; }

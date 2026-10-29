@@ -27,7 +27,7 @@ import { sourceMatch } from "./salesOrders.domain";   // v7.23.2 (A-SOL-1)
 // ─── SOURCE PICKER MODAL ──────────────────────────────────────────────────
 // Lets the user pick where a SO line's goods will come from: a stock lot, or a PO.
 // Filters intelligently by product (case-insensitive substring match).
-export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId = null, onCancel, onPick }: any) {
+function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId = null, onCancel, onPick }: any) {
   const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const [filter, setFilter] = useState(lineItem.product || "");
 

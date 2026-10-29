@@ -171,20 +171,12 @@ export function requestedFromBasis(c: any): number {
 }
 
 // ── queries ────────────────────────────────────────────────────────────────
-export function subjectRefs(c: any, kind: ClaimSubject["kind"]): string[] {
+function subjectRefs(c: any, kind: ClaimSubject["kind"]): string[] {
   return (c?.subjects || []).filter((s: any) => s?.kind === kind).map((s: any) => str(s.ref)).filter(Boolean);
 }
 export function claimsForLot(claims: any[], lotNumber: any): any[] {
   const want = str(lotNumber);
   return (claims || []).filter(c => subjectRefs(c, "LOT").includes(want));
-}
-export function claimsForSO(claims: any[], soNumber: any): any[] {
-  const want = str(soNumber);
-  return (claims || []).filter(c => subjectRefs(c, "SO").includes(want));
-}
-export function claimsForShipment(claims: any[], shipmentNumber: any): any[] {
-  const want = str(shipmentNumber);
-  return (claims || []).filter(c => subjectRefs(c, "SHIPMENT").includes(want));
 }
 
 /**
@@ -264,7 +256,7 @@ export interface ClaimPosting {
 }
 
 const POSTABLE = new Set<string>(["Accepted", "Partially accepted", "Settled"]);
-export function isPostable(c: any): boolean {
+function isPostable(c: any): boolean {
   return POSTABLE.has(str(c?.status)) && claimMoney(c).amount > 0;
 }
 

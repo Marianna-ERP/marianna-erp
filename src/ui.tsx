@@ -85,7 +85,7 @@ export function SmallButton({ children, onClick, kind = "default", disabled = fa
 //
 // One table, one meaning per row. To add an action, add it HERE — not in a
 // screen — so the next module cannot drift.
-export const ACTIONS: Record<string, { icon: string; label: string; kind: string; title: string }> = {
+const ACTIONS: Record<string, { icon: string; label: string; kind: string; title: string }> = {
   create:      { icon: "+",  label: "Add new",            kind: "green",  title: "Create a new record" },
   importCsv:   { icon: "⤒",  label: "Import CSV",         kind: "default", title: "Import records from a CSV file" },
   exportCsv:   { icon: "⤓",  label: "Export CSV",         kind: "default", title: "Export these records to a CSV file" },

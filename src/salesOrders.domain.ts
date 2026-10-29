@@ -32,14 +32,14 @@ export function soReservesStock(status: any): boolean { return !NON_RESERVING_ST
 
 // Shipped kg for one SO line, derived from movements. Memo-free; callers may
 // pass a prebuilt per-order map for efficiency, else it is computed on demand.
-export function shippedForSOLine(order: any, lineIndex: number, lots: any[], shipments: any[]): number {
+function shippedForSOLine(order: any, lineIndex: number, lots: any[], shipments: any[]): number {
   try {
     const r = shippedKgByLine(order, lots || [], shipments || []);
     return (r.perLine && r.perLine[lineIndex]) || 0;
   } catch { return 0; }
 }
 
-export function normalizeProduct(p: any): string {
+function normalizeProduct(p: any): string {
   return (p || "").toLowerCase().trim();
 }
 // FB-12: two lines match only if the product AND (when both specify a variety)

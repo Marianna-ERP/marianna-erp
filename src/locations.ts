@@ -48,12 +48,6 @@ export interface Location {
 
 // Helper to keep the table compact
 
-/** Every location id the documents use (POs, SOs, lots and movements, shipments). */
-export function usedLocationIds(data: { pos?: any[]; orders?: any[]; lots?: any[]; shipments?: any[] }): Set<string> {
-  const out = new Set<string>(); const keyRe = /^(.*LocationId|locationId|toId|fromId|polId|podId|originId|destinationId|loadingPlaceId|unloadingPlaceId|placeId)$/;
-  const walk = (o: any) => { if (Array.isArray(o)) return o.forEach(walk); if (o && typeof o === "object") for (const [k, v] of Object.entries(o)) { if (keyRe.test(k) && v != null && v !== "") out.add(String(v)); else if (v && typeof v === "object") walk(v); } };
-  [data.pos, data.orders, data.lots, data.shipments].forEach(walk); return out;
-}
 
 
 // ─── CUSTOM LOCATIONS (v6.3.0) ──────────────────────────────────────────────
@@ -88,7 +82,7 @@ export function placeGroup(l: any): PlaceGroup {
 }
 
 // Options offered in the Settings UI → mapped to (type, legacyType) pairs.
-export const CUSTOM_LOCATION_TYPE_OPTIONS: { key: LocationType; label: string; legacyType: string }[] = [
+const CUSTOM_LOCATION_TYPE_OPTIONS: { key: LocationType; label: string; legacyType: string }[] = [
   { key: "Port",             label: "Port",                          legacyType: "PORT" },
   { key: "PortWarehouse",    label: "Port warehouse",                legacyType: "PORT" },
   { key: "Airport",          label: "Airport (cargo)",               legacyType: "PORT" },
@@ -195,8 +189,6 @@ export function updateCustomLocation(id: number, patch: { name?: string; country
 // at module load, before any module snapshots LOCATIONS.
 // locationOverrides is NOT in DATA_KEYS (never migrated) — its "v1" name is just
 // its permanent, version-independent name. Deliberately left as-is.
-/** The old names of the lookups, kept for their callers — v7.32.0: they read the Parties the App handed over, never a copy. */
-export function locById(id: any): Location | null { return locationById(id); }
 /** v6.73.0: A→Z by name. New entries used to land at the bottom of every
  *  dropdown in entry order, which makes a list of eighty places unusable. */
 export function sortLocations(list: Location[]): Location[] {
@@ -214,7 +206,7 @@ export function sortLocations(list: Location[]): Location[] {
 // built-in/custom ranges. locations.ts cannot import Contacts, so callers pass
 // the contacts list in.
 
-export const WAREHOUSE_CP_LOC_BASE = 900000;
+const WAREHOUSE_CP_LOC_BASE = 900000;
 
 export function isWarehouseContact(c: any): boolean {
   return !!c && (c.type === "Warehouse" || rolesOf(c).includes("Warehouse"));
@@ -317,8 +309,8 @@ export function counterpartyLocations(contacts: any[]): Location[] {
  *  also calls a place of type Other "PORT". A port is a Port or a Port warehouse; an airport counts only where the list means
  *  airports (and for "Customs"). A place known only by the old word (no type at all) keeps it. `placeType` is the real type
  *  where a screen has replaced `type` with the old word (Inventory). */
-export const PORT_TYPES = ["Port", "PortWarehouse"];
-export function placeTypeOf(l: any): string { return String(l?.placeType ?? l?.type ?? ""); }
+const PORT_TYPES = ["Port", "PortWarehouse"];
+function placeTypeOf(l: any): string { return String(l?.placeType ?? l?.type ?? ""); }
 export function isPortType(l: any, opts: { airports?: boolean } = {}): boolean {
   if (!l) return false; const t = placeTypeOf(l);
   return PORT_TYPES.includes(t) || (!!opts.airports && t === "Airport");   // v7.27.3 (FZ-26): the type only — the old word "PORT" no longer makes a port
@@ -329,7 +321,7 @@ export function isPortType(l: any, opts: { airports?: boolean } = {}): boolean {
 // (a port, a cargo airport, a border crossing, a port terminal) lives in Parties › Locations. Nothing else holds a place: no list in
 // the code, no copy taken at start, no copy-back of old numbers. Every picker, list and print reads allPlaces(parties). ──
 /** The public-place types Parties › Locations holds; anything else found in that store is an old company-like entry to replace. */
-export const PUBLIC_PLACE_TYPES: string[] = ["Port", "PortWarehouse", "Airport", "BorderCrossing", "CustomsOffice", "RelayPoint"];
+const PUBLIC_PLACE_TYPES: string[] = ["Port", "PortWarehouse", "Airport", "BorderCrossing", "CustomsOffice", "RelayPoint"];
 export function isPublicPlaceType(type: any): boolean { return PUBLIC_PLACE_TYPES.includes(String(type || "")); }
 /** The Parties the App hands over (its live list, not a copy) for the few callers that resolve a place without passing them. */
 let PARTIES_FOR_PLACES: any[] = [];
@@ -382,7 +374,7 @@ export function placeForPrint(id: any, text: any, contacts: any[] = []): { name:
 // or a place from the list; never an address typed (or copied) as text. The addresses typed on sales before are listed once in
 // Counterparties → Locations: each becomes the client's site (its legal address when it is the same address, else a new location
 // of the client), and its sales are linked to it.
-export const addressKey = (s: any) => String(s ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "");
+const addressKey = (s: any) => String(s ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "");
 const liveDoc = (o: any) => !!o && !o.deleted && o.status !== "Cancelled";
 const hasPlaceId = (o: any) => o?.destinationLocationId != null && String(o.destinationLocationId) !== "";
 /** The client's sites: its legal address (when it is a place) and its other addresses, then the locations it owns. */

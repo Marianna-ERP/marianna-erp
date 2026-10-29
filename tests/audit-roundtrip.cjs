@@ -411,16 +411,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("D-01: unreferenced contact reports zero blockers (delete allowed)", () => {
     eq(guards.referencesToContact(30, { pos: [{ supplier: { id: 1 } }] }).total, 0);
   });
-  t("D-04: location guard sees movements, legs, stops, destinations, tariffs", () => {
-    const r = guards.referencesToLocation(2, {
-      lots: [{ number: "LOT-1", locationId: 9, movements: [{ toId: 2 }] }],
-      shipments: [{ number: "SHP-1", legs: [{ fromLocationId: 2, stops: [{ locationId: 2 }] }] }],
-      pos: [{ number: "PO-1", destinationLocationId: 2 }],
-      orders: [{ number: "SO-1", destinationLocationId: 2 }],
-      contacts: [{ name: "Logipark", warehouseTariff: { locationIds: [2] } }],
-    });
-    eq(r.total, 5, "movement/leg/PO/SO/tariff all found");
-  });
   t("D-14: ledger mark-paid with the central counter mints unique event ids", () => {
     let a = { grossAmount: 100, paymentStatus: "Sent", payments: [] };
     let b = { grossAmount: 200, paymentStatus: "Sent", payments: [] };
@@ -507,28 +497,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 // ══ D-17 REGRESSIONS (v6.64.1) — overhead import double-write ══
 (function batchE(){
   console.log("\n══ 19. D-17: one overhead row → exactly ONE register invoice ══");
-  t("fold skips an opCost whose number+party already exists as a register invoice", () => {
-    const existing = [{ id: 1, kind: "COST", number: "358/08/C/2026", paymentStatus: "Draft",
-      counterparty: { name: "Roluze Viguso Sp. z o. o. (getaluv: Roluze Sp. z o.o. Viguso sp. k.)" } }];
-    const r = invc.migrateLegacyInvoices({ existing, creditNotes: [], warehouseInvoices: [],
-      operationalCosts: [{ id: 9, invoiceNo: "358/08/c/2026", supplierName: "Roluze Viguso Sp. z o. o. (getaluv: X)", amount: 133.13, currency: "PLN", fxRate: 1, category: "office_rent", date: "2026-08-20", status: "Received" }],
-      nextId: deps.nextId });
-    eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 0, "no twin fold");
-  });
-  t("same number from a DIFFERENT counterparty still folds (legit collision preserved)", () => {
-    const existing = [{ id: 1, kind: "COST", number: "58/08/2026", paymentStatus: "Draft", counterparty: { name: "ORLEN S.A." } }];
-    const r = invc.migrateLegacyInvoices({ existing, creditNotes: [], warehouseInvoices: [],
-      operationalCosts: [{ id: 9, invoiceNo: "58/08/2026", supplierName: "Adami Romatwicz", amount: 10, currency: "PLN", fxRate: 1, category: "other", date: "2026-08-20", status: "Received" }],
-      nextId: deps.nextId });
-    eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 1);
-  });
-  t("cancelled register invoice does NOT block the fold (cancellation frees the number)", () => {
-    const existing = [{ id: 1, kind: "COST", number: "X/1", paymentStatus: "Cancelled", counterparty: { name: "A" } }];
-    const r = invc.migrateLegacyInvoices({ existing, creditNotes: [], warehouseInvoices: [],
-      operationalCosts: [{ id: 9, invoiceNo: "X/1", supplierName: "A", amount: 10, currency: "PLN", fxRate: 1, category: "other", date: "2026-08-20", status: "Received" }],
-      nextId: deps.nextId });
-    eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 1);
-  });
   console.log("D-17 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
@@ -724,25 +692,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(accs.length, 1); eq(accs[0].bank, "Santander"); approx(accs[0].lastKnownBalance, 257.78);
     accs = bank.upsertBankAccountFromStatement(accs, parsed, deps);
     eq(accs.length, 1, "idempotent upsert");
-  });
-  t("D-34: an OVERHEAD register invoice mirrors into ONE opCost; edits follow; cancel removes; loops impossible", () => {
-    const inv = { id: 501, kind: "COST", costScope: "OVERHEAD", number: "F/55", paymentStatus: "Issued",
-      counterparty: { name: "Orlen" }, currency: "PLN", fxRate: 1, grossAmount: 300, grossPLN: 300, issueDate: "2026-08-05", source: "manual:x" };
-    const manual = { id: 1, category: "salary", description: "Salaries Aug", amountPLN: 20000, period: "2026-08", source: "" };
-    let ocs = oc.syncOverheadOpCosts([inv], [manual]);
-    eq(ocs.length, 2, "manual entry kept + one mirror");
-    const mirror = ocs.find(c => String(c.source) === "invoice:501");
-    approx(mirror.amountPLN, 300); eq(mirror.period, "2026-08");
-    // edit the invoice → mirror follows, same id (replace-by-ref)
-    ocs = oc.syncOverheadOpCosts([{ ...inv, grossAmount: 350, grossPLN: 350 }], ocs);
-    eq(ocs.length, 2); approx(ocs.find(c => String(c.source) === "invoice:501").amountPLN, 350);
-    eq(ocs.find(c => String(c.source) === "invoice:501").id, mirror.id, "stable id across edits");
-    // cancel → mirror vanishes; the folded-invoice direction is excluded by source
-    ocs = oc.syncOverheadOpCosts([{ ...inv, paymentStatus: "Cancelled" }], ocs);
-    eq(ocs.length, 1, "only the salary entry remains");
-    const folded = invc.migrateLegacyInvoices({ existing: [], creditNotes: [], warehouseInvoices: [],
-      operationalCosts: [{ id: 7, invoiceNo: "X/1", supplierName: "A", source: "invoice:501", amount: 10, currency: "PLN", fxRate: 1, category: "other", date: "2026-08-01", status: "Received" }], nextId: deps.nextId });
-    eq((Array.isArray(folded) ? folded : []).length, 0, "a sync-created opCost never folds back — no loop");
   });
   console.log("v6.68.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -976,10 +925,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(P({ purpose: "INBOUND", poRefs: ["P2"], legs: [{ mode: "Sea", fromLocationId: 3, toLocationId: 7 }] }, [{ number: "P2", buyIncoterm: "CIF", destinationLocationId: 7 }], []), "supplier");
     eq(P({ purpose: "INBOUND", arrangedBy: "SUPPLIER", poRefs: ["P3"], legs: [{ mode: "Road", toLocationId: 11 }] }, [{ number: "P3", buyIncoterm: "DDP", destinationLocationId: 11 }], []), "supplier");
     eq(P({ purpose: "OUTBOUND", poRefs: ["P3"], governingSoRef: "S3", originLocationId: 11, legs: [{ mode: "Road", fromLocationId: 11, toLocationId: 12 }] }, [{ number: "P3", buyIncoterm: "DDP", destinationLocationId: 11 }], [{ number: "S3", sellIncoterm: "DAP", destinationLocationId: 12 }]), "us");
-  });
-  t("D11: one document register merges transport order, protocols and documents with one vocabulary", () => {
-    const rows = M.documentRegister({ number: "SHP-1", confirmationStatus: "Sent", documents: [{ type: "CMR", status: "Have it", link: "https://x" }, { type: "Phyto", status: "Expected" }] }, [{ number: "LP-1", status: "Returned", truckPlate: "PL1" }]);
-    eq(rows.length, 4); eq(rows[0].status, "Sent"); eq(rows[1].status, "Returned"); eq(M.documentsOutstanding(rows).length, 1);
   });
   console.log("v6.85.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -1238,12 +1183,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Z.gradesFromLedger(voided).I, 7050, "a voided job leaves everything class I again");
     eq(Z.gradeSplit(r.lot).II, 600, "gradeSplit reads the ledger when RECLASS exists");
   });
-  t("IN-5: unloading at the POL moves the lots to the port location once (idempotent), as a TRANSFER posted by the shipment", () => {
-    const sh = { number: "SHP-1", goods: [{ lotRef: "L1", qtyKg: 5000 }], lotRefs: [] };
-    const lots = [{ number: "L1", locationId: 9, physicalKg: 5000, movements: [] }, { number: "L2", locationId: 9, physicalKg: 100, movements: [] }];
-    const a = Z.portStageTransfers(sh, lots, 126, "2026-09-12", deps); eq(a.posted, 1); eq(a.lots[0].movements[0].type, "TRANSFER"); eq(a.lots[0].movements[0].toId, 126); eq(a.lots[1].movements.length, 0);
-    const b = Z.portStageTransfers(sh, a.lots, 126, "2026-09-12", deps); eq(b.posted, 0, "second stamp posts nothing");
-  });
   t("IN-6: stamping site ids preserves today's derived ids; re-ordering addresses no longer moves a site", () => {
     const c = { id: 70, name: "Agrohurt", type: "Warehouse", address: "A", extraAddresses: ["B", "C"] };
     const before = loc.counterpartyLocations([c]).map(l => l.id);
@@ -1422,13 +1361,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(r.contact.countryIso, "PL"); ok(!("finance" in r.contact)); ok(!("linkedDocs" in r.contact)); ok(!("contacts" in r.contact), "the old persons list is still written (v7.28.2)"); eq(r.contact.people.length, 1);   // v7.28.2: one list — people[] only
     ok(!CPY.normaliseCounterparty(r.contact).changed);
     eq(CPY.isEU("Poland"), true); eq(CPY.isEU("Egypt"), false); eq(CPY.isEU(""), null);
-  });
-  t("CP-3/4/5/7: person by role for composers; archived parties out of pickers; import matches by Fakturownia id then NIP; current agreement by validity", () => {
-    const c = { name: "Vega Pro", roles: ["Supplier"], people: [{ name: "Anna", role: "Accountant", email: "a@vega.hu" }, { name: "Bela", role: "Sales", email: "b@vega.hu" }], agreements: [{ season: "2025", validFrom: "2025-06-01", validTo: "2025-12-31", commissionPct: 6 }, { season: "2026", validFrom: "2026-06-01", commissionPct: 6.5, qualityReportDays: 3 }] };
-    eq(CPY.personFor(c, "Accountant").email, "a@vega.hu"); eq(CPY.personFor(c, "Dispatcher").email, "a@vega.hu", "falls back to any person with an e-mail");
-    eq(CPY.activeParties([c, { name: "Old", roles: ["Supplier"], archived: true }], "Supplier").length, 1);
-    eq(CPY.matchImported([{ id: 9, fakturowniaId: 555, nip: "5252842787" }], { fakturowniaId: 555 }).id, 9); eq(CPY.matchImported([{ id: 9, nip: "525-284-27-87" }], { nip: "5252842787" }).id, 9);
-    eq(CPY.currentAgreement(c, "2026-09-11").commissionPct, 6.5); eq(CPY.currentAgreement(c, "2025-09-11").commissionPct, 6);
   });
   console.log("v6.99.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -2087,12 +2019,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(tabs.length, 5); eq(tabs.reduce((s, t) => s + t.rows.length, 0), 21);
     const r = tabs.flatMap(t => t.rows).find(r => r.cells.etd); ok(/^\d{4}-\d{2}-\d{2}$/.test(r.cells.etd), "ETD as a date: " + r.cells.etd); ok(r.cells.eta, "ETA kept");
     ok(tabs.flatMap(t => t.rows).some(r => r.cells.supplier === "Pavamane Owoc"));
-  });
-  t("SH-5: a 2×3 block pasted from Excel fills right and down and adds the missing row; a frozen row is never overwritten", () => {
-    const rows = [{ id: "a", createdAt: "x", cells: {} }, { id: "b", createdAt: "x", frozen: true, cells: { client: "Keep" } }];
-    const res = Sh.pasteGrid(rows, { row: 0, col: 3 }, Sh.parseClipboard("Al Baraka\tSO-1\tfoil\nX\tY\tZ\nNew\tSO-2\tbox"), "now", 2026);
-    eq(res.rows.length, 3); eq(res.rows[0].cells.client, "Al Baraka"); eq(res.rows[0].cells.so, "SO-1"); eq(res.rows[0].cells.packaging, "foil");
-    eq(res.rows[1].cells.client, "Keep", "frozen row untouched"); eq(res.rows[2].cells.client, "New");
   });
   t("dates typed the way she types them become dates; anything else stays as typed", () => {
     eq(Sh.toISODate("13/09", 2026), "2026-09-13"); eq(Sh.toISODate("13.09.2026"), "2026-09-13"); eq(Sh.toISODate("13-09-26"), "2026-09-13"); eq(Sh.toISODate("asap"), null);
@@ -3160,7 +3086,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("A-LOC-2 · v7.32.0 (FZ-04a): no built-in place exists — a place is an address in Parties (a company's) or a public place in Parties › Locations; the places a document uses are counted by one helper", () => {
     ok(!Lm.LOCATIONS_ALL_BUILTIN && !Lm.ensureUsedBuiltinsAreOrdinary && !Lm.registerCounterpartyLocations && !Lm.readLogisticsPoints && !Lm.readLocationOverrides, "a legacy place mechanism is back");
-    eq(Lm.usedLocationIds({ pos: [{ destinationLocationId: 5 }], shipments: [{ legs: [{ fromId: 7, toId: 8 }] }] }).size, 3);
     Lm.setPartiesForPlaces([]);
   });
   t("A-LOC-3: a PO whose named place is no location any more is listed with the text it read", () => {
@@ -3838,11 +3763,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v72201(){
   console.log("\n══ v7.22.1 — FZ-12: no purchase invoice is invented from an order ══");
   const I = B("invoicing.js");
-  t("FZ-12 (v7.22.1): a firm purchase order in an old status (Arrived / Received / Closed) no longer becomes a purchase invoice 'awaiting the supplier's number' — purchase invoices come from Fakturownia or are entered", () => {
-    const po = { id: 77, number: "PO-T-1", status: "Received", pricingMode: "firm", currency: "EUR", fxRate: 4.3, supplier: { name: "S" }, items: [{ qty: 1000, unitPrice: 1.2 }] };
-    const r = I.migrateLegacyInvoices({ existing: [], orders: [], warehouseInvoices: [], operationalCosts: [], pos: [po] });
-    eq(r.filter(i => i.category === "PURCHASE").length, 0, "a purchase invoice was invented");
-  });
 })();
 
 // ══ v7.22.2 — FZ-22: one number reader ══
@@ -3984,13 +3904,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v72401(){
   console.log("\n══ v7.24.1 — FZ-01 step 1: one-time repairs gone ══");
   const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
-  t("FZ-01 (v7.24.1): the one-time repairs that change nothing on either copy (owner's files of 15 Oct) no longer run on opening — and their code is gone; the live routines stay", () => {
-    const app = rd("App.tsx");
-    ["v7.12.2-trade-direction", "v7.18.2-doc-types", "v7.13.1-closed-months", "foldWarehouseInvoiceStore(", "migrateAddressOn(", "foldLegacyClaimFields(", "migrateSaleLinesToLots(", "normaliseStoredSoStatus(", "convertSettledRefsToEvents(", "stripPendingInvoices("].forEach(k => ok(!app.includes(k), "App still runs " + k));
-    const all = fsx.readdirSync(px.join(__dirname, "../src")).filter(f => /\.(ts|tsx)$/.test(f)).map(rd).join("\n");
-    ["function foldWarehouseInvoiceStore", "function migrateAddressOn", "function foldLegacyClaimFields", "function migrateSaleLinesToLots", "function normaliseStoredSoStatus", "function convertSettledRefsToEvents", "function stripPendingInvoices", "function mapDocTypes"].forEach(k => ok(!all.includes(k), k + " is still in the code"));
-    ["normaliseCounterparty(",   /* v7.33.1 (INV-PDF / FZ-11, owner 26 Oct): migrateLegacyInvoices retired — an invoice enters through its own door */ "normalisePO(", "normaliseSO(", "normaliseLot(", "normaliseInvoiceCategory(", "stampSiteIds(", "fxFillInvoice("].forEach(k => ok(app.includes(k), "a live routine went: " + k));
-  });
   t("A-ST-10 / A-RV-30 (kept): Finance → Warehouse charges reads and writes the register — no store of its own; the import posts warehouse invoices to the register", () => {
     const fin = rd("Finance.tsx"), inv = rd("Invoices.tsx");
     ok(!/setWarehouseInvoices|deleteInvoice\(/.test(fin), "Finance still writes the separate store or deletes from it");
@@ -4099,15 +4012,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(FI.vatRateOf(1000, 0), 0); eq(FI.vatRateOf(0, 100), 0);
     const half = FI.buildCostInvoice({ number: "X/1", seller: "S", net: 1000, gross: 0, currency: "PLN", fxRate: 1, date: "2026-10-01" }, "FREIGHT", {}, null); ok(half.amountsIncomplete, "a row without its gross is not flagged"); eq(half.vatRate, 0);
     const full = INV.recomputeInvoiceMoney(FI.buildCostInvoice({ number: "X/2", seller: "S", net: 1000, gross: 1230, currency: "PLN", fxRate: 1, date: "2026-10-01" }, "FREIGHT", {}, null)); eq(full.grossAmount, 1230); ok(!full.amountsIncomplete);
-  });
-  t("A-INV-1 (v7.26.0): an operational cost's register invoice keeps the VAT the import found; an old VAT-less one is corrected by re-importing its month (a true 0 % is confirmed); the data checks name what is left", () => {
-    const reg = INV.migrateLegacyInvoices({ existing: [], orders: [], warehouseInvoices: [], operationalCosts: [{ id: 77, invoiceNo: "OV/1", supplierName: "Office Ltd", amount: 1000, vatRate: 23, currency: "PLN", fxRate: 1, date: "2026-10-01", category: "office_rent", costCenter: "general", notes: "Imported from Fakturownia (Invoices)" }] });
-    eq(reg[0].grossAmount, 1230); eq(reg[0].vatAmount, 230);
-    const old = { id: 5, kind: "COST", number: "OV/2", paymentStatus: "Issued", source: "migrated:opCost:88", vatRate: 0, notes: "Imported from Fakturownia (Invoices)" };
-    const fix = FI.vatFixFor({ number: "OV/2", net: 1000, gross: 1230 }, [old]); eq(fix.vatRate, 23); eq(fix.opCostId, "88"); ok(!fix.confirmZero);
-    ok(FI.vatFixFor({ number: "OV/2", net: 1000, gross: 1000 }, [old]).confirmZero, "a true 0 % is not confirmed"); eq(FI.vatFixFor({ number: "OV/2", net: 1000, gross: 1230 }, [{ ...old, source: "fakturownia-import" }]), null);
-    const ic = IC.checkIntegrity({ invoices: [old, { ...old, id: 6, number: "OV/3", vatChecked: true }, { id: 7, kind: "COST", number: "H/1", paymentStatus: "Issued", amountsIncomplete: true }], pos: [], orders: [], lots: [], shipments: [], contacts: [] });
-    eq(ic.issues.filter(i => i.code === "INVOICE_VAT_MISSING").map(i => i.entity).join(), "OV/2"); eq(ic.issues.filter(i => i.code === "INVOICE_AMOUNTS_INCOMPLETE").length, 1);
   });
 })();
 
@@ -4829,11 +4733,11 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("v7.30.14 · v7.32.0 (FZ-04a): every picker reads the Parties' live list — an address changed, removed or unticked shows the new way at once; the callers without the Parties at hand read the list the App handed over, never a copy", () => {
     const mk = (street, extra = {}) => [{ id: 4242, name: "Fresh Client Sp. z o.o.", roles: ["Client"], type: "Client", countryIso: "PL", addr: { street, postcode: "00-001", city: "Warszawa" }, people: [], ...extra }];
     const parties = mk("Old Street 1"); L.setPartiesForPlaces(parties);
-    ok(/Old Street 1/.test(String((L.locById(L.allPlaces().find(l => String(l.name).startsWith("Fresh Client")).id) || {}).address || "")), "the handed-over list is not read");
+    ok(/Old Street 1/.test(String((L.locationById(L.allPlaces().find(l => String(l.name).startsWith("Fresh Client")).id) || {}).address || "")), "the handed-over list is not read");
     parties[0] = { ...parties[0], addr: { ...parties[0].addr, street: "New Street 9" } };   // the Parties' live list changes in place
     const now = L.unifiedLocations(parties).filter(l => String(l.name).startsWith("Fresh Client"));
     eq(now.length, 1, "the company's address offered twice"); ok(/New Street 9/.test(String(now[0].address || "")), "the picker shows the old address: " + now[0].address);
-    ok(/New Street 9/.test(String((L.locById(now[0].id) || {}).address || "")), "a lookup without the Parties shows the old address");
+    ok(/New Street 9/.test(String((L.locationById(now[0].id) || {}).address || "")), "a lookup without the Parties shows the old address");
     L.setPartiesForPlaces([]); eq(L.unifiedLocations([]).filter(l => String(l.name).startsWith("Fresh Client")).length, 0, "an address that is gone is still offered");
   });
 })();
@@ -4916,15 +4820,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(/gridTemplateColumns: "minmax\(0, 1fr\) minmax\(0, 1fr\)"/.test(fin), "the form's columns can still be squeezed");
     ok(/setFinanceNotes=\{setFinanceNotesG?\}/.test(rd("App.tsx").split("\n").find(l => l.includes("<Finance packagingTypes")) || ""), "the App does not hand Finance the notes' setter");
     ok(/function UnlinkedNoteParties/.test(rd("Invoices.tsx")), "no notes' panel in Invoices");
-  });
-  t("INV-PDF (v7.33.1): the import writes an overhead invoice itself (its Fakturownia id kept) and adopts a registered twin without an id; no operational cost is copied into the register at start; plain PDF reasons, the skipped counted, the link field, 'No PDF in Fakturownia', a dropped PDF", () => {
-    const inv = rd("Invoices.tsx"), app = rd("App.tsx");
-    ok(/regs\.push\(buildCostInvoice\(r, r\.tag, \{\}, contact\)\);\n\s+opCosts\.push\(\{ \.\.\.operationalCostFromRow\(r, r\.category \|\| "other"\), source: `invoice:\$\{r\.number\}` \}\);/.test(inv), "the overhead branch does not write the register invoice");
-    ok(/const adopt = twin && /.test(inv) && /fakturownia: \{ \.\.\.\(i\.fakturownia \|\| \{\}\), fktId: a\.fktId \}/.test(inv), "no adoption");
-    ok(!/migrateLegacyInvoices\(/.test(app), "the start-up copy still runs");
-    ok(/no longer in Fakturownia/.test(inv) && /cannot print it yet/.test(inv) && /have no Fakturownia link yet/.test(inv), "the PDF window's plain reasons are missing");
-    ok(/function InvoicePdfTools/.test(inv) && /No PDF in Fakturownia/.test(inv) && /Drop or choose the PDF received/.test(inv), "the invoice page's PDF tools are missing");
-    ok(/const target = String\(e\?\.detail\?\.module \|\| "contacts"\); navigateRef\.current\(target\);/.test(app), "the jump still always goes to Parties");
   });
   t("FX-1 (v7.33.2): one rule — a foreign-currency record takes the NBP rate of the last working day before its own date; the review lists a missing or different rate (unless kept as agreed) and sets the NBP rate with the PLN amount", () => {
     FX.__setNbpStore({ days: { "2026-10-05": { EUR: 4.25 }, "2026-10-06": { EUR: 4.3228 }, "2026-10-23": { EUR: 4.24 } }, covered: {} });
@@ -5187,6 +5082,31 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(p.invoice.seller_name, "Legugeva Kft."); eq(p.invoice.buyer_tax_no, "5252842787"); eq(p.invoice.positions[0].tax, 0);
     const srv = fsx.readFileSync(px.join(__dirname, "../api/fakturownia.js"), "utf8"); ok(/op === "expense"/.test(srv) && /income: "0", kind: "vat", gov_save_and_send: false/.test(srv) && /This is the TEST copy: nothing is registered/.test(srv), "the server action is missing its guards");
     ok(/const five = pool\.slice\(0, 5\)/.test(fsx.readFileSync(px.join(__dirname, "../src/fakturowniaImport.domain.ts"), "utf8")), "the learning still reads only the last invoice");
+  });
+})();
+
+// ══ v7.49.0 — INV-D closed: the link follows the category; an unknown seller can be created from its row ══
+(function v74900(){
+  console.log("\n══ v7.49.0 — INV-D closed ══");
+  const FI = B("fakturowniaImport.domain.js"); const fsx = require("fs"), px = require("path");
+  t("INV2-8 (v7.49.0): choosing Freight on a row links the carrier's expected freight line of the shipment; Overhead links nothing; an unknown seller's row offers '+ New company'", () => {
+    const row = { key: "k", number: "F/1", seller: "Trans Sp. z o.o.", sellerTaxNo: "PL1112223344", net: 2000, gross: 2460, currency: "PLN", date: "2026-10-20" };
+    const shipments = [{ id: 1, number: "SHP-9", status: "Booked", costs: [{ id: 5, type: "freight", amount: 2000, currency: "PLN", status: "Expected", supplierName: "Trans Sp. z o.o.", supplierId: 77 }] }];
+    const contacts = [{ id: 77, name: "Trans Sp. z o.o.", nip: "1112223344", roles: ["Supplier"], type: "Supplier" }];
+    const l = FI.linkForTag(row, "FREIGHT", contacts, shipments, []); ok(!l.shipmentNumber || l.shipmentNumber === "SHP-9", "a wrong shipment linked");
+    eq(JSON.stringify(FI.linkForTag(row, "OVERHEAD", contacts, shipments, [])), "{}");
+    ok(/data-row-new-company="1"/.test(fsx.readFileSync(px.join(__dirname, "../src/Invoices.tsx"), "utf8")), "no '+ New company' on an unknown seller's row");
+  });
+})();
+
+// ══ v7.50.1 — a note opens its own page and names its invoice; the conversion carries the original's rate ══
+(function v75001(){
+  console.log("\n══ v7.50.1 — notes and their invoices ══");
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("v7.50.1 (owner 29 Oct, TRADER JOANNA's 1/10/2026/KOR): a note opens its own page, which names the invoice it corrects; the banner's conversion carries the original invoice's rate", () => {
+    ok(/onClick=\{\(\) => \{ setNoteForm\(\{ \.\.\.nt \}\); setView\("note"\); \}\}/.test(src), "a note still opens its invoice's page");
+    ok(/data-note-corrects="1"/.test(src) && /Corrects invoice <b>\{corrected\.number\}<\/b>/.test(src), "the note's page does not name its invoice");
+    ok(/fxRate: \(corr && Number\(corr\.fxRate\) > 0 \? Number\(corr\.fxRate\) : rateOf\(i\)\)/.test(src), "the conversion does not carry the original invoice's rate");
   });
 })();
 

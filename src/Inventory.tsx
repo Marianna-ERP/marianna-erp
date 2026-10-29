@@ -549,7 +549,7 @@ function lotArrivalDate(lot: any): string | null {
 // v6.99.81: lotAgeDays retired — the Arrived · age column reads lotArrivedCell (lotView.domain)
 function ageColor(days: number): string { return days <= 7 ? "#16A34A" : days <= 14 ? "#D97706" : "#DC2626"; }
 
-export function totalCost(lot) {
+function totalCost(lot) {
   return (lot.costs || []).reduce((s, c) => s + (c.pln || 0), 0);
 }
 export function costPerKg(lot) {
@@ -559,7 +559,7 @@ export function costPerKg(lot) {
   const denom = lot.receivedKg || lot.expectedKg || 0;
   return denom > 0 ? total / denom : 0;
 }
-export function valueInStock(lot) {
+function valueInStock(lot) {
   // Value still on hand = what's physically here × per-kg cost basis.
   // Note: physicalKg already accounts for SHIP_OUT movements (goods gone).
   return (lot.physicalKg || 0) * costPerKg(lot);

@@ -48,7 +48,7 @@ import { Sel } from "./ui";   // v7.27.8 (A-W5)
 // v7.22.4 (A-RV-16, Batch F): no hidden module copies — the packaging types and the counterparties the purchase screens and the
 // printed PO read are one value from the props (PoData), handed down through a context.
 export interface PoData { packagingTypes: any[]; contacts: any[] }
-export const EMPTY_PO_DATA: PoData = { packagingTypes: PACKAGING_SEED, contacts: [] };
+const EMPTY_PO_DATA: PoData = { packagingTypes: PACKAGING_SEED, contacts: [] };
 export const PoDataContext = React.createContext<PoData>(EMPTY_PO_DATA);
 export const usePoData = (): PoData => React.useContext(PoDataContext);
 
