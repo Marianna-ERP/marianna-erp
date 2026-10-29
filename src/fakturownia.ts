@@ -119,6 +119,19 @@ export async function createInvoice(_c: FakturowniaConfig, body: any): Promise<F
   return fktCall("create", {}, payload);
 }
 
+/** v7.48.0 (INV2-7, owner decision 29 Oct — one register): a purchase invoice entered in the ERP (a foreign supplier's) registered in
+ *  Fakturownia as an expense. The supplier is the seller; we are the buyer. Fakturownia's id comes back and is kept on the invoice, so the
+ *  next "Import from Fakturownia" recognises it as already imported. */
+export function expensePayload(inv: any, us: { name: string; nip: string }): any {
+  const cp = inv?.counterparty || {}; const gross = Number(inv?.grossAmount) || 0; const net = Number(inv?.netAmount) || 0;
+  const rate = net > 0 ? Math.round(((gross / net) - 1) * 100) : 0;
+  return { invoice: { number: String(inv?.number || ""), issue_date: String(inv?.issueDate || "").slice(0, 10), sell_date: String(inv?.saleDate || inv?.issueDate || "").slice(0, 10),
+    payment_to: String(inv?.dueDate || "").slice(0, 10) || undefined, currency: String(inv?.currency || "PLN"),
+    seller_name: String(cp.name || ""), seller_tax_no: String(cp.taxNo || cp.nip || ""), buyer_name: us.name, buyer_tax_no: us.nip,
+    positions: [{ name: `Purchase — invoice ${String(inv?.number || "")}`, quantity: 1, total_price_gross: gross, tax: [0, 5, 8, 23].includes(rate) ? rate : "np" }] } };
+}
+export async function registerExpense(payload: any): Promise<FktResult<any>> { return fktCall("expense", {}, payload); }
+
 // ── Tolerant mapping of a Fakturownia invoice JSON to the shapes the ERP uses ─
 export interface MappedInvoice {
   correctedFktId?: any;   // v7.34.0 (CN-1)

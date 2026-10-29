@@ -1,5 +1,6 @@
 // ── v6.99.0 (FN-1/FN-2/FN-3): PERIOD CLOSE, MANAGEMENT SNAPSHOT, CASH PROJECTION ──
 import { S, r2 } from "./format";
+import { openOf, dueDateOf } from "./overdue.domain";   // v7.46.1 (INV2-5)
 import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
@@ -21,14 +22,16 @@ export function buildSnapshot(period: string, inp: { totalAgg: any; ledgerTotals
     stockKg: Math.round(num(inp.stockKg)), stockValuePLN: r2(num(inp.stockValuePLN)), openClaims: inp.openClaims, settlementsClosed: inp.settlementsClosed, realizedFxPLN: r2(num(inp.realizedFxPLN)), bankBalances: inp.bankBalances };
 }
 /** FN-3: cash projection — receivables in, payables out, by due-date bucket from today. */
-export function cashProjection(invoices: any[], todayISO: string): { buckets: Array<{ label: string; inPLN: number; outPLN: number; netPLN: number }>; overdueInPLN: number; overdueOutPLN: number } {
+export function cashProjection(invoices: any[], todayISO: string, notes: any[] = [], contacts: any[] = []): { buckets: Array<{ label: string; inPLN: number; outPLN: number; netPLN: number }>; overdueInPLN: number; overdueOutPLN: number } {
   const b = [{ label: "0–30 days", from: 0, to: 30 }, { label: "31–60 days", from: 31, to: 60 }, { label: "61–90 days", from: 61, to: 90 }, { label: "later", from: 91, to: 1e9 }];
   const out = b.map(x => ({ label: x.label, inPLN: 0, outPLN: 0, netPLN: 0 }));
   let overdueIn = 0, overdueOut = 0;
   (invoices || []).forEach(inv => {
     if (!inv || inv.isProforma || ["Cancelled", "Draft"].includes(inv.paymentStatus)) return;
-    const open = r2((num(inv.grossAmount) - num(inv.paidAmount)) * rateOf(inv)); if (open <= 0.005) return;
-    const due = S(inv.dueDate) || S(inv.issueDate); const days = due ? Math.round((new Date(due).getTime() - new Date(todayISO).getTime()) / 86400000) : 0;
+    // v7.46.1 (INV2-5, the residual): the one overdue rule — open net of the invoice's notes, the due date from the payment terms when missing
+    if (!(num(inv.grossAmount) > 0)) return;   // a correction is not money coming or going on its own
+    const open = r2(openOf(inv, notes) * rateOf(inv)); if (open <= 0.005) return;
+    const due = dueDateOf(inv, contacts) || S(inv.issueDate); const days = due ? Math.round((new Date(due).getTime() - new Date(todayISO).getTime()) / 86400000) : 0;
     const isIn = inv.kind === "SALES";
     if (days < 0) { if (isIn) overdueIn += open; else overdueOut += open; return; }
     const i = b.findIndex(x => days >= x.from && days <= x.to); const k = i < 0 ? out.length - 1 : i;

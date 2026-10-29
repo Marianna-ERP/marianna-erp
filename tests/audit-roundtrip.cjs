@@ -5116,6 +5116,80 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.45.0 — INV-A: corrections recognised once, imported once ══
+(function v74500(){
+  console.log("\n══ v7.45.0 — INV-A: corrections ══");
+  const CR = B("corrections.domain.js"), FI = B("fakturowniaImport.domain.js"), IV = B("invoicing.js");
+  t("INV2-1 (v7.45.0): one recogniser — Fakturownia's kind, a negative total, a correction-style number or wording; one parent finder — Fakturownia id, KSeF, the number named with the same NIP; a correction carries the ORIGINAL invoice's rate (owner, 29 Oct)", () => {
+    ok(CR.isCorrectionRow({ kind: "correction" }) && CR.isCorrectionRow({ gross: -10 }) && CR.isCorrectionRow({ number: "FK/000001/08/26/BG", gross: 5 }) && CR.isCorrectionRow({ number: "EUR305/2026", description: "EUR305/2026 do Faktury EUR276/2026" }), "a correction not recognised");
+    ok(!CR.isCorrectionRow({ kind: "vat", gross: 100, number: "FV 12/2026" }), "an invoice taken for a correction");
+    eq(CR.citedNumber({ description: "EUR305/2026 do Faktury EUR276/2026" }), "EUR276/2026");
+    const invs = [{ id: 1, number: "EUR276/2026", grossAmount: 5000, fxRate: 4.31, counterparty: { taxNo: "HU123" }, fakturownia: { fktId: 55 } }];
+    eq((CR.findCorrectedInvoice({ correctedFktId: 55 }, invs) || {}).id, 1); eq((CR.findCorrectedInvoice({ description: "korekta do faktury EUR276/2026" }, invs, "HU123") || {}).id, 1); eq(CR.findCorrectedInvoice({ description: "do faktury EUR276/2026" }, invs, "HU999"), null, "another company's invoice was taken");
+    let n = 0; const note = FI.noteFromCorrection({ number: "EUR305/2026", description: "do Faktury EUR276/2026", gross: -1000, currency: "EUR", fxRate: 4.10, sellerTaxNo: "HU123", fktId: 900 }, "incoming", invs, null, () => ++n);
+    eq(note.invoiceId, 1); eq(note.fxRate, 4.31, "the correction did not take the original invoice's rate"); eq(note.amountPLN, 4310);
+    const sr = FI.salesRowFromMapped({ number: "FK/1/10/2026", kind: "correction", grossTotal: -2000, correctedFktId: 77, ksefNo: "K1" }, 0); ok(sr.isCorrection && sr.correctedFktId === 77 && sr.ksefNo === "K1", "the sales row drops the correction marker");
+  });
+  t("INV2-2 / INV2-3 (v7.45.0): one duplicate key across invoices and notes — a correction already turned into a note is not imported again; duplicates of notes and imported drafts are repaired", () => {
+    const notes = [{ id: 9, number: "FK/1/10/2026", source: "converted:5", fakturownia: { fktId: 777 } }];
+    eq((CR.alreadyImported({ fktId: 777, number: "FK/1/10/2026" }, [], notes) || {}).as, "note");
+    eq(CR.alreadyImported({ number: "12/04/2026", sellerTaxNo: "111" }, [{ number: "12/04/2026", counterparty: { taxNo: "222" } }], []), null, "two companies' invoices with one number collide");
+    const tw = IV.notesImportedTwice([{ id: 5, grossAmount: -2000, fakturownia: { fktId: 777 } }], [...notes, { id: 10, number: "FK/1/10/2026", source: "fakturownia-correction:777" }]);
+    eq(tw.notes.join(), "10"); eq(tw.invoices.join(), "5");
+    eq(IV.importedDrafts([{ id: 1, kind: "COST", paymentStatus: "Draft", source: "fakturownia:12" }, { id: 2, kind: "COST", paymentStatus: "Draft", source: "manual:1" }]).join(), "1");
+  });
+})();
+
+// ══ v7.46.0 — INV-B: one overdue rule ══
+(function v74600(){
+  console.log("\n══ v7.46.0 — INV-B: overdue ══");
+  const OD = B("overdue.domain.js");
+  t("INV2-5 (v7.46.0): one overdue rule — an issued invoice, not a correction, its due date passed (or taken from the payment terms), something still open net of its notes; a draft, a pro-forma, a paid or a fully credited invoice is not overdue", () => {
+    const today = "2026-10-29";
+    ok(OD.isOverdue({ id: 1, paymentStatus: "Issued", grossAmount: 1000, dueDate: "2026-10-01" }, today), "a late invoice is not overdue");
+    ok(!OD.isOverdue({ id: 2, paymentStatus: "Draft", grossAmount: 1000, dueDate: "2026-10-01" }, today), "a draft is overdue");
+    ok(!OD.isOverdue({ id: 3, paymentStatus: "Issued", grossAmount: -1000, dueDate: "2026-10-01" }, today), "a correction is overdue");
+    ok(!OD.isOverdue({ id: 4, paymentStatus: "Issued", grossAmount: 1000, dueDate: "2026-10-01" }, today, [{ invoiceId: 4, noteType: "CREDIT", amount: 1000 }]), "a fully credited invoice is overdue");
+    ok(OD.isOverdue({ id: 5, paymentStatus: "Issued", grossAmount: 500, issueDate: "2026-09-01", counterparty: { id: 9 } }, today, [], [{ id: 9, terms: { paymentDays: 30 } }]), "the due date is not taken from the payment terms");
+  });
+})();
+
+// ══ v7.46.1 — INV-B closed: the statement, the cash projection and the settlement state on the one overdue rule ══
+(function v74601(){
+  console.log("\n══ v7.46.1 — INV-B closed ══");
+  const PC = B("periodClose.domain.js"), IP = B("invoicePlus.domain.js");
+  t("INV2-5 (v7.46.1): the cash projection, the settlement state and the statement read the one overdue rule — a fully credited invoice is not overdue, a correction is not money due", () => {
+    const today = "2026-10-29"; const inv = { id: 1, kind: "SALES", paymentStatus: "Issued", grossAmount: 1000, currency: "PLN", dueDate: "2026-10-01" };
+    eq(PC.cashProjection([inv], today, [{ invoiceId: 1, noteType: "CREDIT", amount: 1000 }]).overdueInPLN, 0, "a fully credited invoice counted overdue");
+    eq(PC.cashProjection([inv, { id: 2, kind: "SALES", paymentStatus: "Issued", grossAmount: -500, currency: "PLN", dueDate: "2026-10-01" }], today).overdueInPLN, 1000, "a correction counted");
+    eq(IP.settlementState(inv, today, [{ invoiceId: 1, noteType: "CREDIT", amount: 1000 }]), "Unpaid"); eq(IP.settlementState(inv, today), "Overdue");
+  });
+})();
+
+// ══ v7.47.0 — INV-C: corrections reach the costs (read from their notes — one source) ══
+(function v74700(){
+  console.log("\n══ v7.47.0 — INV-C ══");
+  const CC = B("correctionCosts.domain.js");
+  t("INV2-6 (v7.47.0): a producer's correction on a PO's goods invoice lowers the PO's lots' cost per kg; a carrier's correction on a shipment's invoice lowers its cost — read from the notes, never copied", () => {
+    const invoices = [{ id: 1, kind: "COST", paymentStatus: "Issued", links: [{ type: "PO", number: "PO-1" }] }, { id: 2, kind: "COST", paymentStatus: "Issued", links: [{ type: "Shipment", number: "SHP-1" }] }];
+    const notes = [{ id: 9, direction: "incoming", noteType: "CREDIT", invoiceId: 1, amount: 1000, amountPLN: 1000, currency: "PLN" }, { id: 10, direction: "incoming", noteType: "CREDIT", invoiceId: 2, amount: 200, amountPLN: 200, currency: "PLN" }, { id: 11, direction: "outgoing", noteType: "CREDIT", invoiceId: 1, amount: 50, amountPLN: 50 }];
+    eq(CC.correctionsPLNFor("PO", "PO-1", invoices, notes), -1000); eq(CC.correctionsPLNFor("Shipment", "SHP-1", invoices, notes), -200);
+    eq(CC.poCorrectionPerKg("PO-1", [{ poRef: "PO-1", receivedKg: 400 }, { poRef: "PO-1", expectedKg: 600 }], invoices, notes), -1);
+  });
+})();
+
+// ══ v7.48.0 — INV-D: one register (purchase invoices registered in Fakturownia), learning from the last five ══
+(function v74800(){
+  console.log("\n══ v7.48.0 — INV-D ══");
+  const FK = B("fakturownia.js"); const fsx = require("fs"), px = require("path");
+  t("INV2-7 / INV2-8 (v7.48.0): a purchase invoice entered in the ERP is registered in Fakturownia as an expense (supplier = seller, us = buyer, never sent to KSeF); the category is learned from the supplier's last five invoices", () => {
+    const p = FK.expensePayload({ number: "INV-77", issueDate: "2026-10-20", currency: "EUR", netAmount: 100, grossAmount: 100, counterparty: { name: "Legugeva Kft.", taxNo: "HU123" } }, { name: "MARIANNA", nip: "5252842787" });
+    eq(p.invoice.seller_name, "Legugeva Kft."); eq(p.invoice.buyer_tax_no, "5252842787"); eq(p.invoice.positions[0].tax, 0);
+    const srv = fsx.readFileSync(px.join(__dirname, "../api/fakturownia.js"), "utf8"); ok(/op === "expense"/.test(srv) && /income: "0", kind: "vat", gov_save_and_send: false/.test(srv) && /This is the TEST copy: nothing is registered/.test(srv), "the server action is missing its guards");
+    ok(/const five = pool\.slice\(0, 5\)/.test(fsx.readFileSync(px.join(__dirname, "../src/fakturowniaImport.domain.ts"), "utf8")), "the learning still reads only the last invoice");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

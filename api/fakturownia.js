@@ -95,6 +95,18 @@ module.exports = async function handler(req, res) {
       if (!r.ok) return send(res, r.status, { error: (r.status === 422 ? "Fakturownia rejected the invoice data (HTTP 422)." : r.status === 401 ? "Fakturownia refused the token kept in Vercel — it may be read-only." : `Fakturownia answered HTTP ${r.status}.`) + detailOf(data) });
       return send(res, 200, data);
     }
+    // v7.48.0 (INV2-7, owner decision 29 Oct — ONE REGISTER: every purchase invoice, foreign ones included, ends in Fakturownia): a purchase
+    // invoice entered in the ERP (a foreign supplier's) is registered in Fakturownia as an expense (income 0), never sent to KSeF from here
+    if (req.method === "POST" && op === "expense") {
+      if (testCopy) return send(res, 403, { error: "This is the TEST copy: nothing is registered in Fakturownia from here." });
+      if (!(await mayIssueInvoices(who))) return send(res, 403, { error: "Only the owner or a user with the Invoices module (Settings › Users) can register an invoice in Fakturownia." });
+      const body = await bodyOf(req); if (!body || typeof body !== "object" || !body.invoice) return send(res, 400, { error: "No invoice in the request." });
+      const inv = { ...body.invoice, income: "0", kind: "vat", gov_save_and_send: false };
+      const r = await fetch(`${base}/invoices.json`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ invoice: inv, api_token: token }) });
+      const text = await r.text(); let data = null; try { data = JSON.parse(text); } catch { data = text || null; }
+      if (!r.ok) return send(res, r.status, { error: r.status === 422 ? "Fakturownia rejected the purchase invoice's data (HTTP 422)." : `Fakturownia answered HTTP ${r.status}.` });
+      return send(res, 200, data);
+    }
     return send(res, 400, { error: "Not an allowed Fakturownia request." });
   } catch (e) { return send(res, 502, { error: "Fakturownia could not be reached from the server." }); }
 };

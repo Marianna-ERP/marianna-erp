@@ -98,6 +98,9 @@
     "../src/placeRepair.domain.ts",
     "../src/journeyProposal.domain.ts",
     "../src/placeReplace.domain.ts",
-    "../src/rateReview.domain.ts"
+    "../src/rateReview.domain.ts",
+    "../src/corrections.domain.ts",
+    "../src/overdue.domain.ts",
+    "../src/correctionCosts.domain.ts"
   ]
 }

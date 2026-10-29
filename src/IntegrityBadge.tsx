@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { orphanLotsToRemove, danglingLinks, checkIntegrity, IntegrityInputs, IntegrityIssue } from "./integrityCheck";
-import { importedTwice } from "./invoicing";   // v7.34.1
+import { importedTwice, notesImportedTwice, importedDrafts } from "./invoicing";   // v7.34.1
 
 // A small always-visible badge that runs the pure integrity checker over current
 // app state and summarises problems. Click to open a panel listing each issue.
@@ -9,7 +9,7 @@ import { importedTwice } from "./invoicing";   // v7.34.1
 const SEV_COLOR: Record<string, string> = { error: "#DC2626", warning: "#D97706", info: "#64748B" };
 const SEV_BG: Record<string, string> = { error: "#FEF2F2", warning: "#FFF7ED", info: "#F1F5F9" };
 
-export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: IntegrityInputs; onNavigate?: (m: string) => void; onRepair?: (kind: "orphanLots" | "danglingLinks" | "importedTwice") => void }) {
+export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: IntegrityInputs; onNavigate?: (m: string) => void; onRepair?: (kind: any) => void }) {
   const [open, setOpen] = useState(false);
   const result = useMemo(() => checkIntegrity(data), [data]);
   const { counts, issues } = result;
@@ -65,6 +65,8 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
                 {ol.length > 0 && <button onClick={() => onRepair("orphanLots")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🧹 Remove {ol.length} orphan lot(s) — their PO no longer exists and they hold no stock: {ol.slice(0, 4).map((l: any) => l.number).join(", ")}{ol.length > 4 ? "…" : ""}</button>}
                 {(dl.invoices.length > 0 || dl.claims.length > 0) && <button onClick={() => onRepair("danglingLinks")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🔗 Unlink {dl.invoices.length} invoice(s) and {dl.claims.length} claim(s) from documents that no longer exist</button>}
                 {(() => { const tw = importedTwice((data as any).invoices || [], (data as any).operationalCosts || []); return tw.invoices.length > 0 ? <button data-repair-twice="1" onClick={() => onRepair("importedTwice")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>⧉ Remove {tw.invoices.length} invoice(s) imported twice — the original kept</button> : null; })()}
+                {(() => { const D: any = data; const tw = notesImportedTwice(D.invoices || [], D.financeNotes || D.notes || []); const n = tw.notes.length + tw.invoices.length; return n > 0 ? <button onClick={() => onRepair("notesTwice")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>⧉ Remove {n} correction(s) imported twice — the note kept</button> : null; })()}
+                {(() => { const D: any = data; const ids = importedDrafts(D.invoices || []); return ids.length > 0 ? <button onClick={() => onRepair("importedDrafts")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>✓ Mark {ids.length} imported purchase invoice(s) as Issued (left as Draft)</button> : null; })()}
               </div>; })()}
             <div style={{ padding: "12px 16px", borderBottom: "1px solid #F3F4F6", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <strong style={{ fontSize: 13 }}>Data integrity</strong>

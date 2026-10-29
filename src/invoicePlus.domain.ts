@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { paymentDaysFor, dueDateFromIssue } from "./po.domain";
 import { S, r2 } from "./format";
+import { isOverdue } from "./overdue.domain";   // v7.46.1 (INV2-5)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
@@ -48,12 +49,12 @@ export function invoiceLifecycle(inv: any): "Draft" | "Issued" | "Sent" | "Cance
   if (s === "Paid" || s === "Partially paid" || s === "Overdue") return inv?.fakturownia?.exported || inv?.sentAt ? "Sent" : "Issued";
   return "Issued";
 }
-export function settlementState(inv: any, todayISO: string): "Unpaid" | "Partially paid" | "Paid" | "Overdue" | "—" {
+export function settlementState(inv: any, todayISO: string, notes: any[] = [], contacts: any[] = []): "Unpaid" | "Partially paid" | "Paid" | "Overdue" | "—" {
   if (invoiceLifecycle(inv) === "Cancelled" || invoiceLifecycle(inv) === "Draft" || inv?.isProforma) return "—";
   const gross = num(inv?.grossAmount), paid = num(inv?.paidAmount);
   if (gross > 0 && paid >= gross - 0.01) return "Paid";
   if (paid > 0) return "Partially paid";
-  return S(inv?.dueDate) && S(inv.dueDate) < S(todayISO) ? "Overdue" : "Unpaid";
+  return isOverdue(inv, todayISO, notes, contacts) ? "Overdue" : "Unpaid";   // v7.46.1 (INV2-5): the one overdue rule
 }
 
 // ── IV-1: a cost invoice must name what it pays for ───────────────────────────

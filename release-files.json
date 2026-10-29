@@ -1,5 +1,5 @@
 {
- "version": "7.44.0",
+ "version": "7.48.0",
  "files": [
   ".env.production",
   ".npmrc",
@@ -78,6 +78,8 @@
   "src/claimsPlus.domain.ts",
   "src/cnCodes.ts",
   "src/consignment.ts",
+  "src/correctionCosts.domain.ts",
+  "src/corrections.domain.ts",
   "src/costAllocation.ts",
   "src/costInvoice.domain.ts",
   "src/counterparty.domain.ts",
@@ -121,6 +123,7 @@
   "src/numbering.ts",
   "src/numbers.ts",
   "src/operationalCosts.ts",
+  "src/overdue.domain.ts",
   "src/packaging.domain.ts",
   "src/payments.domain.ts",
   "src/periodClose.domain.ts",

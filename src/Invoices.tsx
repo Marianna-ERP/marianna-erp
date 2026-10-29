@@ -33,6 +33,9 @@ import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6): where a 
 import { exportNotesForSale, isFromPoland } from "./invoiceNotes.domain";   // v7.26.4 (A-INV-4)
 import { destinationDisplay } from "./SalesOrders";
 import { locationById } from "./locations";
+import { registerExpense, expensePayload } from "./fakturownia";   // v7.48.0 (INV2-7)
+import { isOverdue } from "./overdue.domain";   // v7.46.0 (INV2-5)
+import { alreadyImported, findCorrectedInvoice } from "./corrections.domain";   // v7.45.0 (INV2-1 / INV2-2)
 import { takeNoteRequest } from "./noteRequest";   // v7.34.0 (CN-2)
 import { pdfFolderSupported, pdfFolder, choosePdfFolder, pdfFileName, savePdfToFolder } from "./invoicePdfFolder";   // v7.26.6 (A-INV-2)
 
@@ -130,7 +133,7 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
 const TAG_LABELS: Record<string, string> = { GOODS: "Goods purchase", FREIGHT: "Freight", CUSTOMS: "Customs", WAREHOUSE: "Warehouse", OVERHEAD: "Overhead", SKIP: "Skip" };
 const OP_CATEGORIES = ["salary", "office_rent", "accountant", "petrol", "software", "bank_fees", "insurance", "phone_internet", "office_supplies", "other"];
 
-function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], pos = [], onClose, onPost }: any) {
+function ImportFakturowniaModal({ invoices = [], notes = [], contacts = [], shipments = [], pos = [], onClose, onPost }: any) {
   const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [rows, setRows] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
@@ -146,13 +149,14 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     const staged = raws.map((r: any, i: number) => {
       const sug = suggestForRow(r, contacts, shipments, pos);
       const learned = learnFromRegister(r, invoices, contacts);   // v6.99.135 (A-FI-1): what this seller's last invoice was
-      const dup = isDuplicateCostInvoice(r.number, invoices);
+      const seen = alreadyImported(r, invoices, notes);   // v7.45.0 (INV2-2): one key across invoices and notes — Fakturownia id, KSeF number, NIP + number
+      const dup = !!seen || isDuplicateCostInvoice(r.number, (invoices || []).filter((i2: any) => !String(i2?.counterparty?.taxNo || "").trim() || String(i2.counterparty.taxNo).replace(/\D/g, "") === String(r.sellerTaxNo || "").replace(/\D/g, "")));
       // v7.33.1 (INV-PDF): the registered twin has no Fakturownia id (typed by hand, or made from an operational cost) — adopt it
       const twin = dup ? (invoices || []).find((i2: any) => i2 && i2.kind === "COST" && i2.paymentStatus !== "Cancelled" && String(i2.number || "").replace(/\s+/g, "").toLowerCase() === String(r.number || "").replace(/\s+/g, "").toLowerCase()) : null;
       const sameCo = (a: any, b: any) => String(a || "").toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]/g, "").slice(0, 12) === String(b || "").toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]/g, "").slice(0, 12);
       const adopt = twin && !(twin.fakturownia && (twin.fakturownia.fktId || twin.fakturownia.ref)) && r.fktId != null && (sameCo(twin.counterparty?.name, r.seller) || (twin.counterparty?.taxNo && String(twin.counterparty.taxNo).replace(/\D/g, "") === String(r.sellerTaxNo || "").replace(/\D/g, ""))) ? twin.id : null;
       const vatFix = dup ? vatFixFor(r, invoices) : null;   // v7.26.0 (A-INV-1): the old overhead path left it without VAT — this corrects it
-      return { ...r, ...sug, ...(learned?.tag ? { tag: learned.tag } : {}), dup, vatFix, adopt, include: vatFix || adopt != null ? true : (!dup && !!r.net && !!r.gross),   /* v7.26.0: a row missing its net or gross is not ticked for you */
+      return { ...r, ...sug, ...(learned?.tag ? { tag: learned.tag } : {}), dup, seenAs: seen ? seen.as : (dup ? "invoice" : ""), vatFix, adopt: seen && seen.as === "note" ? null : adopt, include: (vatFix || adopt != null) && !(seen && seen.as === "note") ? true : (!dup && !!r.net && !!r.gross),   /* v7.26.0: a row missing its net or gross is not ticked for you */
         category: learned?.category || guessCostCategory(`${r.seller} ${r.description || ""}`),
         warehouseId: learned?.warehouseId ?? (warehouses[0]?.id ?? ""), learned: learned ? { from: learned.from, recurring: learned.recurring } : null };
     });
@@ -330,7 +334,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                     )}
                     {r.tag === "SKIP" && <span style={{ color: "#CBD5E1" }}>not posted</span>}
                     {r.reason && <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{r.reason}</div>}
-                    {r.learned && <div style={{ fontSize: 10, color: "#6D28D9", marginTop: 2, fontWeight: 700 }}>proposed from {r.learned.from}{r.learned.recurring ? " · recurring monthly" : ""}</div>}{/* v6.99.135 (A-FI-1) */}
+                    {r.learned && <div style={{ fontSize: 10, color: "#6D28D9", marginTop: 2, fontWeight: 700 }}>proposed from {r.learned.basis ? `${r.learned.basis} (last: ${r.learned.from})` : r.learned.from}{r.learned.recurring ? " · recurring monthly" : ""}</div>}{/* v6.99.135 (A-FI-1) */}
                   </div>
                 </div>
               );
@@ -360,7 +364,7 @@ function monthBounds(iso: string): { from: string; to: string } {
 }
 /** v7.26.3 (A-INV-3, owner 17 Oct): THE SALES INVOICES ISSUED IN FAKTUROWNIA, each linked to its SO — so the SO reads as invoiced and
  *  is never invoiced twice. The SO is suggested (the one named on the invoice, else the client's open SO closest in amount). */
-function ImportIssuedModal({ invoices = [], contacts = [], orders = [], onClose, onPost }: any) {
+function ImportIssuedModal({ invoices = [], notes = [], contacts = [], orders = [], onClose, onPost }: any) {
   const [period, setPeriod] = useState("this_month"); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [note, setNote] = useState("");
   const [rows, setRows] = useState<any[]>([]); const cfg = readFakturowniaConfig();
   async function fetchIssued() {
@@ -368,8 +372,9 @@ function ImportIssuedModal({ invoices = [], contacts = [], orders = [], onClose,
     setBusy(true); setError(""); const r = await fetchInvoices(cfg, { income: 1, period }); setBusy(false);
     if (!r.ok) { setError(r.error || "Fetch failed."); return; }
     const staged = (r.data || []).map(mapInvoice).map((m: any, i: number) => salesRowFromMapped(m, i)).map((row: any) => {
-      const dup = isRegisteredSale(row.number, invoices); const c = soCandidatesForSale(row, orders, invoices, contacts);
-      return { ...row, dup, candidates: c.list, companyId: c.companyId, so: c.list[0]?.number || "", include: !dup && !!row.net && !!row.gross };
+      const seen = alreadyImported(row, invoices, notes); const dup = !!seen || isRegisteredSale(row.number, invoices); const c = soCandidatesForSale(row, orders, invoices, contacts);   // v7.45.0 (INV2-2)
+      // v7.45.0 (INV2-1): a correction takes its parent's links — it never gets an SO of its own
+      return { ...row, dup, seenAs: seen ? seen.as : (dup ? "invoice" : ""), candidates: row.isCorrection ? [] : c.list, companyId: c.companyId, so: row.isCorrection ? "" : (c.list[0]?.number || ""), include: !dup && !!row.net && !!row.gross };
     });
     setRows(staged); setNote(`Fakturownia returned ${staged.length} sales invoice${staged.length === 1 ? "" : "s"}${staged.some((x: any) => x.dup) ? ` — ${staged.filter((x: any) => x.dup).length} already in the register` : ""}.`);
   }
@@ -402,7 +407,7 @@ function ImportIssuedModal({ invoices = [], contacts = [], orders = [], onClose,
             <tbody>{rows.map((r: any) => <tr key={r.key} style={{ opacity: r.include ? 1 : 0.55 }}>
               <td style={{ padding: "6px" }}><input type="checkbox" checked={r.include} disabled={r.dup} onChange={(e: any) => upd(r.key, { include: e.target.checked })} /></td>
               <td style={{ padding: "6px" }}>{formatDMY(r.date)}</td>
-              <td style={{ padding: "6px", fontWeight: 700 }}>{r.number}{r.dup && <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600 }}>already in the register</div>}{(!r.net || !r.gross) && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700 }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount</div>}</td>
+              <td style={{ padding: "6px", fontWeight: 700 }}>{r.number}{r.dup && <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600 }}>{r.seenAs === "note" ? "already imported as a note" : "already in the register"}</div>}{(!r.net || !r.gross) && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700 }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount</div>}</td>
               <td style={{ padding: "6px" }}>{r.buyer}{!r.companyId && <div style={{ fontSize: 10, color: "#B45309" }}>not in Counterparties by tax number — link it later in Review</div>}</td>
               <td style={{ padding: "6px", whiteSpace: "nowrap" }}>{money(r.net, r.currency)}</td>
               <td style={{ padding: "6px", whiteSpace: "nowrap", fontWeight: 600 }}>{money(r.gross, r.currency)}</td>
@@ -473,10 +478,12 @@ function CorrectionsAsInvoices({ invoices = [], setInvoices = null, setNotes = n
   const [pick, setPick] = useState<Record<string, string>>({});
   const rows = (invoices || []).filter((i: any) => i && Number(i.grossAmount) < 0 && i.paymentStatus !== "Cancelled");
   if (!rows.length || typeof setNotes !== "function" || typeof setInvoices !== "function") return null;
-  const candidates = (i: any) => (invoices || []).filter((x: any) => x && x.id !== i.id && x.kind === i.kind && Number(x.grossAmount) > 0 && String(x.counterparty?.id ?? x.counterparty?.name) === String(i.counterparty?.id ?? i.counterparty?.name) && String(x.issueDate || "") <= String(i.issueDate || "9999")).sort((a: any, b: any) => String(b.issueDate).localeCompare(String(a.issueDate)));
+  const candidates = (i: any) => { const found = findCorrectedInvoice({ correctedFktId: i.correctedFktId, correctedKsef: i.correctedKsef, description: i.notes || i.description, number: i.number }, (invoices || []).filter((x: any) => x && x.kind === i.kind), i.counterparty?.taxNo || i.counterparty?.nip);   // v7.45.0 (INV2-1)
+    const rest = (invoices || []).filter((x: any) => x && x.id !== i.id && x.kind === i.kind && Number(x.grossAmount) > 0 && String(x.counterparty?.id ?? x.counterparty?.name) === String(i.counterparty?.id ?? i.counterparty?.name) && String(x.issueDate || "") <= String(i.issueDate || "9999")).sort((a: any, b: any) => String(b.issueDate).localeCompare(String(a.issueDate)));
+    return found ? [found, ...rest.filter((x: any) => x.id !== found.id)] : rest; };
   const convert = (i: any) => { const target = pick[String(i.id)] || String((candidates(i)[0] || {}).id || ""); const corr = (invoices || []).find((x: any) => String(x.id) === target) || null;
     const note = { id: nextId(), noteType: "CREDIT", direction: i.kind === "SALES" ? "outgoing" : "incoming", number: String(i.number || ""), date: i.issueDate, invoiceId: corr ? corr.id : null, relatedRef: corr ? String(corr.number || "") : "", partyId: i.counterparty?.id ?? null, partyName: String(i.counterparty?.name || ""), category: "Correcting invoice", amount: Math.abs(Number(i.grossAmount) || 0), currency: i.currency || "PLN", fxRate: rateOf(i), amountPLN: Math.abs(Number(i.grossPLN) || Number(i.grossAmount) || 0), status: "Issued", reason: `Correcting invoice ${String(i.number || "")} (converted from the register)`, source: `converted:${i.id}`, ...(i.pdfSavedAs ? { pdfSavedAs: i.pdfSavedAs } : {}), ...(i.fakturownia ? { fakturownia: i.fakturownia } : {}) };
-    setNotes((prev: any[]) => [...(prev || []), note]); setInvoices((prev: any[]) => (prev || []).filter((x: any) => x && x.id !== i.id).map((x: any) => corr && x.id === corr.id ? { ...x, creditNoteIds: Array.from(new Set([...(x.creditNoteIds || []), note.id])) } : x));
+    setNotes((prev: any[]) => [...(prev || []), note]); setInvoices((prev: any[]) => (prev || []).filter((x: any) => x && x.id !== i.id));   // v7.45.0 (O5): the note points at its invoice — no link written back
     recordAudit({ module: "Invoices", docType: "Note", docNumber: String(i.number || ""), action: "created", summary: `Correction converted from a negative invoice into a credit note${corr ? ` on ${corr.number}` : ""} — CR-1` }); };
   return <div data-corrections-as-invoices="1" style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 10, padding: "10px 12px", margin: "0 0 12px", fontSize: 12 }}>
     <b style={{ fontSize: 13 }}>{rows.length} correction{rows.length === 1 ? "" : "s"} recorded as {rows.length === 1 ? "an invoice" : "invoices"} with negative amounts — convert to credit notes</b>
@@ -599,7 +606,7 @@ export default function Invoices(props: any) {
   async function handleImportPost({ regs, flips, opCosts, fixes = [], adopts = [], notesIn = [] }: any) {
   if (notesIn.length && typeof setNotes === "function") {   // v7.34.0 (CN-1): correcting invoices as notes, each once
     setNotes((prev: any[]) => { const have = new Set((prev || []).map((n: any) => String(n.source || ""))); return [...(prev || []), ...notesIn.filter((n: any) => !have.has(String(n.source)))]; });
-    setInvoices((prev: any[]) => (prev || []).map((i: any) => { const mine = notesIn.filter((n: any) => n.invoiceId != null && String(n.invoiceId) === String(i?.id)); return mine.length ? { ...i, creditNoteIds: Array.from(new Set([...(i.creditNoteIds || []), ...mine.map((n: any) => n.id)])) } : i; }));
+    // v7.45.0 (O5): no creditNoteIds written back — the note points at its invoice
     recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "created", summary: `${notesIn.length} correcting invoice(s) recorded as notes — CN-1` });
   }
   if (adopts.length) {   // v7.33.1 (INV-PDF): a registered invoice is given its Fakturownia id (its PDF can be saved), its NIP and address
@@ -645,12 +652,12 @@ export default function Invoices(props: any) {
   // KPIs (PLN, net of paid)
   const recvOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "receivable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * rateOf(i)), 0);
   const payOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "payable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * rateOf(i)), 0);
-  const overdue = invoices.filter((i: Invoice) => { if (i.paymentStatus === "Paid" || i.paymentStatus === "Cancelled") return false; const d = daysUntil(i.dueDate); return d !== null && d < 0; }).length;
+  const overdue = invoices.filter((i: Invoice) => isOverdue(i, localTodayISO(), notes, contacts)).length;   // v7.46.0 (INV2-5): the one overdue rule
 
   const filtered = invoices.filter((i: Invoice) => archiveShow(i) &&   /* v6.99.54 (AR-4) */
     (!search || i.number.toLowerCase().includes(search.toLowerCase()) || (i.counterparty?.name || "").toLowerCase().includes(search.toLowerCase()) || i.links.some(l => l.number.toLowerCase().includes(search.toLowerCase()))) &&
     (fDir === "All" || invoiceDirection(i) === fDir) &&
-    (fStatus === "All" ? i.paymentStatus !== "Cancelled" : i.paymentStatus === fStatus)   // v6.99.106 (A-DEL-4): deleted invoices show only under the Deleted entry
+    (fStatus === "All" ? i.paymentStatus !== "Cancelled" : fStatus === "Overdue" ? isOverdue(i, localTodayISO(), notes, contacts) : i.paymentStatus === fStatus)   // v7.46.0 (INV2-5): "Overdue" is worked out, never stored   // v6.99.106 (A-DEL-4): deleted invoices show only under the Deleted entry
   ).sort((a: Invoice, b: Invoice) => String(b.issueDate || "").localeCompare(String(a.issueDate || "")));
 
   // #7: credit/debit notes also belong in the main view (not only hidden on their
@@ -871,7 +878,7 @@ export default function Invoices(props: any) {
     const fx = resolveFxRate(f.fxRate, f.currency);
     const rec: FinanceNote = { ...f, id: f.id ?? nextId(), amount: parseNum(f.amount) || 0, fxRate: fx, amountPLN: Math.round((parseNum(f.amount) || 0) * fx * 100) / 100 };
     setNotes((prev: FinanceNote[]) => { const ex = (prev || []).find(p => p.id === rec.id); return ex ? prev.map(p => p.id === rec.id ? rec : p) : [...(prev || []), rec]; });
-    if (rec.invoiceId != null) setInvoices((prev: Invoice[]) => prev.map(p => p.id === rec.invoiceId ? { ...p, creditNoteIds: Array.from(new Set([...(p.creditNoteIds || []), rec.id])) } : p));
+    // v7.45.0 (O5): no creditNoteIds written back — the note points at its invoice
     setView(selected ? "detail" : "list"); setNoteForm(null);
   }
 
@@ -924,8 +931,8 @@ export default function Invoices(props: any) {
           <button disabled={pdfBusy} onClick={() => savePdfs(false)} title="v7.26.6 (A-INV-2): each invoice's PDF from Fakturownia into your Dropbox folder (chosen once) — date_number_company.pdf" style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{pdfBusy ? "Saving PDFs…" : "PDFs → folder"}</button>
           <button onClick={() => savePdfs(true)} title="Choose or change the folder the PDFs go to" style={{ padding: "6px 8px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Folder…</button>
           <button onClick={() => setShowIssued(true)} title="v7.26.3 (A-INV-3): the sales invoices your team issued in Fakturownia — registered here and linked to their sales order" style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Sales invoices from Fakturownia</button>
-          {showIssued && <ImportIssuedModal invoices={invoices} contacts={contacts} orders={orders} onClose={() => setShowIssued(false)} onPost={async (p: any) => { setShowIssued(false); await handleImportPost(p); }} />}
-          {showImport && <ImportFakturowniaModal invoices={invoices} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
+          {showIssued && <ImportIssuedModal invoices={invoices} notes={notes} contacts={contacts} orders={orders} onClose={() => setShowIssued(false)} onPost={async (p: any) => { setShowIssued(false); await handleImportPost(p); }} />}
+          {showImport && <ImportFakturowniaModal invoices={invoices} notes={notes} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
           <button onClick={() => newNote()} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>+ Credit/Debit note</button>
         </div>
       </div>
@@ -964,7 +971,7 @@ export default function Invoices(props: any) {
           </div>
           {filtered.length === 0 && filteredNotes.length === 0 && <div style={{ padding: "36px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No invoices yet. Create one above, or they'll appear here as Sales Orders are invoiced and cost invoices are recorded.</div>}
           {filtered.map((i: Invoice, idx: number) => {
-            const d = daysUntil(i.dueDate); const od = i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled" && d !== null && d < 0;
+            const d = daysUntil(i.dueDate); const od = isOverdue(i, localTodayISO(), notes, contacts);   /* v7.46.0 (INV2-5) */
             return (
               <div key={i.id} onClick={() => { setSelId(i.id); setView("detail"); }} style={{ display: "grid", gridTemplateColumns: "88px 150px 1fr 92px 92px 118px 118px 124px 90px", padding: "11px 16px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><CatBadge cat={i.category} /></div>
@@ -1129,6 +1136,12 @@ function InvoicePdfTools({ inv, setInvoices }: any) {
   return <div data-invoice-pdf-tools="1" style={{ marginTop: 8, padding: "8px 10px", border: "1px dashed #CBD5E1", borderRadius: 8, fontSize: 12 }}
     onDragOver={(e: any) => e.preventDefault()} onDrop={(e: any) => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) dropPdf(f); }}>
     <div style={{ fontWeight: 700, marginBottom: 4 }}>This invoice's PDF is not in the folder yet</div>
+    {!fid && inv.kind === "COST" && <div style={{ marginBottom: 6 }}><button type="button" data-register-expense="1" onClick={async () => {   // v7.48.0 (INV2-7): one register
+      const us = companyProfile(); const r = await registerExpense(expensePayload(inv, { name: us.name, nip: us.nip }));
+      if (!r.ok || !r.data || (r.data as any).id == null) { setMsg(String(r.error || "Fakturownia did not register it.")); return; }
+      upd((x: any) => ({ fakturownia: { ...(x.fakturownia || {}), fktId: (r.data as any).id, registeredFromErp: true } })); setMsg("Registered in Fakturownia — the next import recognises it; its PDF can now be saved.");
+      recordAudit({ module: "Invoices", docType: "Invoice", docNumber: String(inv.number || ""), action: "updated", summary: `Registered in Fakturownia as a purchase invoice (id ${(r.data as any).id}) — INV2-7` }); }}
+      style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #1D4ED8", background: "#fff", color: "#1D4ED8", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Register in Fakturownia (purchase invoice)</button></div>}
     {!fid && <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}><input value={link} onChange={e => setLink(e.target.value)} placeholder="Fakturownia link of this invoice (…/invoices/123456)" style={{ flex: 1, padding: "5px 8px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12 }} /><button type="button" onClick={useLink} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Use</button></div>}
     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
       <label style={{ cursor: "pointer", color: "#1D4ED8", textDecoration: "underline" }}>Drop or choose the PDF received<input type="file" accept="application/pdf" style={{ display: "none" }} onChange={e => dropPdf((e.target.files || [])[0] || null)} /></label>

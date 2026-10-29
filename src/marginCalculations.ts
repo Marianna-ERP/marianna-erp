@@ -25,6 +25,7 @@ import { resolveFxRate , rateOf } from "./fx";
 // branching at render time.
 
 import { shippedKgByLine } from "./salesOrders.domain";
+import { correctionsPLNFor, poCorrectionPerKg } from "./correctionCosts.domain";   // v7.47.0 (INV-C)
 import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 
 export type MarginMode = "forecast" | "actual";
@@ -178,7 +179,7 @@ function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipment
 
 // ─── COGS ───────────────────────────────────────────────────────────────────
 
-function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode): { lines: MarginLine[]; totalPLN: number; warnings: string[]; hasMissingData: boolean } {
+function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode, invoices: any[] = [], notes: any[] = []): { lines: MarginLine[]; totalPLN: number; warnings: string[]; hasMissingData: boolean } {
   const lines: MarginLine[] = [];
   let totalPLN = 0;
   const warnings: string[] = [];
@@ -196,7 +197,7 @@ function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode): { l
         hasMissingData = true;
         return;
       }
-      const costPerKg = lotCostPerKg(lot);
+      const costPerKg = lotCostPerKg(lot) + poCorrectionPerKg(lot.poRef, lots, invoices, notes);   // v7.47.0 (INV-C): the PO's corrections, read from their notes
       let attributableKg = qty;
       if (mode === "actual") {
         // For ACTUAL view, only attribute the kg actually shipped from this lot for this SO
@@ -271,7 +272,7 @@ function costLineAllocatedToLots(sh: any, cost: any, lots: any[]): boolean {
   return (lots || []).some((l: any) => (l.costs || []).some((c: any) => String(c.source || "") === tag));
 }
 
-function computeDirectCosts(order: any, shipments: any[], mode: MarginMode, lots: any[] = []): { lines: MarginLine[]; totalPLN: number; warnings: string[] } {
+function computeDirectCosts(order: any, shipments: any[], mode: MarginMode, lots: any[] = [], invoices: any[] = [], notes: any[] = []): { lines: MarginLine[]; totalPLN: number; warnings: string[] } {
   const lines: MarginLine[] = [];
   const warnings: string[] = [];
   let totalPLN = 0;
@@ -316,6 +317,10 @@ function computeDirectCosts(order: any, shipments: any[], mode: MarginMode, lots
     });
   });
 
+  // v7.47.0 (INV-C): a carrier's / customs agent's correction on the shipment's invoices, at this sale's share of the shipment
+  (shipments || []).filter((s: any) => s && s.status !== "Cancelled").forEach((s: any) => { const share = shipmentSOShare(s, order.number); if (!(share > 0)) return;
+    const pln = correctionsPLNFor("Shipment", s.number, invoices, notes); if (!pln) return; const part = round2(pln * share); totalPLN += part;
+    lines.push({ label: `Correction on ${s.number}'s invoices (${Math.round(share * 100)}% of the shipment)`, amountPLN: part, note: "credit / debit notes on the carrier's or agent's invoices" } as any); });
   return { lines, totalPLN: round2(totalPLN), warnings };
 }
 
@@ -334,8 +339,8 @@ export function computeSOMargin(
   const fxRate = rateOf(order);   // v7.44.0 (AUD3-L2)
 
   const rev = computeRevenue(order, mode, lots, shipments);
-  const cogs = computeCOGS(order, lots, pos, mode);
-  const direct = computeDirectCosts(order, shipments, mode, lots);
+  const cogs = computeCOGS(order, lots, pos, mode, invoices, financeNotes);
+  const direct = computeDirectCosts(order, shipments, mode, lots, invoices, financeNotes);
 
   // v6.99.132 (AUD-34): the invoice owns the value once issued — revenue = the sale's invoices' net (excl. VAT) at their rates,
   // less the client's credit / debit notes on them; the order's lines only until invoiced (the rule the settlement follows)

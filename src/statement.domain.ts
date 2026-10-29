@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2 } from "./format";
+import { openOf, dueDateOf } from "./overdue.domain";   // v7.46.1 (INV2-5)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // statement.domain.ts — v6.98.1: STATEMENT OF ACCOUNT per client / supplier
 // A derived view over the Invoices register (invoices, credit/debit notes, payment
@@ -16,7 +17,7 @@ function isBefore(d: string, from: string) { return from && S(d) && S(d) < from;
 
 /** side "client": their invoices (SALES) are DEBITS to them, our credit notes and their payments are CREDITS.
  *  side "supplier": their invoices (COST) are CREDITS (we owe), our payments and their credit notes are DEBITS. */
-export function statementFor(counterpartyName: string, side: "client" | "supplier", currency: string, invoices: any[], notes: any[], from: string, to: string, todayISO: string): Statement {
+export function statementFor(counterpartyName: string, side: "client" | "supplier", currency: string, invoices: any[], notes: any[], from: string, to: string, todayISO: string, contacts: any[] = []): Statement {
   const cur = S(currency || "PLN").toUpperCase();
   const kind = side === "client" ? "SALES" : "COST";
   const rows: Array<{ date: string; line: Omit<StatementLine, "balance"> }> = [];
@@ -60,8 +61,9 @@ export function statementFor(counterpartyName: string, side: "client" | "supplie
   (invoices || []).forEach(inv => {
     if (!inv || inv.kind !== kind || inv.isProforma || ["Cancelled", "Draft"].includes(inv.paymentStatus)) return;
     if (!sameParty(inv.counterparty?.name, counterpartyName) || S(inv.currency || "PLN").toUpperCase() !== cur) return;
-    const open = r2(num(inv.grossAmount) - num(inv.paidAmount)); if (open <= 0.005) return;
-    const days = inv.dueDate ? Math.round((new Date(todayISO).getTime() - new Date(inv.dueDate).getTime()) / 86400000) : -1;
+    if (!(num(inv.grossAmount) > 0)) return;   // v7.46.1 (INV2-5): a correction is not an overdue item
+    const open = r2(openOf(inv, notes)); if (open <= 0.005) return;
+    const due = dueDateOf(inv, contacts); const days = due ? Math.round((new Date(todayISO).getTime() - new Date(due).getTime()) / 86400000) : -1;
     if (days <= 0) aging.current += open; else if (days <= 30) aging.d30 += open; else if (days <= 60) aging.d60 += open; else if (days <= 90) aging.d90 += open; else aging.older += open;
     if (days > 0) overdue += open;
   });

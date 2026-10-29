@@ -416,3 +416,20 @@ export function importedTwice(invoices: any[], opCosts: any[] = []): { invoices:
       if (own) mirrors.forEach((c: any) => goneOp.push(c.id)); }); });
   return { invoices: goneInv, opCosts: goneOp };
 }
+
+/** v7.45.0 (INV2-2): the copies a re-import made of a correction — two notes with one Fakturownia id (the later goes), or a note and a negative
+ *  invoice sharing one (the negative invoice goes: the note is the correction). Nothing paid is removed. */
+export function notesImportedTwice(invoices: any[], notes: any[]): { notes: any[]; invoices: any[] } {
+  const fidOf = (d: any) => String((d?.fakturownia || {}).fktId ?? (d?.fakturownia || {}).ref ?? (String(d?.source || "").match(/^fakturownia-correction:(\d+)$/) || [])[1] ?? "");
+  const goneN: any[] = [], goneI: any[] = []; const byId = new Map<string, any[]>();
+  (notes || []).forEach((n: any) => { const k = fidOf(n); if (!k || String(n?.status) === "Cancelled") return; byId.set(k, [...(byId.get(k) || []), n]); });
+  const order = (a: any, b: any) => { const x = Number(a.id), y = Number(b.id); return isFinite(x) && isFinite(y) ? x - y : String(a.id).localeCompare(String(b.id)); };   // the earliest kept
+  byId.forEach(list => { if (list.length < 2) return; [...list].sort(order).slice(1).forEach((n: any) => goneN.push(n.id)); });
+  (invoices || []).forEach((i: any) => { const k = fidOf(i); if (k && byId.has(k) && Number(i.grossAmount) < 0 && !(Number(i.paidAmount) > 0) && !(i.payments || []).length) goneI.push(i.id); });
+  return { notes: goneN, invoices: goneI };
+}
+/** v7.45.0 (INV2-3, O1): purchase invoices imported from Fakturownia before v6.99.120 were saved as Draft and never moved on — they are
+ *  received invoices: Issued. */
+export function importedDrafts(invoices: any[]): any[] {
+  return (invoices || []).filter((i: any) => i && i.kind === "COST" && String(i.paymentStatus) === "Draft" && (String(i.source || "").startsWith("fakturownia") || (i.fakturownia && (i.fakturownia.fktId != null)))).map((i: any) => i.id);
+}

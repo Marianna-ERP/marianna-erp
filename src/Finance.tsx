@@ -154,7 +154,7 @@ function newCostTemplate(): OperationalCost {
 
 
 // ── v6.99.0 (FN-1/FN-2/FN-3): CLOSE THE MONTH · MANAGEMENT PACKAGE · CASH VIEW ──
-function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSettlements = [], invoices = [], bankAccounts = [], closedPeriods = [], setClosedPeriods = null, userName = "", canClose = true }: any) {
+function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSettlements = [], invoices = [], bankAccounts = [], closedPeriods = [], setClosedPeriods = null, userName = "", canClose = true, financeNotes = [], contacts = [] }: any) {
   const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const today = localTodayISO(); const thisMonth = today.slice(0, 7);
   const prevMonth = prevMonthISO(today);   // v6.99.122 (AUD-07/09): from the text
@@ -165,7 +165,7 @@ function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSett
   const stockValue = stockLots.reduce((s: number, l: any) => { const kg = Number(l.receivedKg) || Number(l.physicalKg) || 0; const cost = (l.costs || []).reduce((a: number, c: any) => a + (Number(c.pln) || 0), 0); return s + (kg > 0 ? cost / kg * (Number(l.physicalKg) || 0) : 0); }, 0);
   const live = buildSnapshot(period, { totalAgg, ledgerTotals, stockKg, stockValuePLN: stockValue, openClaims: (claims || []).filter((c: any) => !["Settled", "Rejected", "Withdrawn", "Closed"].includes(String(c.status))).length, settlementsClosed: (poSettlements || []).filter((s: any) => s.status === "Closed" && String(s.closedAt || "").startsWith(period)).length, realizedFxPLN: (invoices || []).reduce((s: number, i: any) => s + realizedFxPLN(i), 0), bankBalances: (bankAccounts || []).map((b: any) => ({ label: b.label || b.bank, currency: b.currency, balance: b.lastKnownBalance })) });
   const snap = closed ? closed.snapshot : live;
-  const cash = cashProjection(invoices, today);
+  const cash = cashProjection(invoices, today, financeNotes, contacts);   // v7.46.1 (INV2-5): the one overdue rule
   const fmt = (n: number) => (n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   const Row = ({ k, v, color }: any) => <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, padding: "2px 0" }}><span style={{ color: "#64748B" }}>{k}</span><b style={{ color: color || "#111", fontVariantNumeric: "tabular-nums" }}>{v}</b></div>;
   return (
@@ -303,7 +303,7 @@ export function ConsignmentPositionsCard({ pos = [], lots = [], orders = [], inv
   );
 }
 
-function StatementCard({ invoices = [], financeNotes = [] }: any) {
+function StatementCard({ invoices = [], financeNotes = [], contacts = [] }: any) {
   const [side, setSide] = React.useState<"client" | "supplier">("client");
   const [name, setName] = React.useState("");
   const [from, setFrom] = React.useState(() => { const d = localTodayISO(); return d.slice(0, 8) + "01"; });
@@ -311,7 +311,7 @@ function StatementCard({ invoices = [], financeNotes = [] }: any) {
   const [cur, setCur] = React.useState("PLN");
   const parties = Array.from(new Set((invoices || []).filter((i: any) => i.kind === (side === "client" ? "SALES" : "COST") && !i.isProforma && i.paymentStatus !== "Cancelled").map((i: any) => String(i.counterparty?.name || "")).filter(Boolean))).sort((a: string, b: string) => a.localeCompare(b, "pl"));
   const currencies = name ? statementCurrencies(name, side, invoices, financeNotes) : [];
-  const st = name ? statementFor(name, side, currencies.includes(cur) ? cur : (currencies[0] || "PLN"), invoices, financeNotes, from, to, localTodayISO()) : null;
+  const st = name ? statementFor(name, side, currencies.includes(cur) ? cur : (currencies[0] || "PLN"), invoices, financeNotes, from, to, localTodayISO(), contacts) : null;
   const fmt = (n: number) => n ? n.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) : "";
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11 };
   return (
@@ -590,7 +590,7 @@ function LedgerView({ bankLines = null, setBankLines = null, orders = [], lots =
       <BankImportPanel financeNotes={financeNotes} bankLines={bankLines} setBankLines={setBankLines} invoices={invoices} setInvoices={setInvoices} nextId={nextId} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`ledger_${xlsStamp()}`, items, [{ key: "direction", label: "Direction" }, { key: "kind", label: "Kind" }, { key: "ref", label: "Reference" }, { key: "counterparty", label: "Counterparty" }, { key: "date", label: "Date" }, { key: "dueDate", label: "Due" }, { key: "currency", label: "Currency" }, { key: "amount", label: "Amount" }, { key: "amountPLN", label: "Open PLN" }, { key: "status", label: "Status" }, { key: "daysOverdue", label: "Days overdue" }], "Ledger")} title="v6.99.0: exports the open items as listed">Export file (Excel)</SmallButton></div>
       {canOpenFinance(users, userName, "clients") && <ClientRiskCard invoices={invoices} orders={orders} contacts={contacts} />}
-      <StatementCard invoices={invoices} financeNotes={financeNotes} />
+      <StatementCard contacts={contacts} invoices={invoices} financeNotes={financeNotes} />
       <AdvancesPanel advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} invoices={invoices} setInvoices={setInvoices} bankAccounts={bankAccounts} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
         <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 20, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10, color: "#B45309" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
@@ -1087,7 +1087,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
               </div>
               {canOpenFinance(users, userName, "pl") && <ConsignmentResultsCard pos={pos} lots={lots} orders={orders} invoices={invoices} shipments={shipments} financeNotes={financeNotes} />}{/* v7.8.3 (A-PL-2) */}
               {canOpenFinance(users, userName, "pl") && <PurchaseResultsCard pos={pos} lots={lots} orders={orders} shipments={shipments} />}
-              {canOpenFinance(users, userName, "pl") && <MonthCloseCard totalAgg={totalAgg} ledgerTotals={buildLedger({ orders, lots, pos, invoices, financeNotes, todayISO: localTodayISO() }).totals} lots={lots} claims={claims} poSettlements={poSettlements} invoices={invoices} bankAccounts={bankAccounts} closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} userName={userName} canClose={canOpenFinance(users, userName, "pl")} />}
+              {canOpenFinance(users, userName, "pl") && <MonthCloseCard financeNotes={financeNotes} contacts={contacts} totalAgg={totalAgg} ledgerTotals={buildLedger({ orders, lots, pos, invoices, financeNotes, todayISO: localTodayISO() }).totals} lots={lots} claims={claims} poSettlements={poSettlements} invoices={invoices} bankAccounts={bankAccounts} closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} userName={userName} canClose={canOpenFinance(users, userName, "pl")} />}
               {canOpenFinance(users, userName, "budget") && typeof setBudgets === "function" && (() => {
                 const period = localTodayISO().slice(0, 7);
                 const actuals: any = { revenue: totalAgg.totalRevenuePLN, contribution: totalAgg.totalContributionPLN, overhead: totalAgg.totalOverheadPLN, net: totalAgg.totalNetMarginPLN ?? 0 };
