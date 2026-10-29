@@ -8,7 +8,7 @@ import { paymentDaysFor, dueDateFromIssue } from "./po.domain";
 import { soInvoiceDueDate } from "./so.domain";
 import { requiredLinkMissing, proposeLinks, defaultCostDueDate, matchInvoiceToCostLine, positionsMismatch } from "./invoicePlus.domain";
 import { periodGuard } from "./periodClose.domain";
-import { fxMissing } from "./fx";
+import { fxMissing , rateOf } from "./fx";
 import DateInput from "./DateInput";
 import { useConfirm, notifySaved, SmallButton } from "./ui";
 import React, { useMemo, useState, useEffect } from "react";
@@ -117,7 +117,7 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. bank ref, partial 1/2" style={inp} />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
           <button onClick={onClose} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
-          <button onClick={() => onSave({ date, amount, method, note, settlementFxRate: settleRate })} disabled={!(parseFloat(amount) > 0)} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: parseFloat(amount) > 0 ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: parseFloat(amount) > 0 ? "pointer" : "not-allowed" }}>Add payment</button>
+          <button onClick={() => onSave({ date, amount, method, note, settlementFxRate: settleRate })} disabled={!(parseNum(amount) > 0)} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: parseNum(amount) > 0 ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: parseNum(amount) > 0 ? "pointer" : "not-allowed" }}>Add payment</button>
         </div>
       </div>
     </div>
@@ -282,7 +282,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
               {["", "DATE", "SELLER", "NUMBER", "NET", "TAG", "ROUTE / LINK"].map((h, i) => <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
             </div>
             {rows.map((r: any) => {
-              const rowPLN = Math.round((r.net || r.gross) * (r.fxRate || 1) * 100) / 100;
+              const rowPLN = Math.round((r.net || r.gross) * rateOf(r) * 100) / 100;
               return (
                 <div key={r.key} style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "7px 0", borderBottom: "1px solid #F8FAFC", alignItems: "center", opacity: r.include ? 1 : 0.55 }}>
                   <input type="checkbox" checked={r.include} onChange={async (e: any) => {
@@ -297,7 +297,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                   <div style={{ fontSize: 11, color: "#64748B" }}>{formatDMY(r.date)}</div>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.adopt != null && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#15803D" }}>already in the register — gets its Fakturownia link</span>}{r.vatFix && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#0E7490" }}>corrects the VAT of the invoice already registered ({r.vatFix.confirmZero ? "0 % confirmed" : `${Number(r.vatFix.vatRate).toFixed(2)} %`})</span>}{(!r.net || !r.gross) && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B45309" }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount — check it there before posting</span>}{r.dup && !r.vatFix && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
                   <div style={{ fontSize: 11, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.number || "—"}</div>
-                  <div style={{ fontSize: 12 }} data-import-amounts="1">net {(r.net || 0).toLocaleString("pl-PL")} · VAT {Math.round(((r.gross || 0) - (r.net || 0)) * 100 / 100).toLocaleString("pl-PL")} · <b>gross {(r.gross || r.net || 0).toLocaleString("pl-PL")} {r.currency}</b>{r.currency !== "PLN" ? <span style={{ color: "#64748B" }}> ({Math.round((r.gross || r.net || 0) * (r.fxRate || 1) * 100 / 100).toLocaleString("pl-PL")} PLN)</span> : null}</div>   {/* v7.34.0 (IMP-1) */}
+                  <div style={{ fontSize: 12 }} data-import-amounts="1">net {(r.net || 0).toLocaleString("pl-PL")} · VAT {Math.round(((r.gross || 0) - (r.net || 0)) * 100 / 100).toLocaleString("pl-PL")} · <b>gross {(r.gross || r.net || 0).toLocaleString("pl-PL")} {r.currency}</b>{r.currency !== "PLN" ? <span style={{ color: "#64748B" }}> ({Math.round((r.gross || r.net || 0) * rateOf(r) * 100 / 100).toLocaleString("pl-PL")} PLN)</span> : null}</div>   {/* v7.34.0 (IMP-1) */}
                   <select style={inp} value={r.tag} onChange={(e: any) => upd(r.key, { tag: e.target.value })}>
                     {IMPORT_TAGS.map((t: string) => <option key={t} value={t}>{TAG_LABELS[t]}</option>)}
                   </select>
@@ -425,7 +425,7 @@ function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any
   const siteKey = sites.join(","); const siteList = useMemo(() => siteKey ? siteKey.split(",") : [], [siteKey]);
   const proposal = useMemo(() => proposeWarehouseAllocation(inv, lots || [], siteList, from, to), [inv, lots, from, to, siteList]);
   const [over, setOver] = useState<Record<string, string>>({});
-  const rows = proposal.rows.map(r => ({ ...r, pln: over[r.lotNumber] !== undefined && over[r.lotNumber] !== "" ? (parseFloat(String(over[r.lotNumber]).replace(",", ".")) || 0) : r.pln }));
+  const rows = proposal.rows.map(r => ({ ...r, pln: over[r.lotNumber] !== undefined && over[r.lotNumber] !== "" ? (parseNum(String(over[r.lotNumber]).replace(",", ".")) || 0) : r.pln }));
   const sum = Math.round(rows.reduce((a, r) => a + r.pln, 0) * 100) / 100; const diff = Math.round((sum - proposal.totalPLN) * 100) / 100;
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12, width: "100%", boxSizing: "border-box" };
   return (
@@ -475,7 +475,7 @@ function CorrectionsAsInvoices({ invoices = [], setInvoices = null, setNotes = n
   if (!rows.length || typeof setNotes !== "function" || typeof setInvoices !== "function") return null;
   const candidates = (i: any) => (invoices || []).filter((x: any) => x && x.id !== i.id && x.kind === i.kind && Number(x.grossAmount) > 0 && String(x.counterparty?.id ?? x.counterparty?.name) === String(i.counterparty?.id ?? i.counterparty?.name) && String(x.issueDate || "") <= String(i.issueDate || "9999")).sort((a: any, b: any) => String(b.issueDate).localeCompare(String(a.issueDate)));
   const convert = (i: any) => { const target = pick[String(i.id)] || String((candidates(i)[0] || {}).id || ""); const corr = (invoices || []).find((x: any) => String(x.id) === target) || null;
-    const note = { id: nextId(), noteType: "CREDIT", direction: i.kind === "SALES" ? "outgoing" : "incoming", number: String(i.number || ""), date: i.issueDate, invoiceId: corr ? corr.id : null, relatedRef: corr ? String(corr.number || "") : "", partyId: i.counterparty?.id ?? null, partyName: String(i.counterparty?.name || ""), category: "Correcting invoice", amount: Math.abs(Number(i.grossAmount) || 0), currency: i.currency || "PLN", fxRate: Number(i.fxRate) || 1, amountPLN: Math.abs(Number(i.grossPLN) || Number(i.grossAmount) || 0), status: "Issued", reason: `Correcting invoice ${String(i.number || "")} (converted from the register)`, source: `converted:${i.id}`, ...(i.pdfSavedAs ? { pdfSavedAs: i.pdfSavedAs } : {}), ...(i.fakturownia ? { fakturownia: i.fakturownia } : {}) };
+    const note = { id: nextId(), noteType: "CREDIT", direction: i.kind === "SALES" ? "outgoing" : "incoming", number: String(i.number || ""), date: i.issueDate, invoiceId: corr ? corr.id : null, relatedRef: corr ? String(corr.number || "") : "", partyId: i.counterparty?.id ?? null, partyName: String(i.counterparty?.name || ""), category: "Correcting invoice", amount: Math.abs(Number(i.grossAmount) || 0), currency: i.currency || "PLN", fxRate: rateOf(i), amountPLN: Math.abs(Number(i.grossPLN) || Number(i.grossAmount) || 0), status: "Issued", reason: `Correcting invoice ${String(i.number || "")} (converted from the register)`, source: `converted:${i.id}`, ...(i.pdfSavedAs ? { pdfSavedAs: i.pdfSavedAs } : {}), ...(i.fakturownia ? { fakturownia: i.fakturownia } : {}) };
     setNotes((prev: any[]) => [...(prev || []), note]); setInvoices((prev: any[]) => (prev || []).filter((x: any) => x && x.id !== i.id).map((x: any) => corr && x.id === corr.id ? { ...x, creditNoteIds: Array.from(new Set([...(x.creditNoteIds || []), note.id])) } : x));
     recordAudit({ module: "Invoices", docType: "Note", docNumber: String(i.number || ""), action: "created", summary: `Correction converted from a negative invoice into a credit note${corr ? ` on ${corr.number}` : ""} — CR-1` }); };
   return <div data-corrections-as-invoices="1" style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 10, padding: "10px 12px", margin: "0 0 12px", fontSize: 12 }}>
@@ -643,8 +643,8 @@ export default function Invoices(props: any) {
   const selected: Invoice | null = useMemo(() => invoices.find((i: Invoice) => i.id === selId) || null, [invoices, selId]);
 
   // KPIs (PLN, net of paid)
-  const recvOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "receivable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * (i.fxRate || 1)), 0);
-  const payOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "payable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * (i.fxRate || 1)), 0);
+  const recvOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "receivable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * rateOf(i)), 0);
+  const payOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "payable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * rateOf(i)), 0);
   const overdue = invoices.filter((i: Invoice) => { if (i.paymentStatus === "Paid" || i.paymentStatus === "Cancelled") return false; const d = daysUntil(i.dueDate); return d !== null && d < 0; }).length;
 
   const filtered = invoices.filter((i: Invoice) => archiveShow(i) &&   /* v6.99.54 (AR-4) */
@@ -736,7 +736,7 @@ export default function Invoices(props: any) {
         const soRefs = (inv.links || []).filter((l: any) => l.type === "SO").map((l: any) => String(l.number));
         const notLoaded = soRefs.filter(n => { const so = (orders || []).find((o: any) => String(o.number) === n); if (!so) return false; return !["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(so, shipments || []))); });
         // v6.99.56 (A-PL-2, owner): a size the producer added joins the sale at a price to agree — no invoice until it is agreed
-        const unpriced = soRefs.flatMap(n => { const so = (orders || []).find((o: any) => String(o.number) === n); return so ? (so.items || []).filter((it: any) => !(parseFloat(it.unitPrice) > 0)).map((it: any) => `${n} · ${it.product || ""} ${it.size || ""}`.trim()) : []; });
+        const unpriced = soRefs.flatMap(n => { const so = (orders || []).find((o: any) => String(o.number) === n); return so ? (so.items || []).filter((it: any) => !(parseNum(it.unitPrice) > 0)).map((it: any) => `${n} · ${it.product || ""} ${it.size || ""}`.trim()) : []; });
         if (unpriced.length) { await invAlert({ tone: "warn", title: "Price to agree", message: `Agree the sales price first on: ${unpriced.join(", ")}` }); return; }
         if (notLoaded.length) { await invAlert({ tone: "warn", title: "Goods not loaded", message: `${notLoaded.join(", ")} ${notLoaded.length > 1 ? "have" : "has"} not been loaded yet — a sales invoice covers goods that left the warehouse. Issue a pro-forma for an advance, or load the truck first.` }); return; }
       } }
@@ -866,10 +866,10 @@ export default function Invoices(props: any) {
   }
   async function saveNote() {
     const f = noteForm;
-    if (!(parseFloat(f.amount) > 0)) { await invAlert({ tone: "warn", title: "Amount required", message: "Enter an amount greater than zero." }); return; }
+    if (!(parseNum(f.amount) > 0)) { await invAlert({ tone: "warn", title: "Amount required", message: "Enter an amount greater than zero." }); return; }
     if (!String(f.partyName || "").trim()) { await invAlert({ tone: "warn", title: "Counterparty required", message: "Enter the counterparty." }); return; }
     const fx = resolveFxRate(f.fxRate, f.currency);
-    const rec: FinanceNote = { ...f, id: f.id ?? nextId(), amount: parseFloat(f.amount) || 0, fxRate: fx, amountPLN: Math.round((parseFloat(f.amount) || 0) * fx * 100) / 100 };
+    const rec: FinanceNote = { ...f, id: f.id ?? nextId(), amount: parseNum(f.amount) || 0, fxRate: fx, amountPLN: Math.round((parseNum(f.amount) || 0) * fx * 100) / 100 };
     setNotes((prev: FinanceNote[]) => { const ex = (prev || []).find(p => p.id === rec.id); return ex ? prev.map(p => p.id === rec.id ? rec : p) : [...(prev || []), rec]; });
     if (rec.invoiceId != null) setInvoices((prev: Invoice[]) => prev.map(p => p.id === rec.invoiceId ? { ...p, creditNoteIds: Array.from(new Set([...(p.creditNoteIds || []), rec.id])) } : p));
     setView(selected ? "detail" : "list"); setNoteForm(null);
@@ -1034,7 +1034,7 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
             if (!evts.length) return null;
             return (
               <div style={{ marginTop: 10, border: "1px solid #E5E7EB", borderRadius: 9, padding: "8px 12px", background: "#FAFAFA" }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 6 }}>PAYMENTS ({evts.length}) — {money(evts.reduce((t: number, p: any) => t + (parseFloat(p.amount) || 0), 0), inv.currency)} of {money(inv.grossAmount, inv.currency)}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 6 }}>PAYMENTS ({evts.length}) — {money(evts.reduce((t: number, p: any) => t + (parseNum(p.amount) || 0), 0), inv.currency)} of {money(inv.grossAmount, inv.currency)}</div>
                 {evts.map((p: any) => (
                   <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "3px 0", borderTop: "1px solid #F1F5F9" }}>
                     <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", color: "#64748B", minWidth: 82 }}>{formatDMY(p.date) || "—"}</span>

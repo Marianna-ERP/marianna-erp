@@ -197,7 +197,6 @@ export function updateCustomLocation(id: number, patch: { name?: string; country
 // its permanent, version-independent name. Deliberately left as-is.
 /** The old names of the lookups, kept for their callers — v7.32.0: they read the Parties the App handed over, never a copy. */
 export function locById(id: any): Location | null { return locationById(id); }
-export function locText(id: any, fallback = ""): string { const l = locById(id); if (!l) return fallback || "—"; return l.address ? `${l.name}, ${l.address}` : l.name; }
 /** v6.73.0: A→Z by name. New entries used to land at the bottom of every
  *  dropdown in entry order, which makes a list of eighty places unusable. */
 export function sortLocations(list: Location[]): Location[] {

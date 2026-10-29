@@ -42,16 +42,6 @@ export function resolveFxRate(explicit: any, currency?: string): number {
 
 
 // ── v6.99.3 (owner: FX auto): NBP table A — the official daily reference; sets the reference rates when reachable.
-export async function fetchNbpRates(): Promise<Record<string, number> | null> {
-  try {
-    const r = await fetch("https://api.nbp.pl/api/exchangerates/tables/A?format=json");
-    if (!r.ok) return null;
-    const j = await r.json(); const rates = (j?.[0]?.rates || []) as any[];
-    const out: Record<string, number> = {};
-    rates.forEach((x: any) => { const c = String(x.code || "").toUpperCase(); const m = Number(x.mid); if (["EUR", "USD", "GBP", "HUF", "CZK"].includes(c) && isFinite(m) && m > 0) out[c] = Math.round(m * 10000) / 10000; });
-    return Object.keys(out).length ? { ...out, _date: (j?.[0]?.effectiveDate ? Number(String(j[0].effectiveDate).replace(/-/g, "")) : 0) } as any : null;
-  } catch { return null; }
-}
 
 // ── v6.99.14 (A-R10-4, owner rule): ONE FX rule for every document ──
 //   pre-filled from the reference on the day the document is created · editable until confirmed/issued · then locked with its date.
@@ -156,3 +146,13 @@ export function fxRateFor(currency: any, dateISO?: string): number | null {
 export function nbpHeld(): { latest: string; days: number } { const days = Object.keys(NBP.days || {}).sort(); return { latest: days[days.length - 1] || "", days: days.length }; }
 /** Keep the last fortnight's tables read (the start, a new day, the window back in view); resolves true when NBP answered. */
 export async function refreshNbp(): Promise<boolean> { const today = todayIso(); return ensureNbpRange(isoAdd(today, -14), today); }
+
+/** v7.44.0 (AUD3-L2, external audit: "a missing exchange rate silently means 1.0 in about 45 places"): THE RATE OF A RECORD — PLN is 1;
+ *  a foreign-currency record's own rate when it is a real one (above 1 — no EUR or USD rate is ever 1); otherwise the NBP rate of its own
+ *  date (the last working day before it), else the reference rate — never 1 for a foreign currency. */
+export function rateOf(rec: any): number {
+  const cur = String(rec?.currency || "PLN").toUpperCase(); if (cur === "PLN") return 1;
+  const own = Number(String(rec?.fxRate ?? "").replace(",", ".")); if (own > 0 && own !== 1) return own;
+  const d = String(rec?.date || rec?.issueDate || rec?.sellDate || rec?.orderDate || rec?.saleDate || "").slice(0, 10);
+  return fxRateFor(cur, d || undefined) ?? defaultFxRate(cur);
+}

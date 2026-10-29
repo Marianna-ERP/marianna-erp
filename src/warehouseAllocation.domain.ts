@@ -4,6 +4,7 @@
 // period, by kilo-days (the time each lot's kilos spent there), and the allocation writes the lots' "warehouse" cost lines
 // — the lines the settlement, the lot value and the P/L already read. Re-allocating replaces the same invoice's lines.
 import { S, r2 } from "./format";
+import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const dayNum = (iso: string) => Math.floor(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000);
@@ -33,7 +34,7 @@ export function lotKgDaysAt(lot: any, siteIds: any[], fromISO: string, toISO: st
 export interface AllocationRow { lotNumber: string; product: string; kgDays: number; sharePct: number; pln: number; }
 /** The proposal: every lot with kilo-days at the warehouse in the period, the invoice's net PLN spread by kilo-days. */
 export function proposeWarehouseAllocation(invoice: any, lots: any[], siteIds: any[], fromISO: string, toISO: string): { rows: AllocationRow[]; totalPLN: number; kgDays: number } {
-  const totalPLN = r2(num(invoice?.netPLN) || num(invoice?.netAmount) * (num(invoice?.fxRate) || 1));
+  const totalPLN = r2(num(invoice?.netPLN) || num(invoice?.netAmount) * rateOf(invoice));
   const kd = (lots || []).filter((l: any) => l && !/Cancelled/.test(String(l.status))).map((l: any) => ({ l, kgDays: lotKgDaysAt(l, siteIds, fromISO, toISO) })).filter(x => x.kgDays > 0);
   const sum = kd.reduce((a, x) => a + x.kgDays, 0);
   const rows: AllocationRow[] = kd.map(x => ({ lotNumber: String(x.l.number), product: [x.l.product, x.l.variety].filter(Boolean).join(" — "), kgDays: x.kgDays, sharePct: sum ? r2(x.kgDays / sum * 100) : 0, pln: sum ? r2(totalPLN * x.kgDays / sum) : 0 }));

@@ -73,8 +73,8 @@ export function MovementModal({ lot, liveSOs = [], editing = null, initialMode =
     CLAIM:    (parseNum(lot.receivedKg) || physicalBasis) + selfQty, // can't claim more than was ever received
   };
   const max = maxByType[effectiveType] ?? Infinity;
-  const qtyNum = parseFloat(qty) || 0;
-  const isInvalid = qtyNum <= 0 || qtyNum > max || (clientSide && !(parseFloat(claimValue) > 0));
+  const qtyNum = parseNum(qty) || 0;
+  const isInvalid = qtyNum <= 0 || qtyNum > max || (clientSide && !(parseNum(claimValue) > 0));
   const typeInfo = MOVEMENT_TYPES[type] || {};
   const showRoute = type === "TRANSFER" || type === "IN" || type === "SHIP_OUT";
 
@@ -206,7 +206,7 @@ export function MovementModal({ lot, liveSOs = [], editing = null, initialMode =
           )}
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm({ id: editing?.id, type: effectiveType, qtyKg: qtyNum, fromId, toId, note, date, soRef: effectiveType === "CLAIM" ? (claimSoRef || null) : (type === "SHIP_OUT" ? (soRef || null) : (editing?.soRef ?? null)), ...(mode === "quality" ? { detectedAt } : {}), ...(effectiveType === "CLAIM" ? { claimValue: parseFloat(claimValue) || 0, claimCurrency } : {}) })} disabled={isInvalid}
+            <button onClick={() => onConfirm({ id: editing?.id, type: effectiveType, qtyKg: qtyNum, fromId, toId, note, date, soRef: effectiveType === "CLAIM" ? (claimSoRef || null) : (type === "SHIP_OUT" ? (soRef || null) : (editing?.soRef ?? null)), ...(mode === "quality" ? { detectedAt } : {}), ...(effectiveType === "CLAIM" ? { claimValue: parseNum(claimValue) || 0, claimCurrency } : {}) })} disabled={isInvalid}
               style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: isInvalid ? "#D1D5DB" : "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: isInvalid ? "not-allowed" : "pointer" }}>
               {editing ? "Save changes" : (mode === "quality" ? "Record quality issue" : "Record movement")}
             </button>
@@ -378,10 +378,10 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
 // were booked in on 1 October. Now: kilos, the date proposed from the truck (actual unloading → planned delivery →
 // the PO's expected delivery), the place the stock goes to, and a note.
 export function ReceiveLotModal({ lot, suggested, locationName = "", onCancel, onConfirm }: any) {
-  const [kg, setKg] = useState(String(Math.round(parseFloat(String(lot?.expectedKg)) || 0)));
+  const [kg, setKg] = useState(String(Math.round(parseNum(String(lot?.expectedKg)) || 0)));
   const [date, setDate] = useState(suggested?.date || localTodayISO());
   const [note, setNote] = useState("");
-  const n = parseFloat(String(kg).replace(",", ".")) || 0; const exp = parseFloat(String(lot?.expectedKg)) || 0;
+  const n = parseNum(String(kg).replace(",", ".")) || 0; const exp = parseNum(String(lot?.expectedKg)) || 0;
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, width: "100%", boxSizing: "border-box" };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={onCancel}>

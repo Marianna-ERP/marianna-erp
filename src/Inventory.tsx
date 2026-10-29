@@ -11,7 +11,7 @@ import { Card, Lbl, useConfirm, DocRef, cancelledDocSet} from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
-import { defaultFxRate } from "./fx";
+import { defaultFxRate , rateOf } from "./fx";
 import { unifiedLocations, locationById, isPortType, placeGroup } from "./locations";
 import { localTodayISO, formatDMY, addDaysISO } from "./dates";
 import { shipmentTradeDirection, shipmentTradeEnds, MOVEMENT_LABELS } from "./tradeFlow.domain";
@@ -1191,7 +1191,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
   // (REVERSAL) and book the return transport as its own shipment with the cost. It does
   // NOT reopen the original SO; value is settled via the quality-issue / credit-note path.
   function returnToWarehouse(d: any) {
-    const fx = parseNum(d.fxRate) || 1;
+    const fx = rateOf(d);
     const costN = parseNum(d.cost);
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;

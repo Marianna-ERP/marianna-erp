@@ -23,7 +23,7 @@ import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
 import { nextId } from "./ids";
 import { MarginMode } from "./marginCalculations";
 import { localTodayISO, localMonthISO, prevMonthISO , formatDMY } from "./dates";
-import { nbpRateBefore } from "./fx";   // v7.18.6 (A-AU-12)
+import { nbpRateBefore , rateOf } from "./fx";   // v7.18.6 (A-AU-12)
 import { parseNum } from "./numbers";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
 import { buildLedger } from "./ledger";
@@ -37,12 +37,14 @@ import {
   OPERATIONAL_COST_CATEGORIES,
   ALLOCATION_METHODS, computeSOMarginWithOverhead } from "./operationalCosts";
 
+import { FlatCard as Card } from "./ui";
+
 // ─── FINANCE MODULE ─────────────────────────────────────────────────────────
 // V5.7 adds Operational Costs and overhead allocation. Direct costs stay on
 // Shipments/Inventory. Overhead stays here and is allocated to SO P/L by rules.
 
 function safe(n: any): number {
-  const v = parseFloat(n);
+  const v = parseNum(n);
   return isFinite(v) ? v : 0;
 }
 function fmtPLN(n: number): string {
@@ -58,11 +60,7 @@ function fmtPLNcompact(n: number): string {
 function fmtPct(n: number): string {
   if (!isFinite(n)) return "—";
   return (n >= 0 ? "+" : "") + n.toFixed(1) + "%";
-}
-
-function Card({ children, style }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
-}
+}   // v7.44.0 (AUD3 redundancy): one copy, in ui.tsx
 function SectionTitle({ children, right }: any) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -662,15 +660,15 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], invoic
   const sameParty = (i: any) => (i?.counterparty?.id != null && String(i.counterparty.id) === String(whId)) || (!!wh && String(i?.counterparty?.name || "").trim().toLowerCase() === String(wh.name || "").trim().toLowerCase());
   const periodInvoices = (invoices || []).filter((i: any) => i && i.kind === "COST" && i.category === "WAREHOUSE" && i.paymentStatus !== "Cancelled" && !i.deleted && sameParty(i) && String(i.periodFrom || i.issueDate || "").slice(0, 7) === period)
     .map((i: any) => ({ ...i, invoiceNo: i.number, date: i.issueDate, amount: Number(i.netAmount) || 0, amountPLN: Number(i.netPLN) || 0, allocated: !!(i.allocation && (i.allocation.lots || []).length) }));
-  const invoicedPLN = periodInvoices.reduce((s: number, i: any) => s + (parseFloat(i.amountPLN) || 0), 0);
+  const invoicedPLN = periodInvoices.reduce((s: number, i: any) => s + (parseNum(i.amountPLN) || 0), 0);
   const variancePLN = Math.round((invoicedPLN - result.totalPLN) * 100) / 100;
 
   function addInvoice() {
     if (!setInvoices || !whId) return;
-    const amount = parseFloat(inv.amount) || 0;
+    const amount = parseNum(inv.amount) || 0;
     if (amount <= 0 || !inv.invoiceNo.trim()) return;
     if (String(inv.currency || "PLN").toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0)) return;   // v7.18.6 (A-AU-12): no NBP rate yet — never at 1.0
-    const fx = parseFloat(inv.fxRate) || 1;
+    const fx = rateOf(inv);
     const pln = Math.round(amount * fx * 100) / 100;
     // v7.21.4 (A-ST-10): a cost invoice in the register — open until the bank clears it (rule 11), like every received invoice
     const rec = { id: nextId(), kind: "COST", category: "WAREHOUSE", costScope: "SHIPMENT",   /* v7.26.1 (A-INV-6): scopeOf(WAREHOUSE) */ number: inv.invoiceNo.trim(), counterparty: { id: whId, name: wh?.name || "" },
@@ -794,7 +792,7 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], invoic
           <div><div style={{ fontSize: 10, fontWeight: 600, color: "#888", marginBottom: 3 }}>FX→PLN</div><div data-wh-rate="1" title={whFx.note} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12, background: "#F8FAFC", boxSizing: "border-box" }}>{String(inv.currency).toUpperCase() === "PLN" ? "1" : Number(inv.fxRate) > 0 ? Number(inv.fxRate).toFixed(4) : "—"}</div>{/* v7.18.6 (A-AU-12): NBP, not typed */}</div>
           <div><div style={{ fontSize: 10, fontWeight: 600, color: "#888", marginBottom: 3 }}>Date</div><DateInput value={inv.date} onChange={e => setInv({ ...inv, date: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12 }} /></div>
           <div><div style={{ fontSize: 10, fontWeight: 600, color: "#888", marginBottom: 3 }}>Notes</div><input value={inv.notes} onChange={e => setInv({ ...inv, notes: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12 }} /></div>
-          <button onClick={addInvoice} disabled={!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0) || (String(inv.currency).toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0))} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#E5E7EB" : "#16A34A", color: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#9CA3AF" : "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Record invoice</button>
+          <button onClick={addInvoice} disabled={!inv.invoiceNo.trim() || !(parseNum(inv.amount) > 0) || (String(inv.currency).toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0))} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: (!inv.invoiceNo.trim() || !(parseNum(inv.amount) > 0)) ? "#E5E7EB" : "#16A34A", color: (!inv.invoiceNo.trim() || !(parseNum(inv.amount) > 0)) ? "#9CA3AF" : "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Record invoice</button>
         </div>
         <div style={{ fontSize: 10, color: "#888", marginTop: 8, lineHeight: 1.5 }}>
           Approving an invoice splits its PLN amount across the month's lots proportionally to their expected charges and adds it to each lot's
@@ -1102,7 +1100,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
                       {BUDGET_MEASURES.map(mz => (
                         <label key={mz} style={{ display: "flex", gap: 4, alignItems: "center" }}>{mz}
                           <input type="number" placeholder="PLN" defaultValue={(budgets || []).find((b: any) => b.period === period && b.measure === mz)?.amountPLN ?? ""}
-                            onBlur={(e: any) => { const v = parseFloat(e.target.value); if (!isFinite(v)) return; setBudgets((prev: any[]) => upsertBudget(prev || [], { id: `${period}:${mz}`, period, measure: mz, amountPLN: v })); }}
+                            onBlur={(e: any) => { const v = parseNum(e.target.value); if (!isFinite(v)) return; setBudgets((prev: any[]) => upsertBudget(prev || [], { id: `${period}:${mz}`, period, measure: mz, amountPLN: v })); }}
                             style={{ width: 96, border: "1px solid #E5E7EB", borderRadius: 6, padding: "3px 6px", fontSize: 11 }} />
                         </label>
                       ))}

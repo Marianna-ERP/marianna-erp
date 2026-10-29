@@ -12,6 +12,7 @@
 // converts in this batch as the pattern; every rebuilt screen adopts it.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useRef, useCallback } from "react";
+import DateInput from "./DateInput";   // v7.44.0: the shared Inp's date branch
 import { parseNum } from "./numbers";   // v7.38.0
 
 // v6.81.0 (D-53, owner ruling): ONE page-width standard — use the screen, cap at 1720 px
@@ -256,4 +257,23 @@ export function NumInput({ value, onNumber, disabled = false, placeholder, title
     value={text != null ? text : (value ?? "")} onFocus={(e: any) => { if (!disabled) setText(String(value ?? "")); if (rest.onFocus) rest.onFocus(e); }}
     onChange={(e: any) => setText(e.target.value)} onBlur={(e: any) => { commit(); if (rest.onBlur) rest.onBlur(e); }}
     onKeyDown={(e: any) => { if (e.key === "Enter") commit(); if (rest.onKeyDown) rest.onKeyDown(e); }} />;
+}
+
+// v7.44.0 (AUD3 redundancy): the one copy of Sel that PurchaseOrders.tsx, SalesOrders.tsx, Shipments.tsx shared, word for word
+export function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
+  const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
+  return <select value={value || ""} onChange={onChange} disabled={disabled} style={{ ...base, ...style }}>{children}</select>;
+}
+
+// v7.44.0 (AUD3 redundancy): the one copy of Inp that PurchaseOrders.tsx, SalesOrders.tsx shared, word for word
+export function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max, min, noFuture }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder || undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
+  const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
+  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
+}
+
+// v7.44.0 (AUD3 redundancy): the one copy of Card that Finance.tsx, Settings.tsx shared, word for word
+export function FlatCard({ children, style }: any) {
+  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
 }

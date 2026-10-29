@@ -1,5 +1,5 @@
 import { parseNum } from "./numbers";
-import { resolveFxRate } from "./fx";   // v6.99.133 (AUD-36): one FX fallback — a foreign invoice without a rate takes the settings' rate, never 1
+import { resolveFxRate , rateOf } from "./fx";   // v6.99.133 (AUD-36): one FX fallback — a foreign invoice without a rate takes the settings' rate, never 1
 // ─────────────────────────────────────────────────────────────────────────────
 // v6.39.0 — Fakturownia IMPORT domain (pure, tested).
 //
@@ -125,7 +125,7 @@ function contactTypes(c: any): string[] {
 }
 
 export function poValuePLN(po: any): number {
-  const fx = num(po?.fxRate) || 1;
+  const fx = rateOf(po);
   const total = (po?.items || []).reduce((s: number, it: any) => s + num(it.qty) * num(it.price), 0);
   return Math.round(total * fx * 100) / 100;
 }

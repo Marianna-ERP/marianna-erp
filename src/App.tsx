@@ -28,7 +28,6 @@ import { poDirectFromSOs, directSync } from "./tradeFlow.domain";
 import Claims from "./Claims";
 import { localTodayISO, addDaysISO } from "./dates";
 import { nextId } from "./ids";
-import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState, useStorageHealth, dropLegacySnapshots, COMPANY_DEFAULTS } from "./useLocalStoredState";   // v7.21.0 (A-RV-19): no storage upgrade, no local snapshots
 import { setOurCountry } from "./tradeFlow.domain";   // v7.19.6 (A-TD-5)
 import { startAutoBackup, setBackupAllowed } from "./autoBackup";   // v6.99.70 (A-BK-1) · v7.1.8
@@ -136,11 +135,11 @@ function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: str
 
 export default function App() {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
-  const [contacts, _setContactsRaw] = useLocalStoredState("contacts", SHELL_SEED.contacts);
-  const [posStored, setPOsRaw] = useLocalStoredState("pos", SHELL_SEED.pos);
-  const [lots, setLotsRaw] = useLocalStoredState("lots", SHELL_SEED.lots);
-  const [ordersStored, setOrdersRaw] = useLocalStoredState("orders", SHELL_SEED.orders);
-  const [shipmentsStored, setShipmentsRaw] = useLocalStoredState("shipments", SHELL_SEED.shipments);
+  const [contacts, _setContactsRaw] = useLocalStoredState("contacts", []);
+  const [posStored, setPOsRaw] = useLocalStoredState("pos", []);
+  const [lots, setLotsRaw] = useLocalStoredState("lots", []);
+  const [ordersStored, setOrdersRaw] = useLocalStoredState("orders", []);
+  const [shipmentsStored, setShipmentsRaw] = useLocalStoredState("shipments", []);
   const setShipments = useMemo(() => shapingSetter(setShipmentsRaw, shapeShipment), [setShipmentsRaw]);   // v7.28.0 (Batch L): written in the clean shape
   // v7.25.0 (A-RV-13 / FZ-02, owner 17 Oct): ONE SOURCE FOR EACH COMPANY — the screens see each document's companies read live from
   // Counterparties by id; a company edit no longer rewrites every PO, SO and shipment (nor re-sends the three lists). The stored copies
@@ -148,7 +147,7 @@ export default function App() {
   const pos = useMemo(() => withLiveCompanies(posStored, ["supplier"], contacts || []), [posStored, contacts]);
   const orders = useMemo(() => withLiveCompanies(ordersStored, ["client"], contacts || []), [ordersStored, contacts]);
   const shipments = useMemo(() => withLiveCompanies(shipmentsStored, ["carrier", "forwarder", "broker"], contacts || []), [shipmentsStored, contacts]);
-  const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", SHELL_SEED.operationalCosts);
+  const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", []);
   // v7.28.12 (Batch L · FZ-01): the old warehouse-invoice, "settled" and credit-note stores are gone — the register, the payments and
   // the finance notes own those facts; both copies of 15 Oct hold nothing in them
   const [invoices, setInvoicesRaw] = useLocalStoredState("invoices", []);

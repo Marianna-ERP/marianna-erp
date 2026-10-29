@@ -25,7 +25,7 @@ function textToBands(t: string): any[] {
   return String(t || "").split(";").map(s => s.trim()).filter(Boolean).map(s => {
     const m = s.match(/^\s*([\d.,]*)\s*-\s*([\d.,]*)\s*:\s*([\d.,]+)\s*$/);
     if (!m) return null;
-    const num = (v: string) => { const x = parseFloat(v.replace(",", ".")); return isFinite(x) ? x : null; };
+    const num = (v: string) => { const x = parseNum(v.replace(",", ".")); return isFinite(x) ? x : null; };
     return { fromPLN: num(m[1]) ?? 0, toPLN: m[2] ? num(m[2]) : null, pct: num(m[3]) ?? 0 };
   }).filter(Boolean);
 }
@@ -210,7 +210,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
   // stays empty; "0,30" / "0.30" both become 0.3; garbage becomes empty.
   const numC = (v: any) => {
     if (v === "" || v === null || v === undefined) return "";
-    const n = parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
+    const n = parseNum(String(v).replace(/\s/g, "").replace(",", "."));
     return isFinite(n) ? n : "";
   };
   function handleSave() {
@@ -302,10 +302,10 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
               {/* v6.99.2 (CP-2/CP-3/CP-4/CP-7): TERMS block · people with role & e-mail · archive · producer agreements */}
               <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 10px" }}>
                 <div style={{ gridColumn: "1 / -1", fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>TERMS (inherited by documents)</div>
-                <div><Lbl>Payment terms (days) <span style={{ color: "#94A3B8", fontWeight: 400 }}>· from invoice</span></Lbl><Inp type="number" value={form.terms?.paymentDays ?? ""} onChange={e => { const v = parseFloat(e.target.value) || 0; sf("terms", { ...(form.terms || {}), paymentDays: v }); }} /></div>
+                <div><Lbl>Payment terms (days) <span style={{ color: "#94A3B8", fontWeight: 400 }}>· from invoice</span></Lbl><Inp type="number" value={form.terms?.paymentDays ?? ""} onChange={e => { const v = parseNum(e.target.value) || 0; sf("terms", { ...(form.terms || {}), paymentDays: v }); }} /></div>
               <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.terms?.creditLimitPLN ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), creditLimitPLN: e.target.value === "" ? undefined : parseNum(e.target.value) })} type="number" placeholder="blank = unlimited" /></div>
-                <div><Lbl>Notice days (claims)</Lbl><Inp type="number" value={form.terms?.noticeDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), noticeDays: parseFloat(e.target.value) || 0 })} placeholder="legal default" /></div>
-                <div><Lbl>QC report days (producer)</Lbl><Inp type="number" value={form.terms?.qualityReportDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), qualityReportDays: parseFloat(e.target.value) || 0 })} /></div>
+                <div><Lbl>Notice days (claims)</Lbl><Inp type="number" value={form.terms?.noticeDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), noticeDays: parseNum(e.target.value) || 0 })} placeholder="legal default" /></div>
+                <div><Lbl>QC report days (producer)</Lbl><Inp type="number" value={form.terms?.qualityReportDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), qualityReportDays: parseNum(e.target.value) || 0 })} /></div>
                 <div><Lbl>Default currency</Lbl><Sel value={form.terms?.defaultCurrency || "PLN"} onChange={e => sf("terms", { ...(form.terms || {}), defaultCurrency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
                 <div><Lbl>Default VAT rate (invoices)</Lbl><Sel value={form.terms?.defaultVatRate ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), defaultVatRate: e.target.value === "" ? null : Number(e.target.value) })}><option value="">— none —</option>{[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}</Sel></div>{/* v7.18.7 (BP-46): optional — an invoice draft for this company starts at it */}
                 <div style={{ gridColumn: "1 / -1" }}><Lbl>Receiving hours (delivery window) — e.g. Mon–Fri 06:00–14:00</Lbl><Inp value={form.receivingHours || ""} onChange={e => sf("receivingHours", e.target.value)} placeholder="when this site receives trucks — a planned delivery outside it will warn" /></div>

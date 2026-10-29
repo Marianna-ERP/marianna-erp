@@ -8,6 +8,7 @@ import { missingPeopleInfo } from "./counterparty.domain";
 import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
 import { purchaseInvoiceVariance } from "./po.domain";
 import { claimNoteMismatches } from "./claimReadiness.domain";
+import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 import { lotSellableBasis, takenBySale } from "./salesOrders.domain";   // v7.27.7 (FZ-30)
 // ─── DATA INTEGRITY CHECKER ─────────────────────────────────────────────────
@@ -524,15 +525,15 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // 7a.2 Derived paidAmount vs payment events out of sync (Batch 5b invariant).
   invoices.forEach((v: any) => {
     if (!Array.isArray(v.payments) || !v.payments.length) return;
-    const sum = Math.round(v.payments.reduce((s: number, p: any) => s + (parseFloat(p.amount) || 0), 0) * 100) / 100;
-    const cached = Math.round((parseFloat(v.paidAmount) || 0) * 100) / 100;
+    const sum = Math.round(v.payments.reduce((s: number, p: any) => s + (parseNum(p.amount) || 0), 0) * 100) / 100;
+    const cached = Math.round((parseNum(v.paidAmount) || 0) * 100) / 100;
     if (Math.abs(sum - cached) > 0.01) add("warning", "PAY_MISMATCH", "Invoices", v.number || "(draft)",
       `Paid amount ${cached} differs from the sum of payment events ${sum} — recalculated on next payment edit, but worth a look.`);
   });
   // 7a.3 Over-issued lots: shipping/damaging more than existed was silently
   // clamped before; the reducer now reports the excess.
   lots.forEach((l: any) => {
-    const over = parseFloat(l.overIssuedKg) || 0;
+    const over = parseNum(l.overIssuedKg) || 0;
     if (over > 0) add("error", "LOT_OVER_ISSUE", "Inventory", l.number || "(lot)",
       `${over} kg more was shipped/damaged out of this lot than it ever contained — a quantity was mistyped somewhere (the stock was clamped at 0, but the movements don't add up).`);
   });
@@ -650,7 +651,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     const key = (s: any) => {
       const sos = arr(s.soRefs).filter(Boolean).map(String).sort().join("+");
       const kg = arr(s.goods).reduce((t: number, g: any) => t + num(g?.qtyKg), 0);
-      const cost = arr(s.costs).reduce((t: number, c: any) => t + (num(c?.amountPLN) || num(c?.amount) * (num(c?.fxRate) || 1)), 0);
+      const cost = arr(s.costs).reduce((t: number, c: any) => t + (num(c?.amountPLN) || num(c?.amount) * rateOf(c)), 0);
       const lots = Array.from(new Set(arr(s.goods).map((g: any) => String(g?.lotRef || "") || (g?.poRef ? `${g.poRef}#${g.poLineId ?? g.lineId ?? g.productId ?? ""}` : "")).filter(Boolean))).sort().join("+");   // v7.41.0 (AUD3-L5): no lot yet → the PO line
       return sos ? `${sos}|${Math.round(kg)}|${Math.round(cost)}|${lots}` : null;
     };

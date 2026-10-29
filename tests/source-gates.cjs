@@ -81,6 +81,11 @@ if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the 
   ["Shipments.tsx", "Inventory.tsx", "ShipmentEditor.tsx", "shipments.domain.ts", "costAllocation.ts", "receipts.domain.ts", "pricingUnit.domain.ts", "bankReconciliation.domain.ts"].forEach(f => { const c = fs.readFileSync(path.join(src, f), "utf8"); if (/(?<!isNaN\()parseFloat\(/.test(c)) off.push(`${f} reads data with parseFloat`); });
   if (off.length) { failed++; console.log(`  ✗ numbers: ${off.join("; ")}`); } else console.log("  ✓ numbers: one number field, one reader where the audit looked");
 }
+// v7.42.0 (AUD3-A6): NO NEW IMPORT LOOPS — today 5 groups of files import each other in a loop (34 files); the number may only go down
+{
+  checked++; const prev = process.cwd(); process.chdir(path.join(__dirname, "..")); const { loops } = require("../scripts/import-loops.cjs"); const now = loops(); process.chdir(prev);
+  if (now.groups > 5 || now.files > 34) { failed++; console.log(`  ✗ no new import loops: ${now.groups} group(s), ${now.files} file(s) (allowed 5 / 34)`); } else console.log(`  ✓ no new import loops: ${now.groups} group(s), ${now.files} file(s)`);
+}
 // v7.28.11 (Batch L · FZ-03, P-13): A COMPANY'S COUNTRY IS ITS CODE — no file reads a company record's country name except the
 // helpers (companyCountryName / companyCountryIso) and the company tidy-up; the copies on documents keep the printed name
 {

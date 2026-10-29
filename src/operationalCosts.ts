@@ -1,4 +1,6 @@
 import { computeSOMargin, MarginMode, MarginBreakdown } from "./marginCalculations";
+import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
+import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 
 // ─── OPERATIONAL COSTS / OVERHEAD ALLOCATION ────────────────────────────────
 // These costs are company-level expenses (salary, rent, accountant, software,
@@ -109,75 +111,9 @@ export const ALLOCATION_METHODS = [
   { key: "not_allocated", label: "Do not allocate", hint: "Track cost but exclude from SO P/L" },
 ];
 
-export const INIT_OPERATIONAL_COSTS: OperationalCost[] = [
-  {
-    id: 9001,
-    period: "2026-05",
-    date: "2026-05-31",
-    category: "salary",
-    description: "Operations and sales salaries - May budget",
-    supplierName: "Internal payroll",
-    amount: 42000,
-    currency: "PLN",
-    fxRate: 1,
-    amountPLN: 42000,
-    costCenter: "operations",
-    allocationMethod: "by_kg_sold",
-    status: "Budget",
-    notes: "Forecast overhead allocation for May testing.",
-  },
-  {
-    id: 9002,
-    period: "2026-05",
-    date: "2026-05-10",
-    category: "office_rent",
-    description: "Office rent - May",
-    supplierName: "Office landlord",
-    amount: 7500,
-    currency: "PLN",
-    fxRate: 1,
-    amountPLN: 7500,
-    costCenter: "admin",
-    allocationMethod: "by_revenue",
-    status: "Received",
-    notes: "General monthly overhead.",
-  },
-  {
-    id: 9003,
-    period: "2026-05",
-    date: "2026-05-15",
-    category: "accountant",
-    description: "Accounting fee - May",
-    supplierName: "Accounting office",
-    amount: 2200,
-    currency: "PLN",
-    fxRate: 1,
-    amountPLN: 2200,
-    costCenter: "finance",
-    allocationMethod: "by_order_count",
-    status: "Received",
-    notes: "Monthly accounting fee allocated evenly by active SO.",
-  },
-  {
-    id: 9004,
-    period: "2026-05",
-    date: "2026-05-20",
-    category: "petrol",
-    description: "General petrol / errands - May",
-    supplierName: "Fuel cards",
-    amount: 1850,
-    currency: "PLN",
-    fxRate: 1,
-    amountPLN: 1850,
-    costCenter: "logistics",
-    allocationMethod: "by_shipment_count",
-    status: "Expected",
-    notes: "Only included in Forecast until posted/received.",
-  },
-];
 
 function safe(n: any): number {
-  const v = parseFloat(n);
+  const v = parseNum(n);
   return isFinite(v) ? v : 0;
 }
 
@@ -343,7 +279,7 @@ export function computeSOMarginWithOverhead(
   const contributionMarginPct = base.marginPct;
   const totalCostsWithOverheadPLN = round2(base.totalCostsPLN + overhead.totalPLN);
   const netMarginPLN = round2(base.revenuePLN - totalCostsWithOverheadPLN);
-  const netMarginSO = round2(netMarginPLN / (base.fxRate || 1));
+  const netMarginSO = round2(netMarginPLN / rateOf(base));
   const netMarginPct = base.revenuePLN > 0 ? round2((netMarginPLN / base.revenuePLN) * 100) : 0;
 
   return {

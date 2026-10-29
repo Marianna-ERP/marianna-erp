@@ -145,8 +145,6 @@ export function currentAgreement(contact: any, dateISO: string): ProducerAgreeme
 const primaryPersonOf = (c: any) => peopleOf(c).find((p: any) => p.isPrimary) || peopleOf(c)[0] || {};   // v7.28.2
 /** The company as a document shows it (the fields the documents have always carried). */
 /** v7.28.1: the terms of a company, read in one place — payment days, credit limit (PLN), currency. */
-export function creditLimitOf(c: any): number { return num(c?.terms?.creditLimitPLN); }
-export function currencyOf(c: any): string { return S(c?.terms?.defaultCurrency).toUpperCase(); }
 export function companyCopy(c: any): any {
   const p = primaryPersonOf(c);
   // v7.28.1 (Batch L · FZ-27): the copy carries the currency from the terms and none of the retired payment-terms text

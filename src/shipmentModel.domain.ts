@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
+import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
 import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 import { sellerPaysCarriage, takenAtSeller } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
@@ -357,7 +358,7 @@ export function costLinesByCarrierLeg(sh: any, resolveName: (id: any) => string 
     if (!prev) return base;
     const inv = isInvoicedLine(prev);
     return { ...base, id: prev.id ?? base.id, invoiceStatus: prev.invoiceStatus || "Expected", ...(prev.invoiceRef ? { invoiceRef: prev.invoiceRef } : {}), ...(prev.allocationMethod ? { allocationMethod: prev.allocationMethod } : {}), ...(prev.notes ? { notes: prev.notes } : {}),
-      ...(inv ? { amount: num(prev.amount), currency: prev.currency || base.currency, fxRate: num(prev.fxRate) || base.fxRate, amountPLN: num(prev.amountPLN) || r2(num(prev.amount) * (num(prev.fxRate) || 1)) } : {}) };
+      ...(inv ? { amount: num(prev.amount), currency: prev.currency || base.currency, fxRate: num(prev.fxRate) || base.fxRate, amountPLN: num(prev.amountPLN) || r2(num(prev.amount) * rateOf(prev)) } : {}) };
   });
   const released = before.filter((c: any) => !continued.has(c) && isInvoicedLine(c) && (num(c.amount) > 0 || num(c.amountPLN) > 0)).map((c: any) => { const { source, needsCarrier, ...rest } = c; return { ...rest, notes: c.notes || c.label || "Freight" }; });
   return [...keep.filter((c: any) => !adopted.has(c)), ...released, ...lines];

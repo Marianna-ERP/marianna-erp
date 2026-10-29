@@ -1,5 +1,6 @@
 // ── v6.99.0 (FN-1/FN-2/FN-3): PERIOD CLOSE, MANAGEMENT SNAPSHOT, CASH PROJECTION ──
 import { S, r2 } from "./format";
+import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
@@ -26,7 +27,7 @@ export function cashProjection(invoices: any[], todayISO: string): { buckets: Ar
   let overdueIn = 0, overdueOut = 0;
   (invoices || []).forEach(inv => {
     if (!inv || inv.isProforma || ["Cancelled", "Draft"].includes(inv.paymentStatus)) return;
-    const open = r2((num(inv.grossAmount) - num(inv.paidAmount)) * (num(inv.fxRate) || 1)); if (open <= 0.005) return;
+    const open = r2((num(inv.grossAmount) - num(inv.paidAmount)) * rateOf(inv)); if (open <= 0.005) return;
     const due = S(inv.dueDate) || S(inv.issueDate); const days = due ? Math.round((new Date(due).getTime() - new Date(todayISO).getTime()) / 86400000) : 0;
     const isIn = inv.kind === "SALES";
     if (days < 0) { if (isIn) overdueIn += open; else overdueOut += open; return; }

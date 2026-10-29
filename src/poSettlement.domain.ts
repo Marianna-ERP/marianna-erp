@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
 import { gradeSplit } from "./seasonOps.domain";   // v6.99.108 (A-QC-6)
-import { nbpRateBeforeKnown } from "./fx";   // v7.18.6 (A-AU-12)
+import { nbpRateBeforeKnown , rateOf } from "./fx";   // v7.18.6 (A-AU-12)
 import { localTodayISO } from "./dates";
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 import { countryIso, isEU } from "./counterparty.domain";   // v7.27.5 (AUD-26)
@@ -75,7 +75,7 @@ export function computePOSettlement(input: {
   const soRate = (o: any): number => {
     if (S(o?.currency || "PLN").toUpperCase() === "PLN") { return 1; }
     const inv = (input.invoices || []).find((i: any) => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && !i.isProforma && num(i.fxRate) > 0 && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(o.number)));
-    return inv ? num(inv.fxRate) : (num(o?.fxRate) || 1);
+    return inv ? num(inv.fxRate) : rateOf(o);
   };
   const myLots = lotsOfPO(po, lots);
   const warnings: string[] = [];
@@ -84,8 +84,8 @@ export function computePOSettlement(input: {
   // credit notes on them — the order's lines only until then. The invoice total is spread over the order's lines in
   // proportion to their ordered values (an invoice does not name lots), so class I / II keep their shares.
   const salesInvoicesOf = (o: any) => (input.invoices || []).filter((i: any) => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && !i.isProforma && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(o.number)));
-  const invNetPLN = (i: any) => num(i.netPLN) || num(i.netAmount) * (num(i.fxRate) || 1);
-  const noteSignedPLN = (n: any) => (n.noteType === "DEBIT" ? 1 : -1) * Math.abs(num(n.amountPLN) || num(n.amount) * (num(n.fxRate) || 1));
+  const invNetPLN = (i: any) => num(i.netPLN) || num(i.netAmount) * rateOf(i);
+  const noteSignedPLN = (n: any) => (n.noteType === "DEBIT" ? 1 : -1) * Math.abs(num(n.amountPLN) || num(n.amount) * rateOf(n));
   // v7.27.5 (AUD-30 — A-ST-1, owner 30 Sept; P-11): a sale line's kilos in the settlement are the kilos LOADED for that sale from the
   // lot — the goods rows (lot, sale) of its trucks once loaded (Loaded, Arrived, Delivered, Closed) — shared among the sale's lines on
   // the same lot by their ordered kilos. Ordered kilos not (yet) loaded are not sold. The goods rows, not the lot's movements: a

@@ -27,7 +27,8 @@ import { parseNum } from "./numbers";
 import { nbpHeld, refreshNbp, fxRateFor } from "./fx";
 import { typedPackagingSpellings } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { readCountries } from "./Contacts";   // v7.19.6 (A-TD-5): the company's country from the one country list
-import { counterInstalled } from "./numbering";   // v7.27.8 (A-W5)
+import { counterInstalled } from "./numbering";
+import { FlatCard as Card } from "./ui";   // v7.27.8 (A-W5)
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -37,10 +38,7 @@ import { counterInstalled } from "./numbering";   // v7.27.8 (A-W5)
 // place to add user-facing administration features as we grow (Phase 2:
 // language, currency display preferences, notification settings, etc.)
 
-const INP: any = { width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
-function Card({ children, style }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "20px 22px", ...style }}>{children}</div>;
-}
+const INP: any = { width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };   // v7.44.0 (AUD3 redundancy): one copy, in ui.tsx
 
 function Lbl({ children }: any) {
   return <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 3, textTransform: "uppercase" }}>{children}</div>;
@@ -207,13 +205,13 @@ export function PackagingPanel({ types, setTypes, refStores = {}, onLinkSpelling
 
   const save = async () => {
     const label = String(form.label || "").trim();
-    const cap = parseFloat(form.capacityKg), tare = parseFloat(form.tareKg);
+    const cap = parseNum(form.capacityKg), tare = parseNum(form.tareKg);
     if (!label) { await pkAlert({ tone: "warn", title: "Name required", message: "Give the packaging a name, e.g. \u201cWooden box (13 kg)\u201d." }); return; }
     if (!(cap > 0)) { await pkAlert({ tone: "warn", title: "Capacity required", message: "How many kg of product does one unit hold?" }); return; }
     if (!(tare >= 0)) { await pkAlert({ tone: "warn", title: "Tare required", message: "How much does the empty unit weigh?" }); return; }
     const id = String(form.id || "").trim() || label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const appliesTo = String(form.appliesTo || "").split(",").map((x: string) => x.trim()).filter(Boolean);
-    const next = [...list.filter((t: any) => t.id !== id), { id, label, capacityKg: cap, tareKg: tare, boxesPerPallet: parseFloat(form.boxesPerPallet) || 0, palletTareKg: parseFloat(form.palletTareKg) || 0, ...(form.palletType ? { palletType: form.palletType } : {}), appliesTo }];   // v7.27.9 (FZ-29): the pallet
+    const next = [...list.filter((t: any) => t.id !== id), { id, label, capacityKg: cap, tareKg: tare, boxesPerPallet: parseNum(form.boxesPerPallet) || 0, palletTareKg: parseNum(form.palletTareKg) || 0, ...(form.palletType ? { palletType: form.palletType } : {}), appliesTo }];   // v7.27.9 (FZ-29): the pallet
     setTypes(next); setForm(blank);
     recordAudit({ module: "Settings", docType: "Packaging", docNumber: label, action: "updated", summary: `Packaging type "${label}" saved — ${cap} kg per box, tare ${tare} kg` });   // v7.17.4 (A-RV-12)
   };

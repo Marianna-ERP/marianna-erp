@@ -4379,8 +4379,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const L = B("locations.js"), IC = B("integrityCheck.js");
   t("A-RV-39 (v7.27.12): no stub companies in the code — the forms read the directory", () => {
     const rd = f => require("fs").readFileSync(require("path").join(__dirname, "../src/" + f), "utf8");   // the screens are not in the checks' build — read their source
-    ok(/export const SUPPLIERS: any\[\] = \[\];/.test(rd("PurchaseOrders.tsx")) && !/function getSuppliersStub/.test(rd("PurchaseOrders.tsx")), "the PO form still has stub suppliers");
-    ok(/export const CLIENTS: any\[\] = \[\];/.test(rd("SalesOrders.tsx")) && !/function getClientsStub/.test(rd("SalesOrders.tsx")), "the SO form still has stub clients");
+    ok(!/export const SUPPLIERS\b/.test(rd("PurchaseOrders.tsx")) && !/function getSuppliersStub/.test(rd("PurchaseOrders.tsx")), "the PO form still has stub suppliers");   // v7.42.0 (AUD3 dead code): the empty fallback itself is gone
+    ok(!/export const CLIENTS\b/.test(rd("SalesOrders.tsx")) && !/function getClientsStub/.test(rd("SalesOrders.tsx")), "the SO form still has stub clients");
   });
 })();
 
@@ -5087,6 +5087,32 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("AUD3-A2 / L3 / L5 (v7.41.0): the poll fetches only the changed lists; the SO screen sells a lot by lotSellableBasis; a truck without lots is identified by its PO lines", () => {
     ok(/fetchRows\(undefined, changed\.map\(c => c\.key\)\)/.test(rd("remoteStore.ts")), "A2"); ok(/availableKg: rejectedByReport\(l, inspections\) \? 0 : lotSellableBasis\(l\)/.test(rd("SalesOrders.tsx")), "L3"); ok(/no lot yet → the PO line/.test(rd("integrityCheck.ts")), "L5");
+  });
+})();
+
+// ══ v7.43.0 — AUD3-L4 · the logo once ══
+(function v74300(){
+  console.log("\n══ v7.43.0 — claim totals per currency; the logo once ══");
+  const CD = B("claims.domain.js"); const fsx = require("fs"), px = require("path");
+  t("AUD3-L4 (v7.43.0): claim totals never add two currencies — the incident net and the register's open amounts are per currency", () => {
+    const cl = [{ id: 1, direction: "CONCESSION", currency: "PLN", acceptedAmount: 400, status: "Submitted" }, { id: 2, parentClaimId: 1, direction: "RECOVERY", currency: "EUR", acceptedAmount: 45, status: "Submitted" }];
+    const inc = CD.incidentNet(cl, 1); ok(inc.mixedCurrencies, "two currencies not seen"); eq(inc.byCurrency.PLN.net, 400); eq(inc.byCurrency.EUR.net, -45);
+    const s = CD.claimsSummary(cl, "2026-10-28"); eq(s.openByCurrency.PLN.concession, 400); eq(s.openByCurrency.EUR.recovery, 45); eq(s.openConcessionEUR, 0, "PLN counted as euros");
+    const sh = fsx.readFileSync(px.join(__dirname, "../src/Shipments.tsx"), "utf8"), so = fsx.readFileSync(px.join(__dirname, "../src/SalesOrders.tsx"), "utf8");
+    ok(!/data:image\/png;base64/.test(sh) && !/data:image\/png;base64/.test(so), "the logo is still embedded more than once");
+  });
+})();
+
+// ══ v7.44.0 — AUD3-L2: the rate of a record ══
+(function v74400(){
+  console.log("\n══ v7.44.0 — the rate of a record ══");
+  const FX = B("fx.js"); const fsx = require("fs"), px = require("path");
+  t("AUD3-L2 (v7.44.0): a foreign-currency record's rate is its own real rate, else the NBP rate of its date — never 1; PLN is 1; no calculation falls back to 1 any more", () => {
+    FX.__setNbpStore({ days: { "2026-10-01": { EUR: 4.25 } }, covered: {} });
+    eq(FX.rateOf({ currency: "PLN", fxRate: 4 }), 1); eq(FX.rateOf({ currency: "EUR", fxRate: 4.3 }), 4.3); eq(FX.rateOf({ currency: "EUR", fxRate: 1, date: "2026-10-02" }), 4.25); eq(FX.rateOf({ currency: "EUR", date: "2026-10-02" }), 4.25);
+    FX.__setNbpStore({ days: {}, covered: {} });
+    const left = fsx.readdirSync(px.join(__dirname, "../src")).filter(f => /\.(ts|tsx)$/.test(f) && f !== "fx.ts").filter(f => /\((?:num|Number|parseNum)\(\w+(?:\??\.\w+)*\??\.fxRate\) \|\| 1\)|\(\w+(?:\??\.\w+)*\??\.fxRate \|\| 1\)/.test(fsx.readFileSync(px.join(__dirname, "../src", f), "utf8")));
+    eq(left.join(), "", "a calculation still treats a missing rate as 1");
   });
 })();
 

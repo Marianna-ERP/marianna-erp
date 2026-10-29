@@ -1,5 +1,5 @@
 {
- "version": "7.41.0",
+ "version": "7.44.0",
  "files": [
   ".env.production",
   ".npmrc",
@@ -12,6 +12,7 @@
   "package.json",
   "public/index.html",
   "scripts/check-release.cjs",
+  "scripts/import-loops.cjs",
   "scripts/release-files.cjs",
   "src/AddressCompletion.tsx",
   "src/App.tsx",
@@ -141,7 +142,6 @@
   "src/season.domain.ts",
   "src/seasonOps.domain.ts",
   "src/sheet.domain.ts",
-  "src/shell_seed.ts",
   "src/shipmentDerived.domain.ts",
   "src/shipmentModel.domain.ts",
   "src/shipments.domain.ts",

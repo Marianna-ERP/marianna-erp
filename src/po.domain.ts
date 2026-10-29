@@ -10,6 +10,7 @@ import { paymentDaysOf } from "./legacy";
 // ─────────────────────────────────────────────────────────────────────────────
 import { kgPerBoxForLine } from "./pricingUnit.domain";
 import { S, r2 } from "./format";
+import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
 import { D_RULES, C_RULES } from "./incoterms.domain";   // v7.28.5 (FZ-21): the one table
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
@@ -116,7 +117,7 @@ export interface PriceVariance { poNumber: string; invoiceNumber: string; agreed
 /** Purchase invoice net vs agreed price × received (or ordered) kg, at the PO's locked rate. */
 export function purchaseInvoiceVariance(inv: any, po: any, lots: any[], tolerancePct = 1): PriceVariance | null {
   if (!inv || !po || inv.kind !== "COST") return null;
-  const fx = num(po.fxRate) || 1;
+  const fx = rateOf(po);
   const myLots = (lots || []).filter(l => String(l.poRef) === String(po.number));
   let agreed = 0;
   (po.items || []).forEach((it: any, i: number) => {
@@ -127,7 +128,7 @@ export function purchaseInvoiceVariance(inv: any, po: any, lots: any[], toleranc
     agreed += kg * pricePerKg;
   });
   const agreedPLN = r2(agreed * fx);
-  const invoicedPLN = r2(num(inv.netPLN) || num(inv.netAmount) * (num(inv.fxRate) || 1));
+  const invoicedPLN = r2(num(inv.netPLN) || num(inv.netAmount) * rateOf(inv));
   if (!(agreedPLN > 0) || !(invoicedPLN > 0)) return null;
   const diff = r2(invoicedPLN - agreedPLN); const pct = r2(diff / agreedPLN * 100);
   if (Math.abs(pct) <= tolerancePct) return null;

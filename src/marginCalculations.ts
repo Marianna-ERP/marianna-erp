@@ -1,5 +1,5 @@
 import { noteNames } from "./format";
-import { resolveFxRate } from "./fx";
+import { resolveFxRate , rateOf } from "./fx";
 // ─── MARGIN / P&L CALCULATIONS ──────────────────────────────────────────────
 //
 // Pure functions for computing P/L on a Sales Order. No React, no UI — this
@@ -25,6 +25,7 @@ import { resolveFxRate } from "./fx";
 // branching at render time.
 
 import { shippedKgByLine } from "./salesOrders.domain";
+import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 
 export type MarginMode = "forecast" | "actual";
 
@@ -67,7 +68,7 @@ export interface MarginBreakdown {
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function safe(n: any): number {
-  const v = parseFloat(n);
+  const v = parseNum(n);
   return isFinite(v) ? v : 0;
 }
 
@@ -288,7 +289,7 @@ function computeDirectCosts(order: any, shipments: any[], mode: MarginMode, lots
     const share = shipmentSOShare(sh, order.number);
     const costs = sh.costs || [];
     costs.forEach((c: any) => {
-      const amountPLN = safe(c.amountPLN) || (safe(c.amount) * safe(c.fxRate || 1));
+      const amountPLN = safe(c.amountPLN) || (safe(c.amount) * rateOf(c));
       // Filter by invoice status depending on mode
       if (mode === "actual") {
         // v6.37.1 (ruling A — accrual): a cost is REAL once its shipment has concluded
@@ -330,7 +331,7 @@ export function computeSOMargin(
   financeNotes: any[] = []
 ): MarginBreakdown {
   const currency = order.currency || "PLN";
-  const fxRate = safe(order.fxRate || 1) || 1;
+  const fxRate = rateOf(order);   // v7.44.0 (AUD3-L2)
 
   const rev = computeRevenue(order, mode, lots, shipments);
   const cogs = computeCOGS(order, lots, pos, mode);
