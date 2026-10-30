@@ -5171,6 +5171,17 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.54.1 — one save at a time per list; the notices in a panel ══
+(function v75401(){
+  console.log("\n══ v7.54.1 — no self-clash; notices panel ══");
+  const fsx = require("fs"), px = require("path"); const rs = fsx.readFileSync(px.join(__dirname, "../src/remoteStore.ts"), "utf8"), sg = fsx.readFileSync(px.join(__dirname, "../src/SharedStoreGate.tsx"), "utf8");
+  t("v7.54.1 (owner 29 Oct, warnings after the import with no other window open): saves of one list go one after the other — a window never clashes with itself; the notices sit in one badge and a panel with 'Use mine for all' and 'OK all'", () => {
+    ok(/const inflight = new Map<string, Promise<void>>\(\);/.test(rs) && /const prev = inflight\.get\(key\) \|\| Promise\.resolve\(\);/.test(rs), "saves of one list still overlap");
+    ok(/return pushInner\(key, mergedJson, by, attempt \+ 1\);/.test(rs), "a retry would wait for itself");
+    ok(/data-sync-notices="1"/.test(sg) && /Use mine for all/.test(sg) && /OK all/.test(sg), "the notices still run across the top bar");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

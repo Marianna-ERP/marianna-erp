@@ -50,6 +50,7 @@ export function useSharedStore(userLabel: string): { ready: boolean; sync: SyncS
 
 /** The status pill + conflict notices + the one-time upload offer, for the top bar. */
 export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLabel: string }) {
+  const [noticesOpen, setNoticesOpen] = useState(false);   // v7.54.1
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [busy, setBusy] = useState(false);
   if (sync.status === "off") return null;
@@ -75,13 +76,21 @@ export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLa
         </label>
       </>}
       {/* v7.1.1 (A-USR-2): the Sign out button now sits beside the person's initials in the top bar */}
-      {(sync.notices || []).map(n => (   /* v7.14.0 (A-RV-01): what a merge with a colleague's save has to say — amber, a choice where there is one */
+      {(sync.notices || []).length > 0 && <span style={{ position: "relative" }}>   {/* v7.54.1 (owner 29 Oct): the notices in a panel of their own, not across the top bar */}
+        <button type="button" data-sync-notices="1" onClick={() => setNoticesOpen(o => !o)} style={{ padding: "2px 8px", borderRadius: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>⚠ {(sync.notices || []).length} change{(sync.notices || []).length === 1 ? "" : "s"} to review ▾</button>
+        {noticesOpen && <div style={{ position: "fixed", right: 16, top: 52, zIndex: 81, width: "min(720px, 94vw)", maxHeight: "60vh", overflow: "auto", background: "#fff", border: "1px solid #E5E7EB", borderRadius: 10, boxShadow: "0 12px 30px rgba(0,0,0,0.18)", padding: 10, display: "grid", gap: 6, fontSize: 11 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}><b style={{ fontSize: 12 }}>Changes to review</b>
+            <button type="button" onClick={() => { (sync.notices || []).filter(n => n.kind === "clash").forEach(n => keepMine(n.key, n.id)); }} style={{ marginLeft: "auto", fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #CA8A04", background: "#fff", cursor: "pointer" }}>Use mine for all</button>
+            <button type="button" onClick={() => { (sync.notices || []).forEach(n => dismissNotice(n.key, n.id, n.kind)); setNoticesOpen(false); }} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer" }}>OK all</button></div>
+          {(sync.notices || []).map(n => (   /* v7.14.0 (A-RV-01): what a merge with a colleague's save has to say — amber, a choice where there is one */
         <span key={`${n.kind}:${n.key}:${n.id}`} data-sync-notice={n.kind} style={{ padding: "2px 8px", borderRadius: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}>
           {n.kind === "clash"
             ? <>{n.label}: {String(n.by || "").toLowerCase() === String(readSession()?.email || "").toLowerCase() ? "you changed it in another window or device at the same time — that version is kept, this window's is set aside" : `${n.by || "a colleague"} changed it at the same time — their version is kept, yours is set aside`}{(() => { const df = clashDiff(n.key, n.id); return df.length ? <span title={df.map(x => `${x.field}: kept ${x.kept} · yours ${x.mine}`).join(" · ")} style={{ marginLeft: 4, textDecoration: "underline dotted", cursor: "help" }}>({df.length} field{df.length === 1 ? "" : "s"} differ: {df.slice(0, 3).map(x => x.field).join(", ")}{df.length > 3 ? "…" : ""})</span> : null; })()} <button onClick={() => { keepMine(n.key, n.id); }} style={{ marginLeft: 4, fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 5, cursor: "pointer" }}>Use mine</button></>
             : <>your new {n.label} is now {n.to} — {n.by || "a colleague"} took that number meanwhile</>}
           <button onClick={() => dismissNotice(n.key, n.id, n.kind)} style={{ marginLeft: 4, fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 5, cursor: "pointer" }}>OK</button>
         </span>))}
+        </div>}
+      </span>}
       {sync.conflicts.map(k => <span key={k} style={{ padding: "2px 8px", borderRadius: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}>{k}: a colleague{sync.by?.[k] ? ` (${sync.by[k]})` : ""} saved first — their copy was taken; your last change is kept as a conflict copy <button onClick={() => clearConflict(k)} style={{ marginLeft: 6, border: "none", background: "none", color: "#92400E", cursor: "pointer", fontWeight: 800 }}>✓</button></span>)}
     </span>
   );
