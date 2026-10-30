@@ -1,5 +1,5 @@
 {
- "version": "7.54.1",
+ "version": "7.62.1",
  "files": [
   ".env.production",
   ".npmrc",
@@ -120,6 +120,7 @@
   "src/marginCalculations.ts",
   "src/masterData.domain.ts",
   "src/moduleGuards.domain.ts",
+  "src/monthReport.domain.ts",
   "src/noteRequest.ts",
   "src/numbering.ts",
   "src/numbers.ts",

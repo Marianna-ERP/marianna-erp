@@ -15,10 +15,7 @@ import React, { useMemo, useState, useEffect } from "react";
 import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate, nbpRateBefore } from "./fx";   // v7.13.2–7.13.3 (A-AU-2)
-import {
-  Invoice, FinanceNote, InvoiceCategory, PaymentStatus,
-  recomputeInvoiceMoney, isLocked, invoiceDirection,
-  buildFakturowniaPayload, noteSignedPLN, pushBlockers } from "./invoicing";
+import { Invoice, FinanceNote, InvoiceCategory, PaymentStatus, recomputeInvoiceMoney, isLocked, invoiceDirection, buildFakturowniaPayload, noteSignedPLN, pushBlockers, isLegalDocument, LEGAL_FIELDS } from "./invoicing";
 import * as XLSX from "xlsx";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice , fetchInvoicePdf } from "./fakturownia";
 import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister, vatFixFor, salesRowFromMapped, isRegisteredSale, soCandidatesForSale, buildIssuedSalesInvoice, noteFromCorrection, linkForTag } from "./fakturowniaImport.domain";
@@ -33,8 +30,9 @@ import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6): where a 
 import { exportNotesForSale, isFromPoland } from "./invoiceNotes.domain";   // v7.26.4 (A-INV-4)
 import { destinationDisplay } from "./SalesOrders";
 import { locationById } from "./locations";
+import { categoriesFor } from "./operationalCosts";   // v7.60.0 (CAT-1)
 import { registerExpense, expensePayload } from "./fakturownia";   // v7.48.0 (INV2-7)
-import { isOverdue } from "./overdue.domain";   // v7.46.0 (INV2-5)
+import { isOverdue, dueDateOf } from "./overdue.domain";   // v7.46.0 (INV2-5)
 import { alreadyImported, findCorrectedInvoice } from "./corrections.domain";   // v7.45.0 (INV2-1 / INV2-2)
 import { takeNoteRequest } from "./noteRequest";   // v7.34.0 (CN-2)
 import { pdfFolderSupported, pdfFolder, choosePdfFolder, pdfFileName, savePdfToFolder } from "./invoicePdfFolder";   // v7.26.6 (A-INV-2)
@@ -132,11 +130,16 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
 // ── v6.39.0: Invoices-owned Fakturownia import (staging + tagging) ───────────
 // Ruling C-1: this replaces the old Finance→Operational-costs import entirely.
 const TAG_LABELS: Record<string, string> = { GOODS: "Goods purchase", FREIGHT: "Freight", CUSTOMS: "Customs", WAREHOUSE: "Warehouse", OVERHEAD: "Overhead", SKIP: "Skip" };
-const OP_CATEGORIES = ["salary", "office_rent", "accountant", "petrol", "software", "bank_fees", "insurance", "phone_internet", "office_supplies", "other"];
+const OP_CATEGORIES = categoriesFor("invoice").map(c => c.key);   // v7.60.0 (CAT-1): an invoice never carries salary, ZUS, taxes or bank fees
 
-const lineless = (row: any, invoices: any[]) => { if (!Array.isArray(row?.positions) || !row.positions.length) return null; const no = String(row.number || "").replace(/\s+/g, "").toUpperCase();
-  const twin = (invoices || []).find((i: any) => i && ((row.fktId != null && i.fakturownia && String(i.fakturownia.fktId ?? i.fakturownia.ref) === String(row.fktId)) || String(i.number || "").replace(/\s+/g, "").toUpperCase() === no));
-  return twin && !(Array.isArray(twin.positions) && twin.positions.length) ? twin.id : null; };   // v7.53.1: the invoice already registered without its lines
+const refreshOf = (row: any, invoices: any[]) => {   // v7.62.1 (DUE-1 / PAY-1 on invoices already registered)
+  const no = String(row?.number || "").replace(/\s+/g, "").toUpperCase();
+  const twin: any = (invoices || []).find((i: any) => i && ((row?.fktId != null && i.fakturownia && String(i.fakturownia.fktId ?? i.fakturownia.ref) === String(row.fktId)) || String(i.number || "").replace(/\s+/g, "").toUpperCase() === no)); if (!twin) return null;
+  const patch: any = {};
+  if (Array.isArray(row.positions) && row.positions.length && !(Array.isArray(twin.positions) && twin.positions.length)) patch.positions = row.positions;
+  if (row.dueDate && (!twin.dueDate || (twin.dueDate === twin.issueDate && row.dueDate !== twin.dueDate))) patch.dueDate = row.dueDate;
+  if (row.paymentMethod && row.paymentMethod !== "Transfer" && String(twin.paymentMethod || "Transfer") === "Transfer") patch.paymentMethod = row.paymentMethod;
+  return Object.keys(patch).length ? { invoiceId: twin.id, patch } : null; };
 
 function ImportFakturowniaModal({ invoices = [], notes = [], contacts = [], shipments = [], pos = [], onClose, onPost }: any) {
   const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
@@ -256,7 +259,7 @@ function ImportFakturowniaModal({ invoices = [], notes = [], contacts = [], ship
     });
     // v7.33.1 (INV-PDF): the adopted ones — their Fakturownia id, NIP and address onto the registered invoice
     const adopts = rows.filter((r: any) => r.include && r.adopt != null).map((r: any) => ({ invoiceId: r.adopt, fktId: r.fktId, taxNo: r.sellerTaxNo || "", addr: r.sellerAddr || null }));
-    const fills = rows.filter((r: any) => r.dup).map((r: any) => ({ invoiceId: lineless(r, invoices), positions: r.positions })).filter((x: any) => x.invoiceId != null);   // v7.53.1
+    const fills = rows.filter((r: any) => r.dup).map((r: any) => refreshOf(r, invoices)).filter(Boolean);   // v7.53.1
     onPost({ regs, flips, opCosts, fixes, adopts, notesIn, fills });
   }
 
@@ -288,13 +291,16 @@ function ImportFakturowniaModal({ invoices = [], notes = [], contacts = [], ship
         </div>
         {rows.length > 0 && (
           <div style={{ padding: "10px 22px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "6px 0", borderBottom: "1px solid #F3F4F6" }}>
-              {["", "DATE", "SELLER", "NUMBER", "NET", "TAG", "ROUTE / LINK"].map((h, i) => <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
+            <div style={{ display: "grid", gridTemplateColumns: "26px 104px minmax(0, 1.3fr) minmax(0, 0.9fr) 150px 140px minmax(0, 1.6fr)", gap: 8, padding: "6px 0", borderBottom: "1px solid #F3F4F6" }}>
+              {["", "DATE · STATE", "SELLER", "NUMBER", "AMOUNTS", "CATEGORY", "LINK"].map((h, i) => <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
             </div>
-            {rows.map((r: any) => {
+            {rows.length > 0 && (() => { const c = { new: 0, reg: 0, corr: 0, att: 0 } as any; rows.forEach((r: any) => { if (r.isCorrection) c.corr++; else if (r.dup) c.reg++; else if (!r.net || !r.gross || !contactForSeller(r, contacts)) c.att++; else c.new++; });   // v7.59.0 (IMP-2)
+              return <div data-import-summary="1" style={{ display: "flex", gap: 14, fontSize: 11, padding: "6px 0", color: "#334155" }}><span><b>{c.new}</b> new to post</span><span><b>{c.reg}</b> already in the register</span><span><b>{c.corr}</b> corrections</span><span style={{ color: c.att ? "#B45309" : undefined }}><b>{c.att}</b> need attention</span></div>; })()}
+            {[...rows].sort((a: any, b: any) => { const rankOf = (r: any) => (r.isCorrection ? 2 : r.dup ? 1 : (!r.net || !r.gross || !contactForSeller(r, contacts)) ? 3 : 0);   // v7.62.1 (IMP-2): new, in the register, corrections, needs attention
+              return rankOf(a) - rankOf(b); }).map((r: any) => {
               const rowPLN = Math.round((r.net || r.gross) * rateOf(r) * 100) / 100;
               return (
-                <div key={r.key} style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "7px 0", borderBottom: "1px solid #F8FAFC", alignItems: "center", opacity: r.include ? 1 : 0.55 }}>
+                <div key={r.key} style={{ display: "grid", gridTemplateColumns: "26px 104px minmax(0, 1.3fr) minmax(0, 0.9fr) 150px 140px minmax(0, 1.6fr)", gap: 8, padding: "7px 0", borderBottom: "1px solid #F8FAFC", alignItems: "center", opacity: r.include ? 1 : 0.55 }}>
                   <input type="checkbox" checked={r.include} onChange={async (e: any) => {
                     // v6.66.0 (D-30): re-including a flagged duplicate is a deliberate act.
                     if (e.target.checked && r.dup && !r.vatFix) {
@@ -304,8 +310,9 @@ function ImportFakturowniaModal({ invoices = [], notes = [], contacts = [], ship
                     }
                     upd(r.key, { include: e.target.checked });
                   }} />
-                  <div style={{ fontSize: 11, color: "#64748B" }}>{formatDMY(r.date)}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{!contactForSeller(r, contacts) && <button type="button" data-row-new-company="1" title="the seller is not in Parties — create it with the Parties form, prefilled; then fetch the import again" onClick={() => { const prefill = newCompanyFromInvoice({ kind: "COST", number: r.number, currency: r.currency, counterparty: { name: r.seller, taxNo: r.sellerTaxNo, addr: r.sellerAddr } }, () => null); window.dispatchEvent(new CustomEvent("marianna:navigate", { detail: { module: "contacts", tab: "companies", newCompany: { prefill, linkInvoices: [], fromInvoice: r.number, returnTo: "invoices" } } })); }} style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 5, border: "1px solid #1D4ED8", background: "#fff", color: "#1D4ED8", cursor: "pointer" }}>+ New company</button>}   {/* v7.49.0 (INV2-8) */}{r.adopt != null && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#15803D" }}>already in the register — gets its Fakturownia link</span>}{r.vatFix && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#0E7490" }}>corrects the VAT of the invoice already registered ({r.vatFix.confirmZero ? "0 % confirmed" : `${Number(r.vatFix.vatRate).toFixed(2)} %`})</span>}{(!r.net || !r.gross) && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B45309" }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount — check it there before posting</span>}{r.dup && !r.vatFix && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
+                  <div style={{ fontSize: 11, color: "#64748B" }}>{formatDMY(r.date)}{(() => { const st = r.isCorrection ? ["correction → note", "#6D28D9"] : r.dup ? [r.seenAs === "note" ? "already a note" : (refreshOf(r, invoices) ? "gets updated" : "in the register"), "#475569"] : r.adopt != null ? ["gets its link", "#15803D"] : (!r.net || !r.gross) ? ["needs attention", "#B45309"] : !contactForSeller(r, contacts) ? ["unknown seller", "#B45309"] : ["new", "#1D4ED8"];
+                    return <div data-import-state="1" title={(!r.net || !r.gross) ? "Fakturownia sent no net or gross amount — check it there before posting" : ""} style={{ marginTop: 2, fontSize: 10, fontWeight: 700, color: st[1] }}>{st[0]}</div>; })()}</div>   {/* v7.59.0 (IMP-2): the row's state, never inside the seller */}
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{!contactForSeller(r, contacts) && <button type="button" data-row-new-company="1" title="the seller is not in Parties — create it with the Parties form, prefilled; then fetch the import again" onClick={() => { const prefill = newCompanyFromInvoice({ kind: "COST", number: r.number, currency: r.currency, counterparty: { name: r.seller, taxNo: r.sellerTaxNo, addr: r.sellerAddr } }, () => null); window.dispatchEvent(new CustomEvent("marianna:navigate", { detail: { module: "contacts", tab: "companies", newCompany: { prefill, linkInvoices: [], fromInvoice: r.number, returnTo: "invoices" } } })); }} style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 5, border: "1px solid #1D4ED8", background: "#fff", color: "#1D4ED8", cursor: "pointer" }}>+ New company</button>}   {/* v7.49.0 (INV2-8) */}{r.adopt != null && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#15803D" }}>already in the register — gets its Fakturownia link</span>}{r.vatFix && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#0E7490" }}>corrects the VAT of the invoice already registered ({r.vatFix.confirmZero ? "0 % confirmed" : `${Number(r.vatFix.vatRate).toFixed(2)} %`})</span>}{r.dup && !r.vatFix && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
                   <div style={{ fontSize: 11, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.number || "—"}</div>
                   <div style={{ fontSize: 12 }} data-import-amounts="1">net {(r.net || 0).toLocaleString("pl-PL")} · VAT {Math.round(((r.gross || 0) - (r.net || 0)) * 100 / 100).toLocaleString("pl-PL")} · <b>gross {(r.gross || r.net || 0).toLocaleString("pl-PL")} {r.currency}</b>{r.currency !== "PLN" ? <span style={{ color: "#64748B" }}> ({Math.round((r.gross || r.net || 0) * rateOf(r) * 100 / 100).toLocaleString("pl-PL")} PLN)</span> : null}</div>   {/* v7.34.0 (IMP-1) */}
                   <select style={inp} value={r.tag} onChange={(e: any) => { const tag = e.target.value; upd(r.key, { tag, shipmentNumber: undefined, costLineId: undefined, poNumber: undefined, ...linkForTag(r, tag, contacts, shipments, pos) }); }}>   {/* v7.49.0 (INV2-8): the link follows the category chosen */}
@@ -390,7 +397,7 @@ function ImportIssuedModal({ invoices = [], notes = [], contacts = [], orders = 
     const coOf = (r: any) => (contacts || []).find((c: any) => String(c.id) === String(r.companyId)) || null;
     const notesIn = rows.filter((r: any) => r.include && r.isCorrection).map((r: any) => noteFromCorrection(r, "outgoing", invoices, coOf(r), nextId));   // v7.35.0 (CR-1): a correction is a note
     const regs = rows.filter((r: any) => r.include && !r.isCorrection).map(r => buildIssuedSalesInvoice(r, r.so, coOf(r)));
-    const fills = rows.filter((r: any) => r.dup).map((r: any) => ({ invoiceId: lineless(r, invoices), positions: r.positions })).filter((x: any) => x.invoiceId != null);   // v7.53.1
+    const fills = rows.filter((r: any) => r.dup).map((r: any) => refreshOf(r, invoices)).filter(Boolean);   // v7.53.1
     onPost({ regs, flips: [], opCosts: [], fixes: [], notesIn, fills });
   }
   const inp: React.CSSProperties = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 10px", fontSize: 12 };
@@ -612,9 +619,9 @@ export default function Invoices(props: any) {
   }
   async function handleImportPost({ regs, flips, opCosts, fixes = [], adopts = [], notesIn = [], fills = [] }: any) {
   if (fills.length) {   // v7.53.1 (PL-1 prerequisite completed): the lines (and kilos) of invoices registered before v7.52.0
-    const byId = new Map(fills.map((x: any) => [String(x.invoiceId), x.positions]));
-    setInvoices((prev: any[]) => (prev || []).map((i: any) => byId.has(String(i?.id)) && !(Array.isArray(i.positions) && i.positions.length) ? { ...i, positions: byId.get(String(i.id)) } : i));
-    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "updated", summary: `${fills.length} registered invoice(s) given their lines (kilos) from Fakturownia — PL-1 prerequisite` });
+    const byId = new Map(fills.map((x: any) => [String(x.invoiceId), x.patch || { positions: x.positions }]));   // v7.62.1: lines, due date, payment method
+    setInvoices((prev: any[]) => (prev || []).map((i: any) => byId.has(String(i?.id)) ? { ...i, ...(byId.get(String(i.id)) as any) } : i));
+    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "updated", summary: `${fills.length} registered invoice(s) updated from Fakturownia (lines, due date, payment method) — PL-1 prerequisite` });
   }
   if (notesIn.length && typeof setNotes === "function") {   // v7.34.0 (CN-1): correcting invoices as notes, each once
     setNotes((prev: any[]) => { const have = new Set((prev || []).map((n: any) => String(n.source || ""))); return [...(prev || []), ...notesIn.filter((n: any) => !have.has(String(n.source)))]; });
@@ -1044,7 +1051,7 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>   {/* v7.51.0 (BUG-4): the buttons keep one size */}
           {inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark issued</button>}
           {inv.paymentStatus === "Issued" && <button onClick={() => onMarkStatus("Sent")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0284C7", color: "#0284C7", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Locks the invoice permanently">Mark sent 🔒</button>}
-          {inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete invoice</button>}
+          {inv.paymentStatus !== "Cancelled" && !isLegalDocument(inv) && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete invoice</button>}
           {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
           {onAllocate && inv.paymentStatus !== "Cancelled" && <SmallButton kind="amber" onClick={onAllocate} title="v6.99.109 (A-ST-7): spread this warehouse invoice over the lots that were at the warehouse in its period, by kilo-days — the lots' warehouse cost lines feed the settlement">{allocatedLots.length ? `Allocated to ${allocatedLots.length} lot${allocatedLots.length === 1 ? "" : "s"} · change` : "Allocate to lots"}</SmallButton>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
@@ -1083,7 +1090,7 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
             <div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 6 }}><CatBadge cat={inv.category} /><DirPill inv={inv} /><StatusBadge s={inv.paymentStatus} />{locked && <span style={{ fontSize: 11, color: "#0284C7", fontWeight: 600 }}>🔒 locked</span>}</div>
               <div style={{ fontSize: 24, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{inv.number || "(no number yet)"}</div>
-              <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>{(CATEGORY_META[inv.category] || CATEGORY_META.OTHER).label} · {inv.counterparty?.name || "—"}</div>
+              <div data-invoice-subtitle="1" style={{ fontSize: 14, color: "#1F2937", marginTop: 4 }}><b>{inv.counterparty?.name || "—"}</b>{partyNip(inv) ? <span style={{ color: "#475569" }}> · NIP {partyNip(inv)}</span> : null}</div>   {/* v7.58.0 (UI-1): readable; the type only in the badge above */}
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Gross total</div>
@@ -1094,7 +1101,7 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             <Card><SectionTitle>DATES & PAYMENT</SectionTitle>
-              <Row k="Issue date" v={inv.issueDate || "—"} /><Row k="Sale date" v={inv.saleDate || "—"} /><Row k="Due date" v={inv.dueDate || "—"} /><Row k="Payment method" v={inv.paymentMethod || "—"} />
+              <Row k="Issue date" v={inv.issueDate || "—"} /><Row k="Sale date" v={inv.saleDate || "—"} /><Row k="Due date" v={inv.dueDate || (dueDateOf(inv, contacts) ? `${dueDateOf(inv, contacts)} (from the payment terms)` : "—")} /><Row k="Payment method" v={inv.paymentMethod || "—"} />
               {inv.paidAmount > 0 && <Row k="Paid so far" v={money(inv.paidAmount, inv.currency)} />}
               {inv.paymentStatus !== "Paid" && inv.paidAmount > 0 && <Row k="Remaining" v={money(remaining, inv.currency)} />}
             </Card>
@@ -1182,7 +1189,8 @@ function Row({ k, v, bold }: any) { return <div style={{ display: "flex", justif
 
 // ════════════════ FORM ════════════════
 function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, shipments, lots }: any) {
-  const sf = (k: string, v: any) => setForm((f: any) => recomputeInvoiceMoney({ ...f, [k]: v }));
+  const legalLocked = isLegalDocument(form);   // v7.55.0 (ACC-1): Fakturownia owns the legal content
+  const sf = (k: string, v: any) => { if (legalLocked && LEGAL_FIELDS.includes(k)) return; setForm((f: any) => recomputeInvoiceMoney({ ...f, [k]: v })); };
   // v7.13.2 (A-AU-2, owner 9 Oct): the invoice's rate is the NBP average of the last working day BEFORE its issue date — filled, not typed
   const [fxNote, setFxNote] = React.useState("");
   React.useEffect(() => {
@@ -1252,13 +1260,14 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
               {!isSales && <div><Lbl>Category</Lbl><Sel value={catKey(form.category)} onChange={(e: any) => setForm((f: any) => ({ ...f, category: e.target.value, costScope: scopeOf(e.target.value) }))}>{(["PURCHASE", "FREIGHT", "CUSTOMS", "WAREHOUSE", "OVERHEAD", "OTHER"] as InvoiceCategory[]).map(c => <option key={c} value={c}>{CATEGORY_META[c].label}</option>)}</Sel><div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Charged to {CHARGED_TO[scopeOf(catKey(form.category))]}</div></div>}
               <div><Lbl>Document type</Lbl><Sel value={form.isProforma ? "PROFORMA" : "FINAL"} onChange={(e: any) => sf("isProforma", e.target.value === "PROFORMA")}><option value="FINAL">Final invoice</option><option value="PROFORMA">Pro-forma (advance request — not in the ledger)</option></Sel></div>
               
-              <div><Lbl>Invoice number {isSales && <span style={{ color: "#BBB", fontWeight: 400 }}>(Fakturownia assigns on Send)</span>}</Lbl><Inp value={form.number} onChange={(e: any) => sf("number", e.target.value)} placeholder={isSales ? "auto / optional" : "supplier's number"} /></div>
-              <div><Lbl>Issue date</Lbl><Inp type="date" value={form.issueDate} onChange={(e: any) => sf("issueDate", e.target.value)} /></div>
-              <div><Lbl>Sale date</Lbl><Inp type="date" value={form.saleDate} onChange={(e: any) => sf("saleDate", e.target.value)} /></div>
+              {legalLocked && <div data-legal-locked="1" style={{ gridColumn: "1 / -1", padding: "8px 10px", borderRadius: 8, background: "#EFF6FF", border: "1px solid #BFDBFE", fontSize: 12, color: "#1E3A8A" }}>Registered in Fakturownia / KSeF — its legal content (number, dates, company, amounts, VAT, currency) is read-only here and is changed only by a correction. You can change: category, due date, payment method, linked documents, notes.</div>}   {/* v7.55.0 (ACC-1) */}
+              <div><Lbl>Invoice number {isSales && <span style={{ color: "#BBB", fontWeight: 400 }}>(Fakturownia assigns on Send)</span>}</Lbl><Inp disabled={legalLocked} value={form.number} onChange={(e: any) => sf("number", e.target.value)} placeholder={isSales ? "auto / optional" : "supplier's number"} /></div>
+              <div><Lbl>Issue date</Lbl><Inp disabled={legalLocked} type="date" value={form.issueDate} onChange={(e: any) => sf("issueDate", e.target.value)} /></div>
+              <div><Lbl>Sale date</Lbl><Inp disabled={legalLocked} type="date" value={form.saleDate} onChange={(e: any) => sf("saleDate", e.target.value)} /></div>
               <div><Lbl>Due date</Lbl><Inp type="date" value={form.dueDate} onChange={(e: any) => sf("dueDate", e.target.value)} /></div>
-              <div><Lbl>Payment method</Lbl><Sel value={form.paymentMethod} onChange={(e: any) => sf("paymentMethod", e.target.value)}>{["Transfer", "Cash", "Card", "Compensation", "Prepaid"].map(p => <option key={p}>{p}</option>)}</Sel></div>
+              <div><Lbl>Payment method</Lbl><Sel value={form.paymentMethod} onChange={(e: any) => sf("paymentMethod", e.target.value)}>{PAYMENT_METHODS.map(p => <option key={p}>{p}</option>)}</Sel></div>
               {catKey(form.category) === "WAREHOUSE" && <><div><Lbl>Period from</Lbl><Inp type="date" value={form.periodFrom} onChange={(e: any) => sf("periodFrom", e.target.value)} /></div><div><Lbl>Period to</Lbl><Inp type="date" value={form.periodTo} onChange={(e: any) => sf("periodTo", e.target.value)} /></div></>}
-              <div style={{ gridColumn: "span 2" }}><Lbl>{isSales ? "Buyer (client)" : "Seller (counterparty)"}</Lbl><Sel value={form.counterparty?.id || ""} onChange={(e: any) => setParty(e.target.value)}><option value="">— select —</option>{partyOptions.map((c: any) => <option key={c.id} value={c.id}>{c.name}{c.nip ? ` (NIP ${c.nip})` : ""}</option>)}</Sel></div>
+              <div style={{ gridColumn: "span 2" }}><Lbl>{isSales ? "Buyer (client)" : "Seller (counterparty)"}</Lbl><Sel disabled={legalLocked} value={form.counterparty?.id || ""} onChange={(e: any) => setParty(e.target.value)}><option value="">— select —</option>{partyOptions.map((c: any) => <option key={c.id} value={c.id}>{c.name}{c.nip ? ` (NIP ${c.nip})` : ""}</option>)}</Sel></div>
             </div>
           </Card>
 
@@ -1266,8 +1275,8 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={(e: any) => { setForm((f: any) => recomputeInvoiceMoney({ ...f, currency: e.target.value, fxRate: defaultFxRate(e.target.value) })); }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
               <div><Lbl>FX rate to PLN</Lbl><Inp type="number" value={form.fxRate} onChange={() => {}} disabled title="The NBP rate of the day before the issue date — filled automatically (A-AU-2)" />{fxNote && <div data-fx-note="1" style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{fxNote}</div>}</div>
-              <div><Lbl>Net amount</Lbl><Inp type="number" value={form.netAmount} onChange={(e: any) => sf("netAmount", e.target.value)} /></div>
-              <div><Lbl>VAT rate (%)</Lbl><Sel value={form.vatRate} onChange={(e: any) => sf("vatRate", e.target.value)}>{[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}</Sel></div>
+              <div><Lbl>Net amount</Lbl><Inp disabled={legalLocked} type="number" value={form.netAmount} onChange={(e: any) => sf("netAmount", e.target.value)} /></div>
+              <div><Lbl>VAT rate (%)</Lbl><Sel disabled={legalLocked} value={form.vatRate} onChange={(e: any) => sf("vatRate", e.target.value)}>{[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}</Sel></div>
             </div>
             <div style={{ marginTop: 14, padding: 14, background: "#F9FAFB", borderRadius: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
               <div><div style={{ fontSize: 10, color: "#888" }}>Net</div><div style={{ fontSize: 14, fontWeight: 600 }}>{money(form.netAmount, form.currency)}</div></div>

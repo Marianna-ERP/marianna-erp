@@ -8,7 +8,7 @@ import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { printHtmlNode } from "./documentService";
 import DateInput from "./DateInput";
 import { parseBankCSV, matchBankLines, bankPaymentEvent, upsertBankAccountFromStatement , splitBankLine, bankShareEvent } from "./bankReconciliation.domain";
-import { advanceFromBankLine, advanceRemaining, applyAdvanceToInvoice, advanceSources, linkAdvanceToProforma } from "./advances.domain";
+import { advanceFromBankLine, advanceRemaining, applyAdvanceToInvoice, advanceSources, linkAdvanceToProforma, finalInvoicesFor } from "./advances.domain";
 import { realizedFxPLN, fxDifferencesByCounterparty } from "./payments.domain";   // v7.13.5 (A-AU-2)
 import { statementFor, statementCurrencies } from "./statement.domain";
 import { buildSnapshot, cashProjection } from "./periodClose.domain";
@@ -38,6 +38,9 @@ import {
   ALLOCATION_METHODS, computeSOMarginWithOverhead } from "./operationalCosts";
 
 import { FlatCard as Card } from "./ui";
+import * as XLSX from "xlsx";
+import { companyProfile } from "./useLocalStoredState";   // v7.61.0
+import { monthReport } from "./monthReport.domain";   // v7.61.0 (RPT-M)
 
 // ─── FINANCE MODULE ─────────────────────────────────────────────────────────
 // V5.7 adds Operational Costs and overhead allocation. Direct costs stay on
@@ -154,7 +157,7 @@ function newCostTemplate(): OperationalCost {
 
 
 // ── v6.99.0 (FN-1/FN-2/FN-3): CLOSE THE MONTH · MANAGEMENT PACKAGE · CASH VIEW ──
-function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSettlements = [], invoices = [], bankAccounts = [], closedPeriods = [], setClosedPeriods = null, userName = "", canClose = true, financeNotes = [], contacts = [] }: any) {
+function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSettlements = [], invoices = [], bankAccounts = [], closedPeriods = [], setClosedPeriods = null, userName = "", canClose = true, financeNotes = [], contacts = [], operationalCosts = [], bankLines = null }: any) {
   const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const today = localTodayISO(); const thisMonth = today.slice(0, 7);
   const prevMonth = prevMonthISO(today);   // v6.99.122 (AUD-07/09): from the text
@@ -164,6 +167,8 @@ function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSett
   const stockKg = stockLots.reduce((s: number, l: any) => s + (Number(l.physicalKg) || 0), 0);
   const stockValue = stockLots.reduce((s: number, l: any) => { const kg = Number(l.receivedKg) || Number(l.physicalKg) || 0; const cost = (l.costs || []).reduce((a: number, c: any) => a + (Number(c.pln) || 0), 0); return s + (kg > 0 ? cost / kg * (Number(l.physicalKg) || 0) : 0); }, 0);
   const live = buildSnapshot(period, { totalAgg, ledgerTotals, stockKg, stockValuePLN: stockValue, openClaims: (claims || []).filter((c: any) => !["Settled", "Rejected", "Withdrawn", "Closed"].includes(String(c.status))).length, settlementsClosed: (poSettlements || []).filter((s: any) => s.status === "Closed" && String(s.closedAt || "").startsWith(period)).length, realizedFxPLN: (invoices || []).reduce((s: number, i: any) => s + realizedFxPLN(i), 0), bankBalances: (bankAccounts || []).map((b: any) => ({ label: b.label || b.bank, currency: b.currency, balance: b.lastKnownBalance })) });
+  const report = monthReport(period, { invoices, notes: financeNotes, operationalCosts, bankLines, accountCodes: (companyProfile() as any).accountCodes || {} });   // v7.61.0 (RPT-M)
+  (live as any).report = report;   // frozen with the month when it is closed
   const snap = closed ? closed.snapshot : live;
   const cash = cashProjection(invoices, today, financeNotes, contacts);   // v7.46.1 (INV2-5): the one overdue rule
   const fmt = (n: number) => (n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -176,6 +181,12 @@ function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSett
         {closed ? <span style={{ fontSize: 11, fontWeight: 800, color: "#16A34A" }}>CLOSED {formatDMY(closed.closedAt)} by {closed.closedBy}</span>
           : (canClose && setClosedPeriods && period < thisMonth && <button onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Close ${period}? Documents dated inside it can no longer be created or changed, and its figures are frozen for the accountant.` }))) return; setClosedPeriods((prev: any[]) => [...(prev || []), { period, closedAt: today, closedBy: userName || "owner", snapshot: live }]); recordAudit({ module: "Finance", docType: "Period", docNumber: period, action: "status", summary: `Month ${period} closed — net ${fmt(live.netPLN)} PLN, receivables ${fmt(live.receivableOpenPLN)}, payables ${fmt(live.payableOpenPLN)}` }); }} style={{ fontSize: 11, padding: "5px 12px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontWeight: 800, cursor: "pointer" }}>🔒 Close {period}</button>)}
         {closed && setClosedPeriods && canClose && <button onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Re-open ${period}? The frozen snapshot is discarded.` }))) return; setClosedPeriods((prev: any[]) => (prev || []).filter((c: any) => c.period !== period)); recordAudit({ module: "Finance", docType: "Period", docNumber: period, action: "status", summary: `Month ${period} re-opened` }); }} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer" }}>re-open</button>}
+        <button data-month-report="1" onClick={() => { const rep: any = (closed && (closed as any).snapshot && (closed as any).snapshot.report) || report; const wb = XLSX.utils.book_new();   // v7.61.0 (RPT-M): the accountant's month report
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Line", "Account code", "PLN"], ...rep.pl.map((x: any) => [x.label, x.code, x.pln]), ["Result", "", rep.result]]), "P&L");
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Open at month end", "PLN"], ["Receivables", rep.balances.receivablesPLN], ["Payables", rep.balances.payablesPLN], [], ["VAT", "PLN"], ["Sales VAT", rep.vat.salesVatPLN], ["Purchase VAT", rep.vat.purchaseVatPLN]]), "Balances & VAT");
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Check", "Count"], ...rep.checks.map((x: any) => [x.check, x.count])]), "Checks");
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Date", "Document", "Company", "NIP", "Category", "Account code", "Net PLN", "VAT PLN", "Gross PLN"], ...rep.details.map((x: any) => [x.date, x.document, x.party, x.nip, x.category, x.code, x.netPLN, x.vatPLN, x.grossPLN])]), "Documents");
+          XLSX.writeFile(wb, `Month report ${period}.xlsx`); }} style={{ fontSize: 11, padding: "5px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", marginRight: 6 }}>Month report for the accountant (Excel)</button>
         <button onClick={() => printHtmlNode("mgmt-package", `Management package — ${period}`)} style={{ fontSize: 11, padding: "5px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>⎙ Package</button>
       </div>
       <div id="mgmt-package" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
@@ -378,6 +389,7 @@ function AdvancesPanel({ advancePayments = [], setAdvancePayments = null, invoic
                         </select> : <div style={{ fontSize: 10, color: "#C4B5FD" }}>no pro-forma linked yet — mark one in Invoices (Document type → Pro-forma)</div>; })()}
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#7C3AED", fontVariantNumeric: "tabular-nums" }}>{rem.toLocaleString("pl-PL")} {a.currency} left</div>
+                {(() => { const fin = finalInvoicesFor(a, invoices); return fin.length && pick[a.id] == null ? <button type="button" data-final-invoice="1" onClick={() => setPick(p => ({ ...p, [a.id]: fin[0].id }))} title="the final invoice of the same company and currency, closest in amount" style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid #1D4ED8", color: "#1D4ED8", background: "#fff", cursor: "pointer", marginRight: 6 }}>Final invoice arrived: {fin[0].number} — choose it</button> : null; })()}   {/* v7.62.0 (ACC-2) */}
                 <select value={pick[a.id] ?? ""} onChange={(e: any) => setPick(p => ({ ...p, [a.id]: e.target.value }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11, maxWidth: 230 }}>
                   <option value="">— apply to invoice —</option>
                   {candidates.map((i: any) => <option key={String(i.id)} value={i.id}>{i.number} · open {outstandingOf(i).toLocaleString("pl-PL")}</option>)}
@@ -1087,7 +1099,7 @@ packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from i
               </div>
               {canOpenFinance(users, userName, "pl") && <ConsignmentResultsCard pos={pos} lots={lots} orders={orders} invoices={invoices} shipments={shipments} financeNotes={financeNotes} />}{/* v7.8.3 (A-PL-2) */}
               {canOpenFinance(users, userName, "pl") && <PurchaseResultsCard pos={pos} lots={lots} orders={orders} shipments={shipments} />}
-              {canOpenFinance(users, userName, "pl") && <MonthCloseCard financeNotes={financeNotes} contacts={contacts} totalAgg={totalAgg} ledgerTotals={buildLedger({ orders, lots, pos, invoices, financeNotes, todayISO: localTodayISO() }).totals} lots={lots} claims={claims} poSettlements={poSettlements} invoices={invoices} bankAccounts={bankAccounts} closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} userName={userName} canClose={canOpenFinance(users, userName, "pl")} />}
+              {canOpenFinance(users, userName, "pl") && <MonthCloseCard financeNotes={financeNotes} contacts={contacts} operationalCosts={operationalCosts} bankLines={bankLines} totalAgg={totalAgg} ledgerTotals={buildLedger({ orders, lots, pos, invoices, financeNotes, todayISO: localTodayISO() }).totals} lots={lots} claims={claims} poSettlements={poSettlements} invoices={invoices} bankAccounts={bankAccounts} closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} userName={userName} canClose={canOpenFinance(users, userName, "pl")} />}
               {canOpenFinance(users, userName, "budget") && typeof setBudgets === "function" && (() => {
                 const period = localTodayISO().slice(0, 7);
                 const actuals: any = { revenue: totalAgg.totalRevenuePLN, contribution: totalAgg.totalContributionPLN, overhead: totalAgg.totalOverheadPLN, net: totalAgg.totalNetMarginPLN ?? 0 };

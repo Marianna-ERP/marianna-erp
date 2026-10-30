@@ -382,3 +382,8 @@ export function notesOffOriginalRate(invoices: any[], notes: any[]): Array<{ id:
     return { id: n.id, fxRate: r, amountPLN: Math.round(Math.abs(Number(n.amount) || 0) * r * 100) / 100 };
   }).filter(Boolean) as any[];
 }
+
+/** v7.55.0 (ACC-1, owner 30 Oct): an invoice registered in Fakturownia / KSeF — imported from there, or issued there by the ERP — is a legal
+ *  document: its legal content is read-only here; only the ERP's own fields (category, due date, payment method, links, notes) change. */
+export function isLegalDocument(inv: any): boolean { const f = inv?.fakturownia || {}; return String(inv?.source || "").startsWith("fakturownia") || f.fktId != null || f.ref != null; }
+export const LEGAL_FIELDS = ["number", "issueDate", "saleDate", "netAmount", "vatRate", "vatAmount", "grossAmount", "currency", "fxRate", "counterparty", "kind", "positions"];

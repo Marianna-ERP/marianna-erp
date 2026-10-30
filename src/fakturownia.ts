@@ -4,6 +4,7 @@
 // too. Here the browser keeps one thing of its own: the live-push switch. A token an older build left in this browser is removed
 // the first time the configuration is read. Callers still handle {ok:false} by offering the file import.
 import { sessionToken } from "./remoteStore";
+import { paymentMethodFrom } from "./payments.domain";   // v7.57.0 (PAY-1)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 export interface FakturowniaConfig {
@@ -158,6 +159,7 @@ export interface MappedInvoice {
   description: string;
   oid: string;
   ksefNo: string;
+  paymentMethod?: string; dueFromDays?: boolean;   // v7.56.0 / v7.57.0
   positions?: Array<{ name: string; quantity: number; unit: string; netPrice?: number; grossTotal?: number; vatRate?: any }>;   // v7.52.0
 }
 
@@ -178,7 +180,12 @@ export function mapInvoice(raw: any): MappedInvoice {
     income: raw?.income === undefined ? true : (String(raw.income) === "1" || raw.income === true || raw.income === 1),
     issueDate: str(raw?.issue_date).slice(0, 10),
     sellDate: str(raw?.sell_date).slice(0, 10),
-    dueDate: str(raw?.payment_to).slice(0, 10),
+    // v7.56.0 (DUE-1, owner 30 Oct: "the system does not read the due dates correctly"): Fakturownia's date, else its NUMBER OF DAYS
+    // ('payment_to_kind') counted from the issue date; else empty (the company's terms then apply, marked as such)
+    dueDate: (() => { const d = str(raw?.payment_to).slice(0, 10); if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d; const k = Number(str(raw?.payment_to_kind)); const iss = str(raw?.issue_date).slice(0, 10);
+      if (isFinite(k) && k >= 0 && /^\d{4}-\d{2}-\d{2}$/.test(iss)) { const [y, m, dd] = iss.split("-").map(Number); const x = new Date(Date.UTC(y, m - 1, dd + k)); return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`; }
+      return ""; })(),
+    paymentMethod: paymentMethodFrom(raw?.payment_type),   // v7.57.0 (PAY-1): card stays card
     sellerName: str(raw?.seller_name),
     sellerTaxNo: str(raw?.seller_tax_no),
     buyerName: str(raw?.buyer_name),

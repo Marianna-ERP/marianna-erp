@@ -20,7 +20,7 @@ export type OperationalAllocationMethod =
   | "not_allocated";
 
 export type OperationalCostCategory =
-  | "salary"
+  | "salary" | "zus" | "taxes" | "vehicle" | "fx_difference" | "interest"
   | "office_rent"
   | "accountant"
   | "petrol"
@@ -90,18 +90,28 @@ export interface NetAggregateMargin {
   orderCount: number;
 }
 
-export const OPERATIONAL_COST_CATEGORIES = [
-  { key: "salary", label: "Salary / payroll" },
-  { key: "office_rent", label: "Office rent" },
-  { key: "accountant", label: "Accountant / bookkeeping" },
-  { key: "petrol", label: "General petrol" },
-  { key: "software", label: "Software / subscriptions" },
-  { key: "bank_fees", label: "Bank fees" },
-  { key: "insurance", label: "General insurance" },
-  { key: "phone_internet", label: "Phone / internet" },
-  { key: "office_supplies", label: "Office supplies" },
-  { key: "other", label: "Other overhead" },
+// v7.60.0 (CAT-1, owner 30 Oct — ONE SOURCE for invoices and bank items): the one list of cost categories; each knows the DOCUMENT it comes
+// with ("invoice", "bank", or "both") and its P/L line. The invoice pickers offer only what comes with an invoice; the bank classification
+// (BANK-2, after acceptance testing) the bank ones; the operational-cost form (costs typed by hand until then) all of them.
+export const OPERATIONAL_COST_CATEGORIES: Array<{ key: string; label: string; source: "invoice" | "bank" | "both"; plLine: string }> = [
+  { key: "salary", label: "Salary / payroll", source: "bank", plLine: "overheads" },
+  { key: "zus", label: "ZUS / social security", source: "bank", plLine: "overheads" },
+  { key: "taxes", label: "Taxes (not VAT)", source: "bank", plLine: "overheads" },
+  { key: "office_rent", label: "Office rent", source: "invoice", plLine: "overheads" },
+  { key: "accountant", label: "Accountant / bookkeeping", source: "invoice", plLine: "overheads" },
+  { key: "petrol", label: "General petrol", source: "invoice", plLine: "overheads" },
+  { key: "software", label: "Software / subscriptions", source: "invoice", plLine: "overheads" },
+  { key: "vehicle", label: "Vehicle", source: "invoice", plLine: "overheads" },
+  { key: "insurance", label: "General insurance", source: "both", plLine: "overheads" },
+  { key: "phone_internet", label: "Phone / internet", source: "invoice", plLine: "overheads" },
+  { key: "office_supplies", label: "Office supplies", source: "invoice", plLine: "overheads" },
+  { key: "bank_fees", label: "Bank fees", source: "bank", plLine: "financial" },
+  { key: "fx_difference", label: "Exchange differences", source: "bank", plLine: "financial" },
+  { key: "interest", label: "Loan interest", source: "bank", plLine: "financial" },
+  { key: "other", label: "Other overhead", source: "both", plLine: "overheads" },
 ];
+/** v7.60.0 (CAT-1): the categories a document may carry — "invoice" (the import, + Cost invoice), "bank" (a bank line), "manual" (typed). */
+export function categoriesFor(context: "invoice" | "bank" | "manual") { return OPERATIONAL_COST_CATEGORIES.filter(c => context === "manual" || c.source === "both" || c.source === context); }
 
 export const ALLOCATION_METHODS = [
   { key: "by_revenue", label: "By revenue", hint: "Default for general business overhead" },

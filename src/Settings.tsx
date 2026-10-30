@@ -28,6 +28,7 @@ import { nbpHeld, refreshNbp, fxRateFor } from "./fx";
 import { typedPackagingSpellings } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { readCountries } from "./Contacts";   // v7.19.6 (A-TD-5): the company's country from the one country list
 import { counterInstalled } from "./numbering";
+import { OPERATIONAL_COST_CATEGORIES } from "./operationalCosts";   // v7.60.0 (ACC-3)
 import { FlatCard as Card } from "./ui";   // v7.27.8 (A-W5)
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
@@ -650,6 +651,14 @@ function CompanyPanel({ company: savedCompany = {}, setCompany: saveCompany = nu
         <input placeholder="Contact person (printed on POs)" value={company.person || ""} onChange={e => set("person", e.target.value)} style={inp} />
         <input placeholder="Trade name on transport orders (e.g. the full registered name)" value={company.tradeName || ""} onChange={e => set("tradeName", e.target.value)} style={inp} />
         <input placeholder="Emergency phone (printed on transport orders)" value={company.emergencyPhone || ""} onChange={e => set("emergencyPhone", e.target.value)} style={inp} />
+        {/* v7.60.0 (ACC-3, owner 30 Oct): the accountant's account codes — a MAPPING beside the one category list; a change of accountant changes only this */}
+        <div data-account-codes="1" style={{ gridColumn: "1 / -1", marginTop: 10, borderTop: "1px solid #E5E7EB", paddingTop: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Accountant's account codes</div>
+          <input placeholder="Accountant's system (e.g. Comarch ERP Optima 2026.5)" value={company.accountantSystem || ""} onChange={e => set("accountantSystem", e.target.value)} style={{ ...inp, marginBottom: 6 }} />
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 140px", gap: 4, fontSize: 12 }}>
+            {[{ key: "sales", label: "Sales (revenue)" }, { key: "goods", label: "Goods purchase" }, { key: "freight", label: "Freight / transport" }, { key: "customs", label: "Clearance & documents" }, { key: "warehouse", label: "Warehouse & handling" }, ...OPERATIONAL_COST_CATEGORIES].map(c => <React.Fragment key={c.key}><span style={{ alignSelf: "center" }}>{c.label}</span><input value={(company.accountCodes || {})[c.key] || ""} onChange={e => set("accountCodes", { ...(company.accountCodes || {}), [c.key]: e.target.value })} placeholder="account code" style={inp} /></React.Fragment>)}
+          </div>
+        </div>
         <select value={company.country || ""} onChange={e => set("country", e.target.value)} style={inp} title="v7.19.6 (A-TD-5): our country — the trade-direction rule reads it; it prints after the address when the address does not already name it">
           <option value="">Country — {COMPANY_DEFAULTS.country} (built-in)</option>
           {readCountries().slice().sort((a, b) => a.name.localeCompare(b.name)).map(c => <option key={c.iso + c.name} value={c.name}>{c.name}</option>)}
