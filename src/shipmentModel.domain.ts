@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
+import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
 import { poExpectedArrival } from "./po.domain";   // v7.28.5 (Batch L)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 import { sellerPaysCarriage, takenAtSeller } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
@@ -41,7 +42,7 @@ export interface Booking {
 export function blankBooking(id: any): Booking { return { id, number: "", containersPlanned: 1 }; }
 
 /** Latest loading date for a truck to make the booking's cut-off, given transit days. */
-export function latestLoadingDate(cutOffISO: string, transitDays: number): string {
+function latestLoadingDate(cutOffISO: string, transitDays: number): string {
   const m = S(cutOffISO).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return "";
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) - Math.max(0, Math.round(num(transitDays))));
@@ -70,12 +71,12 @@ export function cutOffWarnings(sh: any): CutOffWarning[] {
   return out;
 }
 
-export function isTruck(u: any, leg?: any): boolean {
+function isTruck(u: any, leg?: any): boolean {
   const k = S(u?.kind).toLowerCase();
   if (k) return k === "truck";
   return String(leg?.mode || "").toLowerCase() === "road";
 }
-export function isContainer(u: any, leg?: any): boolean {
+function isContainer(u: any, leg?: any): boolean {
   const k = S(u?.kind).toLowerCase();
   if (k) return k === "container";
   return String(leg?.mode || "").toLowerCase() === "sea" || !!S(u?.containerNumber);
@@ -90,7 +91,7 @@ export function unitKg(u: any, sh: any): number {
   if (feeders.length) return r0(feeders.reduce((s: number, f: any) => s + feederKg(f, sh), 0));
   return r0(num(u?.qtyKg));   // legacy typed value, read-forward only
 }
-export function allUnits(sh: any): Array<{ unit: any; leg: any; legIndex: number }> {
+function allUnits(sh: any): Array<{ unit: any; leg: any; legIndex: number }> {
   const out: any[] = [];
   (sh?.legs || []).forEach((leg: any, i: number) => (leg.vehicles || []).forEach((u: any) => out.push({ unit: u, leg, legIndex: i })));
   return out;
@@ -124,10 +125,10 @@ export function feedersOf(u: any): Feeder[] {
   if (u?.fromUnitId != null && u.fromUnitId !== "") return [{ fromUnitId: u.fromUnitId }];   // legacy single link
   return [];
 }
-export function findUnit(sh: any, id: any): any | null {
+function findUnit(sh: any, id: any): any | null {
   return allUnits(sh).map(x => x.unit).find(u => String(u?.id) === String(id)) || null;
 }
-export function feederKg(f: Feeder, sh: any): number {
+function feederKg(f: Feeder, sh: any): number {
   if (num(f?.kg) > 0) return num(f.kg);
   const src = findUnit(sh, f.fromUnitId);
   return src ? unitKg(src, sh) : 0;
@@ -250,7 +251,6 @@ export function documentRegister(sh: any, protocols: any[] = []): DocRow[] {
   });
   return rows;
 }
-export function documentsOutstanding(rows: DocRow[]): DocRow[] { return rows.filter(r => r.status === "Expected" || (r.status === "Sent" && r.kind === "Loading protocol")); }
 
 // ── v6.92.0 (Round 8): LEDGER DISCIPLINE ON ALLOCATIONS ───────────────────────
 /** A-R8-14: Σ allocations of a goods row across trucks may never exceed the row's kg. */
@@ -357,7 +357,7 @@ export function costLinesByCarrierLeg(sh: any, resolveName: (id: any) => string 
     if (!prev) return base;
     const inv = isInvoicedLine(prev);
     return { ...base, id: prev.id ?? base.id, invoiceStatus: prev.invoiceStatus || "Expected", ...(prev.invoiceRef ? { invoiceRef: prev.invoiceRef } : {}), ...(prev.allocationMethod ? { allocationMethod: prev.allocationMethod } : {}), ...(prev.notes ? { notes: prev.notes } : {}),
-      ...(inv ? { amount: num(prev.amount), currency: prev.currency || base.currency, fxRate: num(prev.fxRate) || base.fxRate, amountPLN: num(prev.amountPLN) || r2(num(prev.amount) * (num(prev.fxRate) || 1)) } : {}) };
+      ...(inv ? { amount: num(prev.amount), currency: prev.currency || base.currency, fxRate: num(prev.fxRate) || base.fxRate, amountPLN: num(prev.amountPLN) || r2(num(prev.amount) * rateOf(prev)) } : {}) };
   });
   const released = before.filter((c: any) => !continued.has(c) && isInvoicedLine(c) && (num(c.amount) > 0 || num(c.amountPLN) > 0)).map((c: any) => { const { source, needsCarrier, ...rest } = c; return { ...rest, notes: c.notes || c.label || "Freight" }; });
   return [...keep.filter((c: any) => !adopted.has(c)), ...released, ...lines];
@@ -371,7 +371,7 @@ export function invoicedVsUnits(sh: any, c: any): { invoiced: number; units: num
 
 
 /** v6.99.9: legacy readers still use unit.qtyKg — keep it equal to the derived figure (mirror until the DDL). */
-export function syncUnitKgMirrors(sh: any): any {
+function syncUnitKgMirrors(sh: any): any {
   const legs = (sh?.legs || []).map((leg: any) => ({ ...leg, vehicles: (leg.vehicles || []).map((u: any) => {
     const has = (u.load || []).some((a: any) => num(a?.qtyKg) > 0) || feedersOf(u).length > 0;
     if (!has) return u;
@@ -449,7 +449,7 @@ export interface LoadPlace { id: any; text: string; ref: string; date: string; d
 // v7.22.3 (FZ-21): "the supplier delivers" = the seller pays the main carriage — read from the one table (sellerPaysCarriage)
 const samePlace = (aId: any, aText: any, bId: any, bText: any) => (aId != null && aId !== "" && bId != null && bId !== "") ? String(aId) === String(bId) : S(aText).toLowerCase() === S(bText).toLowerCase() && !!S(aText);
 /** Where ONE goods row is collected (the rules above, unchanged since v6.99.93). */
-export function placeOfGoods(g: any, pos: any[] = [], lots: any[] = []): LoadPlace | null {
+function placeOfGoods(g: any, pos: any[] = [], lots: any[] = []): LoadPlace | null {
   const po = (pos || []).find((p: any) => String(p.number) === String(g?.poRef)) || null;
   const lot = (lots || []).find((l: any) => String(l.number) === String(g?.lotRef)) || null;
   // v6.99.93 (A-GR-1, owner 1 Oct — my regression from v6.99.83): goods ALREADY IN STOCK load where the lot is (the lot owns its
@@ -475,7 +475,7 @@ export function truckLoadPlaces(sh: any, u: any, pos: any[] = [], lots: any[] = 
 // Derived from what the truck carries — never typed: each load line's goods row brings its place (placeOfGoods) and date; rows
 // from the same place make one stop; stops in date order. What is collected at each stop is listed (product, kilos).
 export interface LoadingStop { key: string; id: any; text: string; date: string; refs: string[]; goodsLineIds: string[]; kg: number; lines: Array<{ goodsLineId: string; product: string; variety: string; size: string; kg: number }>; }
-export const stopKeyOf = (p: { id: any; text: any }) => (p.id != null && p.id !== "" ? `id:${p.id}` : `t:${S(p.text).toLowerCase()}`);
+const stopKeyOf = (p: { id: any; text: any }) => (p.id != null && p.id !== "" ? `id:${p.id}` : `t:${S(p.text).toLowerCase()}`);
 export function truckLoadingStops(sh: any, u: any, pos: any[] = [], lots: any[] = []): LoadingStop[] {
   const out: LoadingStop[] = [];
   (u?.load || []).filter((a: any) => num(a.qtyKg) > 0).forEach((a: any) => {
@@ -502,7 +502,7 @@ export function truckPlaceNote(sh: any, u: any, pos: any[] = [], lots: any[] = [
 }
 
 // ── v6.99.75 (A-UN-2): containers sail on their booking — POL, POD, ETD, ETA fill every container that has none ──────
-export function bookingOf(sh: any, u: any): any | null { const bs = sh?.bookings || []; return bs.find((b: any) => String(b.id) === String(u?.bookingId)) || bs[0] || null; }
+function bookingOf(sh: any, u: any): any | null { const bs = sh?.bookings || []; return bs.find((b: any) => String(b.id) === String(u?.bookingId)) || bs[0] || null; }
 const isSeaLike = (l: any) => ["sea", "air", "rail"].includes(S(l?.mode).toLowerCase());
 export function fillFromBooking(sh: any): any {
   if (!(sh?.bookings || []).length) return sh;

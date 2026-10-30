@@ -411,16 +411,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("D-01: unreferenced contact reports zero blockers (delete allowed)", () => {
     eq(guards.referencesToContact(30, { pos: [{ supplier: { id: 1 } }] }).total, 0);
   });
-  t("D-04: location guard sees movements, legs, stops, destinations, tariffs", () => {
-    const r = guards.referencesToLocation(2, {
-      lots: [{ number: "LOT-1", locationId: 9, movements: [{ toId: 2 }] }],
-      shipments: [{ number: "SHP-1", legs: [{ fromLocationId: 2, stops: [{ locationId: 2 }] }] }],
-      pos: [{ number: "PO-1", destinationLocationId: 2 }],
-      orders: [{ number: "SO-1", destinationLocationId: 2 }],
-      contacts: [{ name: "Logipark", warehouseTariff: { locationIds: [2] } }],
-    });
-    eq(r.total, 5, "movement/leg/PO/SO/tariff all found");
-  });
   t("D-14: ledger mark-paid with the central counter mints unique event ids", () => {
     let a = { grossAmount: 100, paymentStatus: "Sent", payments: [] };
     let b = { grossAmount: 200, paymentStatus: "Sent", payments: [] };
@@ -507,28 +497,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 // ══ D-17 REGRESSIONS (v6.64.1) — overhead import double-write ══
 (function batchE(){
   console.log("\n══ 19. D-17: one overhead row → exactly ONE register invoice ══");
-  t("fold skips an opCost whose number+party already exists as a register invoice", () => {
-    const existing = [{ id: 1, kind: "COST", number: "358/08/C/2026", paymentStatus: "Draft",
-      counterparty: { name: "Roluze Viguso Sp. z o. o. (getaluv: Roluze Sp. z o.o. Viguso sp. k.)" } }];
-    const r = invc.migrateLegacyInvoices({ existing, creditNotes: [], warehouseInvoices: [],
-      operationalCosts: [{ id: 9, invoiceNo: "358/08/c/2026", supplierName: "Roluze Viguso Sp. z o. o. (getaluv: X)", amount: 133.13, currency: "PLN", fxRate: 1, category: "office_rent", date: "2026-08-20", status: "Received" }],
-      nextId: deps.nextId });
-    eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 0, "no twin fold");
-  });
-  t("same number from a DIFFERENT counterparty still folds (legit collision preserved)", () => {
-    const existing = [{ id: 1, kind: "COST", number: "58/08/2026", paymentStatus: "Draft", counterparty: { name: "ORLEN S.A." } }];
-    const r = invc.migrateLegacyInvoices({ existing, creditNotes: [], warehouseInvoices: [],
-      operationalCosts: [{ id: 9, invoiceNo: "58/08/2026", supplierName: "Adami Romatwicz", amount: 10, currency: "PLN", fxRate: 1, category: "other", date: "2026-08-20", status: "Received" }],
-      nextId: deps.nextId });
-    eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 1);
-  });
-  t("cancelled register invoice does NOT block the fold (cancellation frees the number)", () => {
-    const existing = [{ id: 1, kind: "COST", number: "X/1", paymentStatus: "Cancelled", counterparty: { name: "A" } }];
-    const r = invc.migrateLegacyInvoices({ existing, creditNotes: [], warehouseInvoices: [],
-      operationalCosts: [{ id: 9, invoiceNo: "X/1", supplierName: "A", amount: 10, currency: "PLN", fxRate: 1, category: "other", date: "2026-08-20", status: "Received" }],
-      nextId: deps.nextId });
-    eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 1);
-  });
   console.log("D-17 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
@@ -724,25 +692,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(accs.length, 1); eq(accs[0].bank, "Santander"); approx(accs[0].lastKnownBalance, 257.78);
     accs = bank.upsertBankAccountFromStatement(accs, parsed, deps);
     eq(accs.length, 1, "idempotent upsert");
-  });
-  t("D-34: an OVERHEAD register invoice mirrors into ONE opCost; edits follow; cancel removes; loops impossible", () => {
-    const inv = { id: 501, kind: "COST", costScope: "OVERHEAD", number: "F/55", paymentStatus: "Issued",
-      counterparty: { name: "Orlen" }, currency: "PLN", fxRate: 1, grossAmount: 300, grossPLN: 300, issueDate: "2026-08-05", source: "manual:x" };
-    const manual = { id: 1, category: "salary", description: "Salaries Aug", amountPLN: 20000, period: "2026-08", source: "" };
-    let ocs = oc.syncOverheadOpCosts([inv], [manual]);
-    eq(ocs.length, 2, "manual entry kept + one mirror");
-    const mirror = ocs.find(c => String(c.source) === "invoice:501");
-    approx(mirror.amountPLN, 300); eq(mirror.period, "2026-08");
-    // edit the invoice → mirror follows, same id (replace-by-ref)
-    ocs = oc.syncOverheadOpCosts([{ ...inv, grossAmount: 350, grossPLN: 350 }], ocs);
-    eq(ocs.length, 2); approx(ocs.find(c => String(c.source) === "invoice:501").amountPLN, 350);
-    eq(ocs.find(c => String(c.source) === "invoice:501").id, mirror.id, "stable id across edits");
-    // cancel → mirror vanishes; the folded-invoice direction is excluded by source
-    ocs = oc.syncOverheadOpCosts([{ ...inv, paymentStatus: "Cancelled" }], ocs);
-    eq(ocs.length, 1, "only the salary entry remains");
-    const folded = invc.migrateLegacyInvoices({ existing: [], creditNotes: [], warehouseInvoices: [],
-      operationalCosts: [{ id: 7, invoiceNo: "X/1", supplierName: "A", source: "invoice:501", amount: 10, currency: "PLN", fxRate: 1, category: "other", date: "2026-08-01", status: "Received" }], nextId: deps.nextId });
-    eq((Array.isArray(folded) ? folded : []).length, 0, "a sync-created opCost never folds back — no loop");
   });
   console.log("v6.68.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -976,10 +925,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(P({ purpose: "INBOUND", poRefs: ["P2"], legs: [{ mode: "Sea", fromLocationId: 3, toLocationId: 7 }] }, [{ number: "P2", buyIncoterm: "CIF", destinationLocationId: 7 }], []), "supplier");
     eq(P({ purpose: "INBOUND", arrangedBy: "SUPPLIER", poRefs: ["P3"], legs: [{ mode: "Road", toLocationId: 11 }] }, [{ number: "P3", buyIncoterm: "DDP", destinationLocationId: 11 }], []), "supplier");
     eq(P({ purpose: "OUTBOUND", poRefs: ["P3"], governingSoRef: "S3", originLocationId: 11, legs: [{ mode: "Road", fromLocationId: 11, toLocationId: 12 }] }, [{ number: "P3", buyIncoterm: "DDP", destinationLocationId: 11 }], [{ number: "S3", sellIncoterm: "DAP", destinationLocationId: 12 }]), "us");
-  });
-  t("D11: one document register merges transport order, protocols and documents with one vocabulary", () => {
-    const rows = M.documentRegister({ number: "SHP-1", confirmationStatus: "Sent", documents: [{ type: "CMR", status: "Have it", link: "https://x" }, { type: "Phyto", status: "Expected" }] }, [{ number: "LP-1", status: "Returned", truckPlate: "PL1" }]);
-    eq(rows.length, 4); eq(rows[0].status, "Sent"); eq(rows[1].status, "Returned"); eq(M.documentsOutstanding(rows).length, 1);
   });
   console.log("v6.85.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -1238,12 +1183,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Z.gradesFromLedger(voided).I, 7050, "a voided job leaves everything class I again");
     eq(Z.gradeSplit(r.lot).II, 600, "gradeSplit reads the ledger when RECLASS exists");
   });
-  t("IN-5: unloading at the POL moves the lots to the port location once (idempotent), as a TRANSFER posted by the shipment", () => {
-    const sh = { number: "SHP-1", goods: [{ lotRef: "L1", qtyKg: 5000 }], lotRefs: [] };
-    const lots = [{ number: "L1", locationId: 9, physicalKg: 5000, movements: [] }, { number: "L2", locationId: 9, physicalKg: 100, movements: [] }];
-    const a = Z.portStageTransfers(sh, lots, 126, "2026-09-12", deps); eq(a.posted, 1); eq(a.lots[0].movements[0].type, "TRANSFER"); eq(a.lots[0].movements[0].toId, 126); eq(a.lots[1].movements.length, 0);
-    const b = Z.portStageTransfers(sh, a.lots, 126, "2026-09-12", deps); eq(b.posted, 0, "second stamp posts nothing");
-  });
   t("IN-6: stamping site ids preserves today's derived ids; re-ordering addresses no longer moves a site", () => {
     const c = { id: 70, name: "Agrohurt", type: "Warehouse", address: "A", extraAddresses: ["B", "C"] };
     const before = loc.counterpartyLocations([c]).map(l => l.id);
@@ -1422,13 +1361,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(r.contact.countryIso, "PL"); ok(!("finance" in r.contact)); ok(!("linkedDocs" in r.contact)); ok(!("contacts" in r.contact), "the old persons list is still written (v7.28.2)"); eq(r.contact.people.length, 1);   // v7.28.2: one list — people[] only
     ok(!CPY.normaliseCounterparty(r.contact).changed);
     eq(CPY.isEU("Poland"), true); eq(CPY.isEU("Egypt"), false); eq(CPY.isEU(""), null);
-  });
-  t("CP-3/4/5/7: person by role for composers; archived parties out of pickers; import matches by Fakturownia id then NIP; current agreement by validity", () => {
-    const c = { name: "Vega Pro", roles: ["Supplier"], people: [{ name: "Anna", role: "Accountant", email: "a@vega.hu" }, { name: "Bela", role: "Sales", email: "b@vega.hu" }], agreements: [{ season: "2025", validFrom: "2025-06-01", validTo: "2025-12-31", commissionPct: 6 }, { season: "2026", validFrom: "2026-06-01", commissionPct: 6.5, qualityReportDays: 3 }] };
-    eq(CPY.personFor(c, "Accountant").email, "a@vega.hu"); eq(CPY.personFor(c, "Dispatcher").email, "a@vega.hu", "falls back to any person with an e-mail");
-    eq(CPY.activeParties([c, { name: "Old", roles: ["Supplier"], archived: true }], "Supplier").length, 1);
-    eq(CPY.matchImported([{ id: 9, fakturowniaId: 555, nip: "5252842787" }], { fakturowniaId: 555 }).id, 9); eq(CPY.matchImported([{ id: 9, nip: "525-284-27-87" }], { nip: "5252842787" }).id, 9);
-    eq(CPY.currentAgreement(c, "2026-09-11").commissionPct, 6.5); eq(CPY.currentAgreement(c, "2025-09-11").commissionPct, 6);
   });
   console.log("v6.99.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -2087,12 +2019,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(tabs.length, 5); eq(tabs.reduce((s, t) => s + t.rows.length, 0), 21);
     const r = tabs.flatMap(t => t.rows).find(r => r.cells.etd); ok(/^\d{4}-\d{2}-\d{2}$/.test(r.cells.etd), "ETD as a date: " + r.cells.etd); ok(r.cells.eta, "ETA kept");
     ok(tabs.flatMap(t => t.rows).some(r => r.cells.supplier === "Pavamane Owoc"));
-  });
-  t("SH-5: a 2×3 block pasted from Excel fills right and down and adds the missing row; a frozen row is never overwritten", () => {
-    const rows = [{ id: "a", createdAt: "x", cells: {} }, { id: "b", createdAt: "x", frozen: true, cells: { client: "Keep" } }];
-    const res = Sh.pasteGrid(rows, { row: 0, col: 3 }, Sh.parseClipboard("Al Baraka\tSO-1\tfoil\nX\tY\tZ\nNew\tSO-2\tbox"), "now", 2026);
-    eq(res.rows.length, 3); eq(res.rows[0].cells.client, "Al Baraka"); eq(res.rows[0].cells.so, "SO-1"); eq(res.rows[0].cells.packaging, "foil");
-    eq(res.rows[1].cells.client, "Keep", "frozen row untouched"); eq(res.rows[2].cells.client, "New");
   });
   t("dates typed the way she types them become dates; anything else stays as typed", () => {
     eq(Sh.toISODate("13/09", 2026), "2026-09-13"); eq(Sh.toISODate("13.09.2026"), "2026-09-13"); eq(Sh.toISODate("13-09-26"), "2026-09-13"); eq(Sh.toISODate("asap"), null);
@@ -3160,7 +3086,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("A-LOC-2 · v7.32.0 (FZ-04a): no built-in place exists — a place is an address in Parties (a company's) or a public place in Parties › Locations; the places a document uses are counted by one helper", () => {
     ok(!Lm.LOCATIONS_ALL_BUILTIN && !Lm.ensureUsedBuiltinsAreOrdinary && !Lm.registerCounterpartyLocations && !Lm.readLogisticsPoints && !Lm.readLocationOverrides, "a legacy place mechanism is back");
-    eq(Lm.usedLocationIds({ pos: [{ destinationLocationId: 5 }], shipments: [{ legs: [{ fromId: 7, toId: 8 }] }] }).size, 3);
     Lm.setPartiesForPlaces([]);
   });
   t("A-LOC-3: a PO whose named place is no location any more is listed with the text it read", () => {
@@ -3838,11 +3763,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v72201(){
   console.log("\n══ v7.22.1 — FZ-12: no purchase invoice is invented from an order ══");
   const I = B("invoicing.js");
-  t("FZ-12 (v7.22.1): a firm purchase order in an old status (Arrived / Received / Closed) no longer becomes a purchase invoice 'awaiting the supplier's number' — purchase invoices come from Fakturownia or are entered", () => {
-    const po = { id: 77, number: "PO-T-1", status: "Received", pricingMode: "firm", currency: "EUR", fxRate: 4.3, supplier: { name: "S" }, items: [{ qty: 1000, unitPrice: 1.2 }] };
-    const r = I.migrateLegacyInvoices({ existing: [], orders: [], warehouseInvoices: [], operationalCosts: [], pos: [po] });
-    eq(r.filter(i => i.category === "PURCHASE").length, 0, "a purchase invoice was invented");
-  });
 })();
 
 // ══ v7.22.2 — FZ-22: one number reader ══
@@ -3984,13 +3904,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v72401(){
   console.log("\n══ v7.24.1 — FZ-01 step 1: one-time repairs gone ══");
   const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
-  t("FZ-01 (v7.24.1): the one-time repairs that change nothing on either copy (owner's files of 15 Oct) no longer run on opening — and their code is gone; the live routines stay", () => {
-    const app = rd("App.tsx");
-    ["v7.12.2-trade-direction", "v7.18.2-doc-types", "v7.13.1-closed-months", "foldWarehouseInvoiceStore(", "migrateAddressOn(", "foldLegacyClaimFields(", "migrateSaleLinesToLots(", "normaliseStoredSoStatus(", "convertSettledRefsToEvents(", "stripPendingInvoices("].forEach(k => ok(!app.includes(k), "App still runs " + k));
-    const all = fsx.readdirSync(px.join(__dirname, "../src")).filter(f => /\.(ts|tsx)$/.test(f)).map(rd).join("\n");
-    ["function foldWarehouseInvoiceStore", "function migrateAddressOn", "function foldLegacyClaimFields", "function migrateSaleLinesToLots", "function normaliseStoredSoStatus", "function convertSettledRefsToEvents", "function stripPendingInvoices", "function mapDocTypes"].forEach(k => ok(!all.includes(k), k + " is still in the code"));
-    ["normaliseCounterparty(",   /* v7.33.1 (INV-PDF / FZ-11, owner 26 Oct): migrateLegacyInvoices retired — an invoice enters through its own door */ "normalisePO(", "normaliseSO(", "normaliseLot(", "normaliseInvoiceCategory(", "stampSiteIds(", "fxFillInvoice("].forEach(k => ok(app.includes(k), "a live routine went: " + k));
-  });
   t("A-ST-10 / A-RV-30 (kept): Finance → Warehouse charges reads and writes the register — no store of its own; the import posts warehouse invoices to the register", () => {
     const fin = rd("Finance.tsx"), inv = rd("Invoices.tsx");
     ok(!/setWarehouseInvoices|deleteInvoice\(/.test(fin), "Finance still writes the separate store or deletes from it");
@@ -4099,15 +4012,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(FI.vatRateOf(1000, 0), 0); eq(FI.vatRateOf(0, 100), 0);
     const half = FI.buildCostInvoice({ number: "X/1", seller: "S", net: 1000, gross: 0, currency: "PLN", fxRate: 1, date: "2026-10-01" }, "FREIGHT", {}, null); ok(half.amountsIncomplete, "a row without its gross is not flagged"); eq(half.vatRate, 0);
     const full = INV.recomputeInvoiceMoney(FI.buildCostInvoice({ number: "X/2", seller: "S", net: 1000, gross: 1230, currency: "PLN", fxRate: 1, date: "2026-10-01" }, "FREIGHT", {}, null)); eq(full.grossAmount, 1230); ok(!full.amountsIncomplete);
-  });
-  t("A-INV-1 (v7.26.0): an operational cost's register invoice keeps the VAT the import found; an old VAT-less one is corrected by re-importing its month (a true 0 % is confirmed); the data checks name what is left", () => {
-    const reg = INV.migrateLegacyInvoices({ existing: [], orders: [], warehouseInvoices: [], operationalCosts: [{ id: 77, invoiceNo: "OV/1", supplierName: "Office Ltd", amount: 1000, vatRate: 23, currency: "PLN", fxRate: 1, date: "2026-10-01", category: "office_rent", costCenter: "general", notes: "Imported from Fakturownia (Invoices)" }] });
-    eq(reg[0].grossAmount, 1230); eq(reg[0].vatAmount, 230);
-    const old = { id: 5, kind: "COST", number: "OV/2", paymentStatus: "Issued", source: "migrated:opCost:88", vatRate: 0, notes: "Imported from Fakturownia (Invoices)" };
-    const fix = FI.vatFixFor({ number: "OV/2", net: 1000, gross: 1230 }, [old]); eq(fix.vatRate, 23); eq(fix.opCostId, "88"); ok(!fix.confirmZero);
-    ok(FI.vatFixFor({ number: "OV/2", net: 1000, gross: 1000 }, [old]).confirmZero, "a true 0 % is not confirmed"); eq(FI.vatFixFor({ number: "OV/2", net: 1000, gross: 1230 }, [{ ...old, source: "fakturownia-import" }]), null);
-    const ic = IC.checkIntegrity({ invoices: [old, { ...old, id: 6, number: "OV/3", vatChecked: true }, { id: 7, kind: "COST", number: "H/1", paymentStatus: "Issued", amountsIncomplete: true }], pos: [], orders: [], lots: [], shipments: [], contacts: [] });
-    eq(ic.issues.filter(i => i.code === "INVOICE_VAT_MISSING").map(i => i.entity).join(), "OV/2"); eq(ic.issues.filter(i => i.code === "INVOICE_AMOUNTS_INCOMPLETE").length, 1);
   });
 })();
 
@@ -4379,8 +4283,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const L = B("locations.js"), IC = B("integrityCheck.js");
   t("A-RV-39 (v7.27.12): no stub companies in the code — the forms read the directory", () => {
     const rd = f => require("fs").readFileSync(require("path").join(__dirname, "../src/" + f), "utf8");   // the screens are not in the checks' build — read their source
-    ok(/export const SUPPLIERS: any\[\] = \[\];/.test(rd("PurchaseOrders.tsx")) && !/function getSuppliersStub/.test(rd("PurchaseOrders.tsx")), "the PO form still has stub suppliers");
-    ok(/export const CLIENTS: any\[\] = \[\];/.test(rd("SalesOrders.tsx")) && !/function getClientsStub/.test(rd("SalesOrders.tsx")), "the SO form still has stub clients");
+    ok(!/export const SUPPLIERS\b/.test(rd("PurchaseOrders.tsx")) && !/function getSuppliersStub/.test(rd("PurchaseOrders.tsx")), "the PO form still has stub suppliers");   // v7.42.0 (AUD3 dead code): the empty fallback itself is gone
+    ok(!/export const CLIENTS\b/.test(rd("SalesOrders.tsx")) && !/function getClientsStub/.test(rd("SalesOrders.tsx")), "the SO form still has stub clients");
   });
 })();
 
@@ -4829,11 +4733,11 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("v7.30.14 · v7.32.0 (FZ-04a): every picker reads the Parties' live list — an address changed, removed or unticked shows the new way at once; the callers without the Parties at hand read the list the App handed over, never a copy", () => {
     const mk = (street, extra = {}) => [{ id: 4242, name: "Fresh Client Sp. z o.o.", roles: ["Client"], type: "Client", countryIso: "PL", addr: { street, postcode: "00-001", city: "Warszawa" }, people: [], ...extra }];
     const parties = mk("Old Street 1"); L.setPartiesForPlaces(parties);
-    ok(/Old Street 1/.test(String((L.locById(L.allPlaces().find(l => String(l.name).startsWith("Fresh Client")).id) || {}).address || "")), "the handed-over list is not read");
+    ok(/Old Street 1/.test(String((L.locationById(L.allPlaces().find(l => String(l.name).startsWith("Fresh Client")).id) || {}).address || "")), "the handed-over list is not read");
     parties[0] = { ...parties[0], addr: { ...parties[0].addr, street: "New Street 9" } };   // the Parties' live list changes in place
     const now = L.unifiedLocations(parties).filter(l => String(l.name).startsWith("Fresh Client"));
     eq(now.length, 1, "the company's address offered twice"); ok(/New Street 9/.test(String(now[0].address || "")), "the picker shows the old address: " + now[0].address);
-    ok(/New Street 9/.test(String((L.locById(now[0].id) || {}).address || "")), "a lookup without the Parties shows the old address");
+    ok(/New Street 9/.test(String((L.locationById(now[0].id) || {}).address || "")), "a lookup without the Parties shows the old address");
     L.setPartiesForPlaces([]); eq(L.unifiedLocations([]).filter(l => String(l.name).startsWith("Fresh Client")).length, 0, "an address that is gone is still offered");
   });
 })();
@@ -4916,15 +4820,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(/gridTemplateColumns: "minmax\(0, 1fr\) minmax\(0, 1fr\)"/.test(fin), "the form's columns can still be squeezed");
     ok(/setFinanceNotes=\{setFinanceNotesG?\}/.test(rd("App.tsx").split("\n").find(l => l.includes("<Finance packagingTypes")) || ""), "the App does not hand Finance the notes' setter");
     ok(/function UnlinkedNoteParties/.test(rd("Invoices.tsx")), "no notes' panel in Invoices");
-  });
-  t("INV-PDF (v7.33.1): the import writes an overhead invoice itself (its Fakturownia id kept) and adopts a registered twin without an id; no operational cost is copied into the register at start; plain PDF reasons, the skipped counted, the link field, 'No PDF in Fakturownia', a dropped PDF", () => {
-    const inv = rd("Invoices.tsx"), app = rd("App.tsx");
-    ok(/regs\.push\(buildCostInvoice\(r, r\.tag, \{\}, contact\)\);\n\s+opCosts\.push\(\{ \.\.\.operationalCostFromRow\(r, r\.category \|\| "other"\), source: `invoice:\$\{r\.number\}` \}\);/.test(inv), "the overhead branch does not write the register invoice");
-    ok(/const adopt = twin && /.test(inv) && /fakturownia: \{ \.\.\.\(i\.fakturownia \|\| \{\}\), fktId: a\.fktId \}/.test(inv), "no adoption");
-    ok(!/migrateLegacyInvoices\(/.test(app), "the start-up copy still runs");
-    ok(/no longer in Fakturownia/.test(inv) && /cannot print it yet/.test(inv) && /have no Fakturownia link yet/.test(inv), "the PDF window's plain reasons are missing");
-    ok(/function InvoicePdfTools/.test(inv) && /No PDF in Fakturownia/.test(inv) && /Drop or choose the PDF received/.test(inv), "the invoice page's PDF tools are missing");
-    ok(/const target = String\(e\?\.detail\?\.module \|\| "contacts"\); navigateRef\.current\(target\);/.test(app), "the jump still always goes to Parties");
   });
   t("FX-1 (v7.33.2): one rule — a foreign-currency record takes the NBP rate of the last working day before its own date; the review lists a missing or different rate (unless kept as agreed) and sets the NBP rate with the PLN amount", () => {
     FX.__setNbpStore({ days: { "2026-10-05": { EUR: 4.25 }, "2026-10-06": { EUR: 4.3228 }, "2026-10-23": { EUR: 4.24 } }, covered: {} });
@@ -5087,6 +4982,192 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("AUD3-A2 / L3 / L5 (v7.41.0): the poll fetches only the changed lists; the SO screen sells a lot by lotSellableBasis; a truck without lots is identified by its PO lines", () => {
     ok(/fetchRows\(undefined, changed\.map\(c => c\.key\)\)/.test(rd("remoteStore.ts")), "A2"); ok(/availableKg: rejectedByReport\(l, inspections\) \? 0 : lotSellableBasis\(l\)/.test(rd("SalesOrders.tsx")), "L3"); ok(/no lot yet → the PO line/.test(rd("integrityCheck.ts")), "L5");
+  });
+})();
+
+// ══ v7.43.0 — AUD3-L4 · the logo once ══
+(function v74300(){
+  console.log("\n══ v7.43.0 — claim totals per currency; the logo once ══");
+  const CD = B("claims.domain.js"); const fsx = require("fs"), px = require("path");
+  t("AUD3-L4 (v7.43.0): claim totals never add two currencies — the incident net and the register's open amounts are per currency", () => {
+    const cl = [{ id: 1, direction: "CONCESSION", currency: "PLN", acceptedAmount: 400, status: "Submitted" }, { id: 2, parentClaimId: 1, direction: "RECOVERY", currency: "EUR", acceptedAmount: 45, status: "Submitted" }];
+    const inc = CD.incidentNet(cl, 1); ok(inc.mixedCurrencies, "two currencies not seen"); eq(inc.byCurrency.PLN.net, 400); eq(inc.byCurrency.EUR.net, -45);
+    const s = CD.claimsSummary(cl, "2026-10-28"); eq(s.openByCurrency.PLN.concession, 400); eq(s.openByCurrency.EUR.recovery, 45); eq(s.openConcessionEUR, 0, "PLN counted as euros");
+    const sh = fsx.readFileSync(px.join(__dirname, "../src/Shipments.tsx"), "utf8"), so = fsx.readFileSync(px.join(__dirname, "../src/SalesOrders.tsx"), "utf8");
+    ok(!/data:image\/png;base64/.test(sh) && !/data:image\/png;base64/.test(so), "the logo is still embedded more than once");
+  });
+})();
+
+// ══ v7.44.0 — AUD3-L2: the rate of a record ══
+(function v74400(){
+  console.log("\n══ v7.44.0 — the rate of a record ══");
+  const FX = B("fx.js"); const fsx = require("fs"), px = require("path");
+  t("AUD3-L2 (v7.44.0): a foreign-currency record's rate is its own real rate, else the NBP rate of its date — never 1; PLN is 1; no calculation falls back to 1 any more", () => {
+    FX.__setNbpStore({ days: { "2026-10-01": { EUR: 4.25 } }, covered: {} });
+    eq(FX.rateOf({ currency: "PLN", fxRate: 4 }), 1); eq(FX.rateOf({ currency: "EUR", fxRate: 4.3 }), 4.3); eq(FX.rateOf({ currency: "EUR", fxRate: 1, date: "2026-10-02" }), 4.25); eq(FX.rateOf({ currency: "EUR", date: "2026-10-02" }), 4.25);
+    FX.__setNbpStore({ days: {}, covered: {} });
+    const left = fsx.readdirSync(px.join(__dirname, "../src")).filter(f => /\.(ts|tsx)$/.test(f) && f !== "fx.ts").filter(f => /\((?:num|Number|parseNum)\(\w+(?:\??\.\w+)*\??\.fxRate\) \|\| 1\)|\(\w+(?:\??\.\w+)*\??\.fxRate \|\| 1\)/.test(fsx.readFileSync(px.join(__dirname, "../src", f), "utf8")));
+    eq(left.join(), "", "a calculation still treats a missing rate as 1");
+  });
+})();
+
+// ══ v7.45.0 — INV-A: corrections recognised once, imported once ══
+(function v74500(){
+  console.log("\n══ v7.45.0 — INV-A: corrections ══");
+  const CR = B("corrections.domain.js"), FI = B("fakturowniaImport.domain.js"), IV = B("invoicing.js");
+  t("INV2-1 (v7.45.0): one recogniser — Fakturownia's kind, a negative total, a correction-style number or wording; one parent finder — Fakturownia id, KSeF, the number named with the same NIP; a correction carries the ORIGINAL invoice's rate (owner, 29 Oct)", () => {
+    ok(CR.isCorrectionRow({ kind: "correction" }) && CR.isCorrectionRow({ gross: -10 }) && CR.isCorrectionRow({ number: "FK/000001/08/26/BG", gross: 5 }) && CR.isCorrectionRow({ number: "EUR305/2026", description: "EUR305/2026 do Faktury EUR276/2026" }), "a correction not recognised");
+    ok(!CR.isCorrectionRow({ kind: "vat", gross: 100, number: "FV 12/2026" }), "an invoice taken for a correction");
+    eq(CR.citedNumber({ description: "EUR305/2026 do Faktury EUR276/2026" }), "EUR276/2026");
+    const invs = [{ id: 1, number: "EUR276/2026", grossAmount: 5000, fxRate: 4.31, counterparty: { taxNo: "HU123" }, fakturownia: { fktId: 55 } }];
+    eq((CR.findCorrectedInvoice({ correctedFktId: 55 }, invs) || {}).id, 1); eq((CR.findCorrectedInvoice({ description: "korekta do faktury EUR276/2026" }, invs, "HU123") || {}).id, 1); eq(CR.findCorrectedInvoice({ description: "do faktury EUR276/2026" }, invs, "HU999"), null, "another company's invoice was taken");
+    let n = 0; const note = FI.noteFromCorrection({ number: "EUR305/2026", description: "do Faktury EUR276/2026", gross: -1000, currency: "EUR", fxRate: 4.10, sellerTaxNo: "HU123", fktId: 900 }, "incoming", invs, null, () => ++n);
+    eq(note.invoiceId, 1); eq(note.fxRate, 4.31, "the correction did not take the original invoice's rate"); eq(note.amountPLN, 4310);
+    const sr = FI.salesRowFromMapped({ number: "FK/1/10/2026", kind: "correction", grossTotal: -2000, correctedFktId: 77, ksefNo: "K1" }, 0); ok(sr.isCorrection && sr.correctedFktId === 77 && sr.ksefNo === "K1", "the sales row drops the correction marker");
+  });
+  t("INV2-2 / INV2-3 (v7.45.0): one duplicate key across invoices and notes — a correction already turned into a note is not imported again; duplicates of notes and imported drafts are repaired", () => {
+    const notes = [{ id: 9, number: "FK/1/10/2026", source: "converted:5", fakturownia: { fktId: 777 } }];
+    eq((CR.alreadyImported({ fktId: 777, number: "FK/1/10/2026" }, [], notes) || {}).as, "note");
+    eq(CR.alreadyImported({ number: "12/04/2026", sellerTaxNo: "111" }, [{ number: "12/04/2026", counterparty: { taxNo: "222" } }], []), null, "two companies' invoices with one number collide");
+    const tw = IV.notesImportedTwice([{ id: 5, grossAmount: -2000, fakturownia: { fktId: 777 } }], [...notes, { id: 10, number: "FK/1/10/2026", source: "fakturownia-correction:777" }]);
+    eq(tw.notes.join(), "10"); eq(tw.invoices.join(), "5");
+    eq(IV.importedDrafts([{ id: 1, kind: "COST", paymentStatus: "Draft", source: "fakturownia:12" }, { id: 2, kind: "COST", paymentStatus: "Draft", source: "manual:1" }]).join(), "1");
+  });
+})();
+
+// ══ v7.46.0 — INV-B: one overdue rule ══
+(function v74600(){
+  console.log("\n══ v7.46.0 — INV-B: overdue ══");
+  const OD = B("overdue.domain.js");
+  t("INV2-5 (v7.46.0): one overdue rule — an issued invoice, not a correction, its due date passed (or taken from the payment terms), something still open net of its notes; a draft, a pro-forma, a paid or a fully credited invoice is not overdue", () => {
+    const today = "2026-10-29";
+    ok(OD.isOverdue({ id: 1, paymentStatus: "Issued", grossAmount: 1000, dueDate: "2026-10-01" }, today), "a late invoice is not overdue");
+    ok(!OD.isOverdue({ id: 2, paymentStatus: "Draft", grossAmount: 1000, dueDate: "2026-10-01" }, today), "a draft is overdue");
+    ok(!OD.isOverdue({ id: 3, paymentStatus: "Issued", grossAmount: -1000, dueDate: "2026-10-01" }, today), "a correction is overdue");
+    ok(!OD.isOverdue({ id: 4, paymentStatus: "Issued", grossAmount: 1000, dueDate: "2026-10-01" }, today, [{ invoiceId: 4, noteType: "CREDIT", amount: 1000 }]), "a fully credited invoice is overdue");
+    ok(OD.isOverdue({ id: 5, paymentStatus: "Issued", grossAmount: 500, issueDate: "2026-09-01", counterparty: { id: 9 } }, today, [], [{ id: 9, terms: { paymentDays: 30 } }]), "the due date is not taken from the payment terms");
+  });
+})();
+
+// ══ v7.46.1 — INV-B closed: the statement, the cash projection and the settlement state on the one overdue rule ══
+(function v74601(){
+  console.log("\n══ v7.46.1 — INV-B closed ══");
+  const PC = B("periodClose.domain.js"), IP = B("invoicePlus.domain.js");
+  t("INV2-5 (v7.46.1): the cash projection, the settlement state and the statement read the one overdue rule — a fully credited invoice is not overdue, a correction is not money due", () => {
+    const today = "2026-10-29"; const inv = { id: 1, kind: "SALES", paymentStatus: "Issued", grossAmount: 1000, currency: "PLN", dueDate: "2026-10-01" };
+    eq(PC.cashProjection([inv], today, [{ invoiceId: 1, noteType: "CREDIT", amount: 1000 }]).overdueInPLN, 0, "a fully credited invoice counted overdue");
+    eq(PC.cashProjection([inv, { id: 2, kind: "SALES", paymentStatus: "Issued", grossAmount: -500, currency: "PLN", dueDate: "2026-10-01" }], today).overdueInPLN, 1000, "a correction counted");
+    eq(IP.settlementState(inv, today, [{ invoiceId: 1, noteType: "CREDIT", amount: 1000 }]), "Unpaid"); eq(IP.settlementState(inv, today), "Overdue");
+  });
+})();
+
+// ══ v7.47.0 — INV-C: corrections reach the costs (read from their notes — one source) ══
+(function v74700(){
+  console.log("\n══ v7.47.0 — INV-C ══");
+  const CC = B("correctionCosts.domain.js");
+  t("INV2-6 (v7.47.0): a producer's correction on a PO's goods invoice lowers the PO's lots' cost per kg; a carrier's correction on a shipment's invoice lowers its cost — read from the notes, never copied", () => {
+    const invoices = [{ id: 1, kind: "COST", paymentStatus: "Issued", links: [{ type: "PO", number: "PO-1" }] }, { id: 2, kind: "COST", paymentStatus: "Issued", links: [{ type: "Shipment", number: "SHP-1" }] }];
+    const notes = [{ id: 9, direction: "incoming", noteType: "CREDIT", invoiceId: 1, amount: 1000, amountPLN: 1000, currency: "PLN" }, { id: 10, direction: "incoming", noteType: "CREDIT", invoiceId: 2, amount: 200, amountPLN: 200, currency: "PLN" }, { id: 11, direction: "outgoing", noteType: "CREDIT", invoiceId: 1, amount: 50, amountPLN: 50 }];
+    eq(CC.correctionsPLNFor("PO", "PO-1", invoices, notes), -1000); eq(CC.correctionsPLNFor("Shipment", "SHP-1", invoices, notes), -200);
+    eq(CC.poCorrectionPerKg("PO-1", [{ poRef: "PO-1", receivedKg: 400 }, { poRef: "PO-1", expectedKg: 600 }], invoices, notes), -1);
+  });
+})();
+
+// ══ v7.48.0 — INV-D: one register (purchase invoices registered in Fakturownia), learning from the last five ══
+(function v74800(){
+  console.log("\n══ v7.48.0 — INV-D ══");
+  const FK = B("fakturownia.js"); const fsx = require("fs"), px = require("path");
+  t("INV2-7 / INV2-8 (v7.48.0): a purchase invoice entered in the ERP is registered in Fakturownia as an expense (supplier = seller, us = buyer, never sent to KSeF); the category is learned from the supplier's last five invoices", () => {
+    const p = FK.expensePayload({ number: "INV-77", issueDate: "2026-10-20", currency: "EUR", netAmount: 100, grossAmount: 100, counterparty: { name: "Legugeva Kft.", taxNo: "HU123" } }, { name: "MARIANNA", nip: "5252842787" });
+    eq(p.invoice.seller_name, "Legugeva Kft."); eq(p.invoice.buyer_tax_no, "5252842787"); eq(p.invoice.positions[0].tax, 0);
+    const srv = fsx.readFileSync(px.join(__dirname, "../api/fakturownia.js"), "utf8"); ok(/op === "expense"/.test(srv) && /income: "0", kind: "vat", gov_save_and_send: false/.test(srv) && /This is the TEST copy: nothing is registered/.test(srv), "the server action is missing its guards");
+    ok(/const five = pool\.slice\(0, 5\)/.test(fsx.readFileSync(px.join(__dirname, "../src/fakturowniaImport.domain.ts"), "utf8")), "the learning still reads only the last invoice");
+  });
+})();
+
+// ══ v7.49.0 — INV-D closed: the link follows the category; an unknown seller can be created from its row ══
+(function v74900(){
+  console.log("\n══ v7.49.0 — INV-D closed ══");
+  const FI = B("fakturowniaImport.domain.js"); const fsx = require("fs"), px = require("path");
+  t("INV2-8 (v7.49.0): choosing Freight on a row links the carrier's expected freight line of the shipment; Overhead links nothing; an unknown seller's row offers '+ New company'", () => {
+    const row = { key: "k", number: "F/1", seller: "Trans Sp. z o.o.", sellerTaxNo: "PL1112223344", net: 2000, gross: 2460, currency: "PLN", date: "2026-10-20" };
+    const shipments = [{ id: 1, number: "SHP-9", status: "Booked", costs: [{ id: 5, type: "freight", amount: 2000, currency: "PLN", status: "Expected", supplierName: "Trans Sp. z o.o.", supplierId: 77 }] }];
+    const contacts = [{ id: 77, name: "Trans Sp. z o.o.", nip: "1112223344", roles: ["Supplier"], type: "Supplier" }];
+    const l = FI.linkForTag(row, "FREIGHT", contacts, shipments, []); ok(!l.shipmentNumber || l.shipmentNumber === "SHP-9", "a wrong shipment linked");
+    eq(JSON.stringify(FI.linkForTag(row, "OVERHEAD", contacts, shipments, [])), "{}");
+    ok(/data-row-new-company="1"/.test(fsx.readFileSync(px.join(__dirname, "../src/Invoices.tsx"), "utf8")), "no '+ New company' on an unknown seller's row");
+  });
+})();
+
+// ══ v7.50.1 — a note opens its own page and names its invoice; the conversion carries the original's rate ══
+(function v75001(){
+  console.log("\n══ v7.50.1 — notes and their invoices ══");
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("v7.50.1 (owner 29 Oct, TRADER JOANNA's 1/10/2026/KOR): a note opens its own page, which names the invoice it corrects; the banner's conversion carries the original invoice's rate", () => {
+    ok(/onClick=\{\(\) => \{ setNoteForm\(\{ \.\.\.nt \}\); setView\("note"\); \}\}/.test(src), "a note still opens its invoice's page");
+    ok(/data-note-corrects="1"/.test(src) && /Corrects invoice <b>\{corrected\.number\}<\/b>/.test(src), "the note's page does not name its invoice");
+    ok(/fxRate: \(corr && Number\(corr\.fxRate\) > 0 \? Number\(corr\.fxRate\) : rateOf\(i\)\)/.test(src), "the conversion does not carry the original invoice's rate");
+  });
+})();
+
+// ══ v7.50.2 — the REPAIRS box shows for any repair; the audit trail is merged before it is sent ══
+(function v75002(){
+  console.log("\n══ v7.50.2 — repairs box; audit trail merged ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("v7.50.2 (owner 29 Oct): the REPAIRS box appears when any repair applies (it looked only at the first two); the audit trail is merged with the shared one before it is sent (never cut, so never refused); the refusal says its real reason", () => {
+    ok(/if \(!ol\.length && !dl\.invoices\.length && !dl\.claims\.length && !twAny && !ntAny && !drAny(?: && !nrAny)?\) return null;/.test(rd("IntegrityBadge.tsx")), "the box still hides the later repairs");
+    const rs = rd("remoteStore.ts"); ok(/const sent = key === "auditLog" \? await mergeAuditWithShared\(json\) : json;/.test(rs) && /const merged = \[\.\.\.shared, \.\.\.mine\.filter\(e => !have\.has\(keyOf\(e\)\)\)\];/.test(rs), "the audit trail is not merged before it is sent");
+    ok(/the audit trail only grows — this window was behind/.test(rd("SharedStoreGate.tsx")), "the refusal message still blames the owner");
+  });
+})();
+
+// ══ v7.51.0 — BUG-2, BUG-3, BUG-4 and the correction notes' rate ══
+(function v75100(){
+  console.log("\n══ v7.51.0 — the approved four ══");
+  const IV = B("invoicing.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("v7.51.0 (owner approved 29 Oct): a correction note takes its original invoice's rate (repair); your own other window is named as such, with what differs; 'Received' is in the filter; the payments box sits in the page, not among the buttons", () => {
+    const fix = IV.notesOffOriginalRate([{ id: 1, currency: "EUR", fxRate: 4.30 }], [{ id: 9, source: "converted:5", invoiceId: 1, currency: "EUR", fxRate: 4.37, amount: 100 }, { id: 10, source: "converted:6", invoiceId: 1, currency: "EUR", fxRate: 4.30, amount: 50 }]);
+    eq(fix.length, 1); eq(fix[0].fxRate, 4.30); eq(fix[0].amountPLN, 430);
+    const sg = rd("SharedStoreGate.tsx"); ok(/you changed it in another window or device at the same time/.test(sg) && /clashDiff\(n\.key, n\.id\)/.test(sg), "BUG-2");
+    const inv = rd("Invoices.tsx"); ok(/Received: \{ bg: "#E0F2FE"/.test(inv), "BUG-3"); ok(/data-invoice-payments="1"/.test(inv), "BUG-4");
+  });
+})();
+
+// ══ v7.52.0 — PL-1 prerequisite: the kilos on an invoice; sales invoices linked to their SO ══
+(function v75200(){
+  console.log("\n══ v7.52.0 — the kilos on an invoice ══");
+  const FK = B("fakturownia.js"), FI = B("fakturowniaImport.domain.js"), IC = B("integrityCheck.js");
+  t("v7.52.0 (PL-1 prerequisite): Fakturownia's invoice lines are kept; the kilos on an invoice are read from them (kg, t); a sales invoice without its SO is a data issue", () => {
+    const m = FK.mapInvoice({ id: 5, number: "FV2026/10/12", kind: "vat", positions: [{ name: "Apples", quantity: "19422", quantity_unit: "kg", price_net: "4.16", total_price_gross: "80853.33", tax: "0" }, { name: "Pallets", quantity: "26", quantity_unit: "szt" }] });
+    eq(m.positions.length, 2); eq(FI.kgOnInvoice({ positions: m.positions }), 19422); eq(FI.kgOnInvoice({ positions: [{ quantity: 2.5, unit: "t" }] }), 2500);
+    const r = IC.checkIntegrity({ pos: [], lots: [], orders: [], shipments: [], contacts: [], claims: [], invoices: [{ id: 1, kind: "SALES", number: "FV1", paymentStatus: "Issued", grossAmount: 100, links: [] }] });
+    ok((r.issues || []).some(i => i.code === "SALES_NO_SO"), "a sales invoice without its SO is not listed");
+  });
+})();
+
+// ══ v7.53.0 — PL-1: the P/L rule ══
+(function v75300(){
+  console.log("\n══ v7.53.0 — PL-1 ══");
+  const CC = B("correctionCosts.domain.js");
+  t("PL-1 (v7.53.0): cargo from the PO's goods invoices (the PO price until invoiced), lost kilos carried by the kilos sold; transport lines at their invoices; overheads per kg invoiced in the month", () => {
+    const lots = [{ id: 1, poRef: "PO-1", receivedKg: 1000, physicalKg: 0, costs: [{ type: "purchase", pln: 4000 }, { type: "freight", pln: 500 }], movements: [{ type: "SHIP_OUT", qtyKg: 900 }] }];
+    eq(Math.round(CC.lotCostPerKgByDocuments(lots[0], lots, [], []) * 100) / 100, 5, "PO price: 4,500 PLN ÷ 900 kg sold");
+    const inv = [{ id: 7, kind: "COST", paymentStatus: "Issued", netPLN: 3600, links: [{ type: "PO", number: "PO-1" }] }];
+    eq(Math.round(CC.lotCostPerKgByDocuments(lots[0], lots, inv, []) * 100) / 100, 4.56, "invoice: (3,600 + 500) ÷ 900 kg");
+    const sh = CC.shipmentsWithInvoicedCosts([{ id: 1, costs: [{ id: "a", amountPLN: 1000, currency: "PLN", invoiceRef: "F/1" }, { id: "b", amountPLN: 3000, currency: "PLN", invoiceRef: "F/1" }, { id: "c", amountPLN: 200, currency: "PLN" }] }], [{ number: "F/1", kind: "COST", paymentStatus: "Issued", netPLN: 4400 }]);
+    eq(sh[0].costs.map(c => c.amountPLN).join(), "1100,3300,200");
+    const per = CC.overheadPerKgByMonth([{ date: "2026-09-10", amountPLN: 1000 }], [{ kind: "SALES", paymentStatus: "Issued", grossAmount: 10, issueDate: "2026-09-20", positions: [{ quantity: 4000, unit: "kg" }] }], i => (i.positions || []).reduce((s, p) => s + p.quantity, 0));
+    eq(per["2026-09"], 0.25);
+  });
+})();
+
+// ══ v7.53.1 / v7.54.0 — invoice lines for registered invoices; the saved PDF opens from its name ══
+(function v75400(){
+  console.log("\n══ v7.53.1 / v7.54.0 ══");
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("v7.53.1 (owner approved 29 Oct): an invoice registered without its lines gets them (and its kilos) from the next import; v7.54.0: the saved PDF's name opens it from the folder, on the invoice and the note page", () => {
+    ok(/const lineless = \(row: any, invoices: any\[\]\) =>/.test(src) && /onPost\(\{ regs, flips: \[\], opCosts: \[\], fixes: \[\], notesIn, fills \}\)/.test(src) && /given their lines \(kilos\) from Fakturownia/.test(src), "the lines are not filled for registered invoices");
+    ok(/function PdfLink\(/.test(src) && /<PdfLink name=\{inv\.pdfSavedAs\} \/>/.test(src) && /data-note-pdf="1"/.test(src), "the PDF name does not open the PDF");
   });
 })();
 

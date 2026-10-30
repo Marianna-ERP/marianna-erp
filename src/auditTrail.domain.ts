@@ -12,7 +12,7 @@
 // backs up and migrates together with everything else.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const AUDIT_CAP = 5000;
+const AUDIT_CAP = 5000;
 
 export interface AuditEvent {
   id: number;

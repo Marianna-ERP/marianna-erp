@@ -56,7 +56,7 @@ export const deliveredAtDestination = (code: any): boolean => ruleOf(code)?.risk
 export const carriagePaidToDestination = (code: any): boolean => { const r = ruleOf(code); return !!r && r.carriagePaidBy === "seller" && r.riskAt !== "destination"; };
 /** Where the goods come into our hands (buying) or leave them (selling), as the stock reads it. A named place that is a port
  *  counts as the port for the C- and D-rules; otherwise our warehouse (buying) or the client (selling). */
-export const OWNERSHIP_POINTS = ["supplier", "origin_port", "dest_port", "our_wh", "client"] as const;
+const OWNERSHIP_POINTS = ["supplier", "origin_port", "dest_port", "our_wh", "client"] as const;
 export function handoverPointOf(code: any, side: "buy" | "sell", namedPlaceIsPort = false): string {
   const p = ruleOf(code)?.namedPlace; if (!p) return "";
   if (p === "seller-premises" || p === "origin-place") return "supplier";
@@ -136,15 +136,15 @@ const up = (v: any) => String(v ?? "").trim().toUpperCase();
 const sameId = (a: any, b: any) => a != null && a !== "" && b != null && b !== "" && String(a) === String(b);
 const SEA_F = ["FAS", "FOB"], SEA_C = ["CFR", "CIF"];
 /** The PO whose goods a shipment carries (its first PO reference). */
-export function poOfShipment(sh: any, pos: any[] = []): any { const refs = (sh?.poRefs || []).map(String); return (pos || []).find((p: any) => refs.includes(String(p?.number))) || null; }
+function poOfShipment(sh: any, pos: any[] = []): any { const refs = (sh?.poRefs || []).map(String); return (pos || []).find((p: any) => refs.includes(String(p?.number))) || null; }
 /** The sale a shipment delivers: its governing sale, else its only sale; several sales and no governing one → none. */
-export function saleOfShipment(sh: any, orders: any[] = []): any {
+function saleOfShipment(sh: any, orders: any[] = []): any {
   const g = String(sh?.governingSoRef || "").trim();
   const refs = g ? [g] : Array.from(new Set((sh?.soRefs || []).map(String).filter(Boolean))) as string[];
   return refs.length === 1 ? (orders || []).find((o: any) => String(o?.number) === refs[0]) || null : null;
 }
 /** Goods coming to us: an inbound shipment or the supplier's own truck. */
-export function comesToUs(sh: any): boolean { return up(sh?.purpose) === "INBOUND" || up(sh?.arrangedBy) === "SUPPLIER"; }
+function comesToUs(sh: any): boolean { return up(sh?.purpose) === "INBOUND" || up(sh?.arrangedBy) === "SUPPLIER"; }
 const startOf = (sh: any) => shipmentStartPlaceId(sh);   // v7.28.7 (Batch L): the route's start first — the guessed origin 1 no longer decides
 /** v7.27.14 (A-RV-38, P-12): THE GOODS STILL TRAVEL UNDER THE PURCHASE — they come to us, or the shipment does not start at the PO's
 *  named place — except a truck of ours that starts at our own warehouse: the purchase ended when the stock was received there. */
@@ -161,7 +161,7 @@ const arriving = (legs: any[], place: any) => (place == null || place === "") ? 
 const firstSea = (legs: any[]) => legs.findIndex((l: any) => String(l?.mode || "") === "Sea");
 const idx = (legs: any[], keep: (i: number) => boolean) => legs.map((_: any, i: number) => i).filter(keep);
 /** The legs the SUPPLIER pays under the PO. */
-export function supplierPaidLegs(sh: any, po: any): number[] {
+function supplierPaidLegs(sh: any, po: any): number[] {
   const legs = sh?.legs || []; const t = up(po?.buyIncoterm); if (!po || !ruleOf(t) || !legs.length || t === "EXW") return [];
   const np = po.destinationLocationId ?? null;
   if (!comesToUs(sh) && sameId(startOf(sh), np)) return [];   // the goods start at the PO's named place: the supplier's part is behind them
@@ -173,7 +173,7 @@ export function supplierPaidLegs(sh: any, po: any): number[] {
   return comesToUs(sh) ? upTo(legs.length - 1) : [];
 }
 /** The legs the CLIENT pays under the sale. */
-export function clientPaidLegs(sh: any, so: any): number[] {
+function clientPaidLegs(sh: any, so: any): number[] {
   const legs = sh?.legs || []; const t = up(so?.sellIncoterm); if (!so || !ruleOf(t) || !legs.length || comesToUs(sh)) return [];
   const np = so.destinationLocationId ?? null; const k = arriving(legs, np); const from = (j: number) => idx(legs, i => i >= j);
   if (t === "EXW") return from(0);
@@ -324,7 +324,7 @@ export function claimShipment(claim: any, shipments: any[] = []): any {
 export type TermsKind = "freight" | "exw" | "customs" | "claim" | "port" | "insurance" | "sea" | "places" | "carrier" | "nofreight" | "outdated" | "documents" | "rule" | "journey";   // v7.27.11 (FZ-16): an expected document not held at the stage that needs it   // v7.22.3 (FZ-21): a term that is not an Incoterms 2020 rule
 export interface TermsFinding { kind: TermsKind; term: string; doc: string; record: string; recordKind: "shipment" | "order" | "po" | "claim"; shipment: string; text: string; recommend?: { side: "buy" | "sell"; doc: string; to: string }; }
 export interface TermsCtx { pos?: any[]; orders?: any[]; shipments?: any[]; claims?: any[]; contacts?: any[]; lots?: any[]; placeOf?: (id: any) => any; countryOf?: (id: any) => string; }
-export const TERMS_KINDS: TermsKind[] = ["outdated", "port", "nofreight", "exw", "freight", "carrier", "customs", "insurance", "documents", "sea", "places", "claim", "rule", "journey"];
+const TERMS_KINDS: TermsKind[] = ["outdated", "port", "nofreight", "exw", "freight", "carrier", "customs", "insurance", "documents", "sea", "places", "claim", "rule", "journey"];
 export const TERMS_KIND_LABEL: Record<TermsKind, string> = { journey: "the sale's whole journey across its shipments", rule: "the rule that fits what the shipment records", documents: "expected document missing", freight: "freight on a leg not ours", exw: "shipment of ours, sold EXW", customs: "customs", claim: "claim routing", port: "named place not a port", insurance: "no insurance certificate", sea: "sea rule, no sea leg", places: "places off the named place", carrier: "carrier on a leg not ours", nofreight: "no freight of ours", outdated: "not an Incoterms 2020 rule" };
 const S0 = (v: any) => String(v ?? "").trim();
 const known = (v: any) => v != null && v !== "";
@@ -337,7 +337,7 @@ const placeName = (ctx: TermsCtx, id: any) => { const l = placeOfCtx(ctx, id); r
 const contactName = (ctx: TermsCtx, id: any) => S0(((ctx.contacts || []).find((c: any) => sameId(c?.id, id)) || {}).name) || `company ${id}`;
 const money = (c: any) => `${num0(c?.amount).toLocaleString("pl-PL")} ${S0(c?.currency)}`.trim();
 const endOf = (sh: any) => shipmentEndPlaceId(sh);   // v7.27.13 (P-12): the route's end first — the header field only without legs
-export const SEA_ONLY = ["FAS", "FOB", "CFR", "CIF"];
+const SEA_ONLY = ["FAS", "FOB", "CFR", "CIF"];
 export const C_RULES = ["CFR", "CIF", "CPT", "CIP"];
 /** A place that is a port — of the type Port, or a port warehouse / terminal. Read on the type: the legacy word "PORT" is also
  *  given to airports and to every place of an unlisted type ("Other"), so it does not say "port". */
@@ -366,7 +366,7 @@ export function namedPlaceNotPort(doc: any, side: "buy" | "sell", ctx: TermsCtx 
 export interface ExpectedDoc { type: string; why: string; stage: "loading" | "arrival"; held: boolean }
 const HELD = ["Have it", "Sent", "N/A", "Not bought"];   // v7.29.1 (FZ-39): an insurance not bought is a fact, not a missing paper
 const SYSTEM_EQUIV: Record<string, string[]> = { "Export declaration": ["Export declaration (EAD)"], "Import declaration": ["Customs declaration copy (SAD)"] };
-export function documentHeld(sh: any, type: string): boolean {
+function documentHeld(sh: any, type: string): boolean {
   const kinds = [type, ...(SYSTEM_EQUIV[type] || [])];
   return (sh?.documents || []).some((d: any) => (!!d && kinds.includes(docTypeOf(d.type).type) && HELD.includes(S0(d.status))) || (!!d && kinds.slice(1).includes(S0(d.type))));
 }
@@ -396,13 +396,13 @@ export function documentsMissingAtStage(sh: any, ctx: TermsCtx = {}): ExpectedDo
   const st = S0(sh?.status); const loaded = ["Loaded", "In transit", "In Transit", "Arrived", "Delivered", "Closed"].includes(st); const arrived = ["Arrived", "Delivered", "Closed"].includes(st);
   return expectedDocuments(sh, ctx).filter(x => !x.held && x.type !== INSURANCE_DOC && (x.stage === "loading" ? loaded : arrived));
 }
-export const INSURANCE_DOC = "Insurance certificate";
+const INSURANCE_DOC = "Insurance certificate";
 /** Does the shipment hold an insurance certificate (on its document list, had or sent)? */
-export function holdsInsurance(sh: any): boolean { return (sh?.documents || []).some((d: any) => docTypeOf(d?.type).type === INSURANCE_DOC && ["Have it", "Sent"].includes(S0(d?.status))); }
+function holdsInsurance(sh: any): boolean { return (sh?.documents || []).some((d: any) => docTypeOf(d?.type).type === INSURANCE_DOC && ["Have it", "Sent"].includes(S0(d?.status))); }
 /** The CIF / CIP sales an outbound shipment of ours carries while it holds no insurance certificate. */
 /** v7.29.1 (FZ-39): THE INSURANCE THE SHIPMENT RECORDS — insured (the certificate is held or sent), not insured (marked "Not bought"),
  *  or not recorded yet. Insurance is decided shipment by shipment. */
-export function insuranceRecorded(sh: any): "insured" | "not insured" | "" {
+function insuranceRecorded(sh: any): "insured" | "not insured" | "" {
   const docs = (sh?.documents || []).filter((d: any) => docTypeOf(d?.type).type === INSURANCE_DOC);
   if (docs.some((d: any) => ["Have it", "Sent"].includes(S0(d?.status)))) return "insured";
   return docs.some((d: any) => S0(d?.status) === "Not bought") ? "not insured" : "";

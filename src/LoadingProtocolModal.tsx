@@ -6,6 +6,7 @@ import { PrintLogo } from "./brand";
 import { SmallButton, Lbl, useConfirm } from "./ui";
 import { printHtmlNode } from "./documentService";
 import { inspectLink } from "./docLinks.domain";
+import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 import {
   buildLoadingProtocol, deriveRows, protocolTotals, protocolExceptions, protocolGaps,
   unitGoodsLines, protocolForUnit, protocolsForShipment, checkTruckLoad, signatureWarnings,
@@ -389,8 +390,8 @@ export default function LoadingProtocolModal({
                         not be cleared — you had to select it and type over. An
                         empty line should LOOK empty; 0 is only shown once someone
                         has actually typed it. */}
-                    <td style={{ padding: "3px 4px" }}><input type="number" value={r.boxes || ""} placeholder="—" onChange={e => sr(i, "boxes", e.target.value === "" ? 0 : (parseFloat(e.target.value) || 0))} style={{ ...INP, width: 66, padding: "3px 5px" }} /></td>
-                    <td style={{ padding: "3px 4px" }}><input type="number" value={r.kgPerBox || ""} placeholder="—" onChange={e => sr(i, "kgPerBox", e.target.value === "" ? 0 : (parseFloat(e.target.value) || 0))} style={{ ...INP, width: 62, padding: "3px 5px" }} /></td>
+                    <td style={{ padding: "3px 4px" }}><input type="number" value={r.boxes || ""} placeholder="—" onChange={e => sr(i, "boxes", e.target.value === "" ? 0 : (parseNum(e.target.value) || 0))} style={{ ...INP, width: 66, padding: "3px 5px" }} /></td>
+                    <td style={{ padding: "3px 4px" }}><input type="number" value={r.kgPerBox || ""} placeholder="—" onChange={e => sr(i, "kgPerBox", e.target.value === "" ? 0 : (parseNum(e.target.value) || 0))} style={{ ...INP, width: 62, padding: "3px 5px" }} /></td>
                     <td style={{ padding: "3px 4px" }}><input value={r.size || ""} onChange={e => sr(i, "size", e.target.value)} placeholder="70-80" style={{ ...INP, width: 74, padding: "3px 5px" }} /></td>
                     {(["boxesOk", "goodsOk"] as any).map((k: any) => (
                       <td key={k} style={{ padding: "3px 4px" }}>

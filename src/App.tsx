@@ -28,7 +28,6 @@ import { poDirectFromSOs, directSync } from "./tradeFlow.domain";
 import Claims from "./Claims";
 import { localTodayISO, addDaysISO } from "./dates";
 import { nextId } from "./ids";
-import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState, useStorageHealth, dropLegacySnapshots, COMPANY_DEFAULTS } from "./useLocalStoredState";   // v7.21.0 (A-RV-19): no storage upgrade, no local snapshots
 import { setOurCountry } from "./tradeFlow.domain";   // v7.19.6 (A-TD-5)
 import { startAutoBackup, setBackupAllowed } from "./autoBackup";   // v6.99.70 (A-BK-1) · v7.1.8
@@ -52,7 +51,7 @@ import { linkSpellingOnDocs } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { linkSaleDestinationOn } from "./locations";   // v7.18.1 (A-AU-3)
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
-import { importedTwice } from "./invoicing";   // v7.34.1
+import { importedTwice, notesImportedTwice, importedDrafts, notesOffOriginalRate } from "./invoicing";   // v7.34.1
 import { IdleSignOut } from "./IdleSignOut";   // v7.30.3 (Batch M · M-4)
 import { shapingSetter, shapeWritten, shapeShipment, shapeClaim } from "./storeShapes";   // v7.24.3 (FZ-01 step 2): a save writes the clean shape
 import { withLiveCompanies } from "./counterparty.domain";   // v7.25.0 (A-RV-13 / FZ-02)
@@ -136,11 +135,11 @@ function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: str
 
 export default function App() {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
-  const [contacts, _setContactsRaw] = useLocalStoredState("contacts", SHELL_SEED.contacts);
-  const [posStored, setPOsRaw] = useLocalStoredState("pos", SHELL_SEED.pos);
-  const [lots, setLotsRaw] = useLocalStoredState("lots", SHELL_SEED.lots);
-  const [ordersStored, setOrdersRaw] = useLocalStoredState("orders", SHELL_SEED.orders);
-  const [shipmentsStored, setShipmentsRaw] = useLocalStoredState("shipments", SHELL_SEED.shipments);
+  const [contacts, _setContactsRaw] = useLocalStoredState("contacts", []);
+  const [posStored, setPOsRaw] = useLocalStoredState("pos", []);
+  const [lots, setLotsRaw] = useLocalStoredState("lots", []);
+  const [ordersStored, setOrdersRaw] = useLocalStoredState("orders", []);
+  const [shipmentsStored, setShipmentsRaw] = useLocalStoredState("shipments", []);
   const setShipments = useMemo(() => shapingSetter(setShipmentsRaw, shapeShipment), [setShipmentsRaw]);   // v7.28.0 (Batch L): written in the clean shape
   // v7.25.0 (A-RV-13 / FZ-02, owner 17 Oct): ONE SOURCE FOR EACH COMPANY — the screens see each document's companies read live from
   // Counterparties by id; a company edit no longer rewrites every PO, SO and shipment (nor re-sends the three lists). The stored copies
@@ -148,7 +147,7 @@ export default function App() {
   const pos = useMemo(() => withLiveCompanies(posStored, ["supplier"], contacts || []), [posStored, contacts]);
   const orders = useMemo(() => withLiveCompanies(ordersStored, ["client"], contacts || []), [ordersStored, contacts]);
   const shipments = useMemo(() => withLiveCompanies(shipmentsStored, ["carrier", "forwarder", "broker"], contacts || []), [shipmentsStored, contacts]);
-  const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", SHELL_SEED.operationalCosts);
+  const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", []);
   // v7.28.12 (Batch L · FZ-01): the old warehouse-invoice, "settled" and credit-note stores are gone — the register, the payments and
   // the finance notes own those facts; both copies of 15 Oct hold nothing in them
   const [invoices, setInvoicesRaw] = useLocalStoredState("invoices", []);
@@ -557,8 +556,20 @@ export default function App() {
         <IntegrityBadge
           data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, allPos: pos, allLots: lots, allOrders: orders, allShipments: shipments, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog }}
           onNavigate={navigate}
-          onRepair={async (kind: "orphanLots" | "danglingLinks" | "importedTwice") => {   // v6.99.51 (A-FS-2)
+          onRepair={async (kind: any) => {   // v6.99.51 (A-FS-2)
             if (kind === "orphanLots") { const ol = orphanLotsToRemove(live.lots, pos); if (!ol.length) { await uiAlert({ tone: "info", title: "Nothing to repair", message: "No lot points at a purchase order that does not exist (last season's archived orders count as existing)." }); return; } if (!(await uiConfirm({ title: "Please confirm", message: `Delete ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock. They stay on record, struck through.` }))) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).map((l: any) => ids.has(l.id) ? { ...l, status: "Cancelled", deletedAt: localTodayISO(), deletedReason: "orphan — its PO no longer exists" } : l));   /* v7.17.1 (A-RV-07): marked Deleted, not removed */ recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) deleted (kept on record): ${ol.map((l: any) => l.number).join(", ")}` }); }
+            if (kind === "notesRate") { const fix = notesOffOriginalRate(invoices, financeNotes); if (!fix.length) { await uiAlert({ tone: "info", title: "Nothing to repair", message: "Every correction note carries its original invoice's rate." }); return; }
+              if (!(await uiConfirm({ title: "Please confirm", message: `Give ${fix.length} credit / debit note(s) the exchange rate of the invoice each corrects (your decision of 29 Oct)? Their PLN value follows.`, confirmLabel: "Apply" }))) return;
+              const m = new Map(fix.map((x: any) => [String(x.id), x])); setFinanceNotes((p: any[]) => (p || []).map((n: any) => { const x: any = m.get(String(n?.id)); return x ? { ...n, fxRate: x.fxRate, amountPLN: x.amountPLN } : n; }));
+              recordAudit({ module: "System", docType: "Repair", docNumber: "NOTES-RATE", action: "updated", summary: `${fix.length} correction note(s) given their original invoice's rate — owner decision 29 Oct` }); await uiAlert({ tone: "info", title: "Done", message: `${fix.length} note(s) now carry their original invoice's rate.` }); return; }
+            if (kind === "notesTwice") { const tw = notesImportedTwice(invoices, financeNotes); const n = tw.notes.length + tw.invoices.length; if (!n) { await uiAlert({ tone: "info", title: "Nothing to repair", message: "No correction was imported twice." }); return; }
+              if (!(await uiConfirm({ title: "Please confirm", message: `Remove ${tw.notes.length} duplicate credit / debit note(s) and ${tw.invoices.length} negative invoice(s) that a note already records?`, confirmLabel: "Remove" }))) return;
+              const gn = new Set(tw.notes.map(String)), gi = new Set(tw.invoices.map(String)); setFinanceNotes((p: any[]) => (p || []).filter((x: any) => !gn.has(String(x?.id)))); setInvoices((p: any[]) => (p || []).filter((x: any) => !gi.has(String(x?.id))));
+              recordAudit({ module: "System", docType: "Repair", docNumber: "NOTES-TWICE", action: "deleted", summary: `${tw.notes.length} duplicate note(s), ${tw.invoices.length} negative invoice(s) removed — INV2-2` }); await uiAlert({ tone: "info", title: "Done", message: `${n} duplicate(s) removed.` }); return; }
+            if (kind === "importedDrafts") { const ids = importedDrafts(invoices); if (!ids.length) { await uiAlert({ tone: "info", title: "Nothing to repair", message: "No imported purchase invoice is left as a Draft." }); return; }
+              if (!(await uiConfirm({ title: "Please confirm", message: `Mark ${ids.length} purchase invoice(s) imported from Fakturownia as Issued? They are invoices you received; as Drafts, Finance leaves them out of the payables.`, confirmLabel: "Mark as Issued" }))) return;
+              const s = new Set(ids.map(String)); setInvoices((p: any[]) => (p || []).map((x: any) => s.has(String(x?.id)) ? { ...x, paymentStatus: "Issued" } : x));
+              recordAudit({ module: "System", docType: "Repair", docNumber: "IMPORTED-DRAFTS", action: "updated", summary: `${ids.length} imported purchase invoice(s) moved from Draft to Issued — INV2-3 (O1)` }); await uiAlert({ tone: "info", title: "Done", message: `${ids.length} invoice(s) are now Issued.` }); return; }
             if (kind === "importedTwice") { const tw = importedTwice(invoices, operationalCosts); const n = tw.invoices.length; if (!n || !(await uiConfirm({ title: "Please confirm", message: `Remove ${n} invoice(s) imported twice (the original kept, with its Fakturownia link)${tw.opCosts.length ? ` and ${tw.opCosts.length} duplicate cost line(s)` : ""}?`, confirmLabel: "Remove" }))) return;
               const gone = new Set(tw.invoices.map(String)), goneOp = new Set(tw.opCosts.map(String));
               setInvoices((prev: any[]) => (prev || []).filter((i: any) => !gone.has(String(i?.id)))); if (goneOp.size) setOperationalCosts((prev: any[]) => (prev || []).filter((c: any) => !goneOp.has(String(c?.id))));

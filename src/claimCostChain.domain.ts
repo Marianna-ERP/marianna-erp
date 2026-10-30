@@ -107,7 +107,7 @@ export function ourChainCosts(lots: any[], lotRefs: string[], affectedShare = 1)
  *  mistakes them for something the system computed. */
 export interface PassThroughInput { label: string; amountPLN: any; note?: string; }
 
-export function clientPassThroughCosts(lines: PassThroughInput[]): ChainCostLine[] {
+function clientPassThroughCosts(lines: PassThroughInput[]): ChainCostLine[] {
   return (lines || [])
     .map((l, i) => ({
       key: `client:${i}:${String(l.label || "").slice(0, 24)}`,

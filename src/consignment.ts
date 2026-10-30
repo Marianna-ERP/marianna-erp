@@ -58,9 +58,3 @@ export function currentCommissionRate(producer: any, dateISO: string): Commissio
 }
 
 // Does an SO line source from this lot (directly, or via the lot's PO)?
-export function lineSourcesLot(item: any, lot: any): boolean {
-  if (!item || !lot) return false;
-  if (item.sourceType === "STOCK" && String(item.sourceRef) === String(lot.number)) return true;
-  
-  return false;
-}

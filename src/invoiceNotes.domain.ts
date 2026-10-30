@@ -13,7 +13,7 @@ const kg = (v: number) => `${Math.round(v).toLocaleString("pl-PL")} kg`;
 const uniq = (xs: string[]) => Array.from(new Set(xs.map(S).filter(Boolean)));
 
 /** The shipments carrying this sale (not deleted). */
-export function shipmentsOfSale(order: any, shipments: any[]): any[] {
+function shipmentsOfSale(order: any, shipments: any[]): any[] {
   const no = S(order?.number);
   return (shipments || []).filter((sh: any) => sh && S(sh.status) !== "Cancelled" && (sh.goods || []).some((g: any) => S(g?.soRef) === no));
 }

@@ -82,7 +82,7 @@ export function lotPallets(lot: any, receivedKg: number, types: any[] = PACKAGIN
   if (!(cap > 0 && per > 0 && kg > 0)) return { pallets: 0, derived: false, from: "" };
   return { pallets: Math.ceil(Math.ceil(kg / cap - 1e-9) / per - 1e-9), derived: true, from: `${pt.label || pt.id}: ${per} boxes a pallet` };
 }
-export function warehouseForLocation(contacts: any[], locationId: any): { warehouse: any; tariff: WarehouseTariff } | null {
+function warehouseForLocation(contacts: any[], locationId: any): { warehouse: any; tariff: WarehouseTariff } | null {
   if (locationId === null || locationId === undefined || locationId === "") return null;
   for (const c of contacts || []) {
     const t = c?.warehouseTariff;

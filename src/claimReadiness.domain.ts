@@ -123,7 +123,7 @@ export function claimsNeedingNotice(claims: any[], todayISO: string): Array<{ cl
 
 export interface EvidenceRequirement { kind: string; why: string; }
 
-export const EVIDENCE_BY_RESPONDENT: Record<string, EvidenceRequirement[]> = {
+const EVIDENCE_BY_RESPONDENT: Record<string, EvidenceRequirement[]> = {
   Carrier: [
     { kind: "CMR", why: "with the receiving warehouse's remarks — without remarks written at delivery the carrier will say the damage was already there when he loaded" },
     { kind: "Loading protocol", why: "signed at the producer's dock: proof of the condition the goods left in" },

@@ -359,8 +359,6 @@ t("reference guards agree with the integrity view (delete-blocking is consistent
   const d = cleanChain();
   const r = guards.referencesToContact(30, d);
   ok(r.total >= 2, "supplier referenced by PO and claim");
-  const rl = guards.referencesToLocation(1, d);
-  ok(rl.total >= 1, "location referenced by the lot");
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -110,21 +110,11 @@ if (m) { const a = toISODate(m[1], yearHint), b = toISODate(m[2], yearHint); if 
 return { iso: null, range: false };
 }
 /** A date cell shown: one date as dd/mm/yyyy, a range as written. */
-export function sheetDateText(v: any): string { const s = S(v); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}/${m[2]}/${m[1]}` : s; }
-export function coerce(col: SheetCol, raw: any, yearHint?: number): any {
+function sheetDateText(v: any): string { const s = S(v); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}/${m[2]}/${m[1]}` : s; }
+function coerce(col: SheetCol, raw: any, yearHint?: number): any {
 if (col.kind === "date") { const iso = toISODate(raw, yearHint); return iso === null ? S(raw) : iso; }   // a range stays as typed (readSheetDate reads its first day)
   if (col.kind === "product") return { item: S(raw), variety: "", size: "" };
   return S(raw);
-}
-/** Paste a grid at (row, col) — fills right and down, adds rows when needed; frozen rows are skipped, never overwritten. */
-export function pasteGrid(rows: SheetRow[], at: { row: number; col: number }, grid: string[][], now: string, yearHint?: number): { rows: SheetRow[]; changed: Array<{ row: string; col: string; old: any; now: any }> } {
-  const out = rows.map(r => ({ ...r, cells: { ...r.cells } })); const changed: Array<{ row: string; col: string; old: any; now: any }> = [];
-  grid.forEach((line, dr) => {
-    const ri = at.row + dr; while (out.length <= ri) out.push(blankRow(now));
-    const r = out[ri]; if (r.frozen) return;
-    line.forEach((raw, dc) => { const col = SHEET_COLUMNS[at.col + dc]; if (!col) return; const v = coerce(col, raw, yearHint); const old = r.cells[col.key]; if (JSON.stringify(old ?? "") !== JSON.stringify(v ?? "")) { r.cells[col.key] = v; changed.push({ row: r.id, col: col.key, old, now: v }); } });
-  });
-  return { rows: out, changed };
 }
 export function productText(v: any): string { if (!v) return ""; if (typeof v === "string") return v; return [v.item, v.variety, v.size].map(S).filter(Boolean).join(" "); }
 /** Grid of the tab as strings in the sheet's column order (copy, export). */

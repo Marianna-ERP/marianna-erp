@@ -38,7 +38,7 @@ export const lineKg = (g: any): number => (g?.qtyKg !== undefined && g?.qtyKg !=
 // so the count limit alone would let you plan a truck that cannot legally move.
 export type PalletType = "standard" | "euro";
 export const PALLET_CAPACITY: Record<PalletType, number> = { standard: 26, euro: 33 };
-export const DEFAULT_PAYLOAD_KG = 24000;
+const DEFAULT_PAYLOAD_KG = 24000;
 
 export interface LoadCheck { pallets: number; maxPallets: number; grossKg: number; maxKg: number; overPallets: boolean; overWeight: boolean; limit: "" | "pallets" | "weight"; }
 

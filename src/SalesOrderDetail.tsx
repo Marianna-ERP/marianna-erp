@@ -13,6 +13,7 @@ import { localTodayISO, formatDMY } from "./dates";
 import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { settlementState } from "./invoicePlus.domain";   // v7.16.5 (A-RV-14): the SO view shows our payment state, not Fakturownia's flag
 import { Inp, LOCATION_TYPES, LifecycleBar, QualityBadge, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, useSalesData, lotColorationOf } from "./SalesOrders";
+import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 import { DatesChain } from "./DatesChain";   // v7.27.18 (A-D-4)
 import { soDatesChain } from "./datesChain.domain";   // v7.27.18 (A-D-4)
 import { ruleOf } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
@@ -37,12 +38,12 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
     const next = { ...prev, [k]: v };
     // Recalc VAT/gross on rate or net change
     if (k === "vatRate" || k === "netAmount") {
-      const r = parseFloat(k === "vatRate" ? v : next.vatRate) || 0;
-      const n = parseFloat(k === "netAmount" ? v : next.netAmount) || 0;
+      const r = parseNum(k === "vatRate" ? v : next.vatRate) || 0;
+      const n = parseNum(k === "netAmount" ? v : next.netAmount) || 0;
       next.vatAmount = Math.round(n * r) / 100;
       next.grossAmount = Math.round((n + next.vatAmount) * 100) / 100;
-      next.netPLN = Math.round(n * (parseFloat(String(next.fxRate)) || 1) * 100) / 100;
-      next.grossPLN = Math.round(next.grossAmount * (parseFloat(String(next.fxRate)) || 1) * 100) / 100;
+      next.netPLN = Math.round(n * (parseNum(String(next.fxRate)) || 1) * 100) / 100;
+      next.grossPLN = Math.round(next.grossAmount * (parseNum(String(next.fxRate)) || 1) * 100) / 100;
     }
     return next;
   });
@@ -95,7 +96,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
               <div><Lbl>Net</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 600 }}>{fmtMoney(invoice.netAmount, invoice.currency)}</div></div>
               <div>
                 <Lbl>VAT rate <span style={{ color: "#D97706" }}>· review</span></Lbl>
-                <Sel value={invoice.vatRate} onChange={e => sf("vatRate", parseFloat(e.target.value) || 0)}>
+                <Sel value={invoice.vatRate} onChange={e => sf("vatRate", parseNum(e.target.value) || 0)}>
                   {[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}
                 </Sel>
               </div>
@@ -306,7 +307,7 @@ export function OrderDetail({ onChangeRule = null, order, soInvoices = [], finan
                           <td style={{ padding: "10px 6px", color: "#555" }}>{it.origin || "—"}</td>
                           <td style={{ padding: "10px 6px", textAlign: "center" }}><QualityBadge quality={it.quality} /></td>
                           <td style={{ padding: "10px 6px", color: "#666", fontSize: 11 }}>{it.packaging || "—"}</td>
-                          <td style={{ padding: "10px 6px", textAlign: "right", color: "#555" }}>{(() => { const bx = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes; return bx ? fmtNum(bx) : "—"; })()}</td>
+                          <td style={{ padding: "10px 6px", textAlign: "right", color: "#555" }}>{(() => { const bx = String(it.pricingUnit || "kg") !== "kg" ? parseNum(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes; return bx ? fmtNum(bx) : "—"; })()}</td>
                           <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 600 }}>
                             {fmtNum(it.qty)} kg
                             {av.hasOverage && (
@@ -330,8 +331,8 @@ export function OrderDetail({ onChangeRule = null, order, soInvoices = [], finan
                     {/* v6.99.76 (A-SV-1, owner): the PO's total row — boxes, kg and value under their own columns */}
                     <tr style={{ background: "#F9FAFB" }}>
                       <td colSpan={5} style={{ padding: "10px 6px", fontWeight: 700, color: "#111" }}>Total</td>
-                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s2: number, it: any) => s2 + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes) || 0), 0)) || "—"}</td>
-                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s2: number, it: any) => s2 + (parseFloat(it.qty) || 0), 0))} kg</td>
+                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s2: number, it: any) => s2 + ((String(it.pricingUnit || "kg") !== "kg" ? parseNum(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes) || 0), 0)) || "—"}</td>
+                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s2: number, it: any) => s2 + (parseNum(it.qty) || 0), 0))} kg</td>
                       <td></td>
                       <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtMoney(total, order.currency)}</td>
                     </tr>

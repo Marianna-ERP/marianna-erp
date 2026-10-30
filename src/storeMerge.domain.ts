@@ -18,7 +18,7 @@ const labelOf = (r: any) => String(r?.number || r?.name || r?.label || r?.docNum
 const isPlainObject = (v: any) => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** The stores whose documents carry a number the app gives out (prefix-YEAR-NNNN). */
-export const NUMBERED_STORES = ["pos", "orders", "shipments", "lots", "claims"];
+const NUMBERED_STORES = ["pos", "orders", "shipments", "lots", "claims"];
 
 /** The next free number in the series of `num` (same prefix, same width), given the numbers in use. */
 export function nextFreeNumber(num: string, inUse: string[]): string {

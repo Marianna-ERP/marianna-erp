@@ -25,7 +25,7 @@ export function currentSeason(todayISO: string, st: SeasonSettings = DEFAULT_SEA
 export type DocKind = "po" | "so" | "shipment" | "lot" | "invoice" | "claim" | "settlement" | "inspection" | "count" | "note" | "warehouseInvoice" | "cost" | "sheet";
 
 /** The date that decides a document's season. One rule per kind, documented here and nowhere else. */
-export function docDate(kind: DocKind, doc: any, ctx: { pos?: any[] } = {}): string {
+function docDate(kind: DocKind, doc: any, ctx: { pos?: any[] } = {}): string {
   if (!doc) return "";
   switch (kind) {
     case "po": return S(doc.orderDate || doc.createdAt);

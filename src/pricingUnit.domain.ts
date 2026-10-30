@@ -148,7 +148,7 @@ export function totalsLine(t: { kg: number; boxes: number; pallets: number; valu
 // ── v6.99.46 (A-PO-11, owner 22 Sept): boxes and pallets derive from the LINE'S CHOSEN PACKAGING — never from the
 // product's default — and a typed figure is a MANUAL OVERRIDE that survives re-derivation. ──
 /** The packaging the line actually chose (id or label); null when none was chosen. No product-default guess. */
-export function chosenPackaging(line: any, types: PackagingType[]): PackagingType | null {
+function chosenPackaging(line: any, types: PackagingType[]): PackagingType | null {
   return findPackaging(types, line?.packagingId) || findPackaging(types, line?.packaging) || null;
 }
 export interface DerivedCounts { boxes: number | null; pallets: number | null; kgPerBox: number; boxesPerPallet: number; hasPackaging: boolean; }

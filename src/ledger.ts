@@ -1,4 +1,5 @@
 import { paidFromEvents, notesTotalsAdjustment } from "./payments.domain";
+import { isOverdue, dueDateOf } from "./overdue.domain";   // v7.46.0 (INV2-5)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─── v6.9: RECEIVABLES & PAYABLES AGGREGATION ───────────────────────────────
 // Pulls every "money owed" item the system already tracks into one ledger:
@@ -97,7 +98,7 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
       date: inv.issueDate || inv.saleDate || "", dueDate: inv.dueDate || "",
       amountPLN: openPLN || gross, currency: inv.currency || "PLN", grossPLN: gross, paidPLN,
       amountOrig: r2(n(inv.grossAmount) || n(inv.netAmount) || gross),
-      status: classify(inv.dueDate, isPaid, today),
+      status: (n(inv.grossAmount) < 0 ? (isPaid ? "Paid" : "Open") : (isPaid ? "Paid" : (isOverdue(inv, today, (inp as any).financeNotes || (inp as any).notes || [], (inp as any).contacts || []) ? "Overdue" : classify(dueDateOf(inv, (inp as any).contacts || []), isPaid, today) === "Overdue" ? "Open" : classify(dueDateOf(inv, (inp as any).contacts || []), isPaid, today)))) as any,   // v7.46.0 (INV2-5): the one overdue rule — a correction is never overdue; notes count
       sourceModule: "Invoices", note: (inv.links || []).map((l: any) => l.number).filter(Boolean).join(", ") || inv.source || "",
     });
   });

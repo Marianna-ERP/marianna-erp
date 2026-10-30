@@ -80,7 +80,7 @@ export function directSync(pos: any[], orders: any[], lots: any[]): { pos: any[]
 }
 
 /** A country string for the goods' ORIGIN — the producer, from the PO. */
-export function poOriginCountry(po: any): string {
+function poOriginCountry(po: any): string {
   if (!po) return "";
   return String(po.supplier?.country || (po.items || [])[0]?.origin || "").trim();
 }
@@ -99,7 +99,7 @@ export function poOriginCountry(po: any): string {
 // v7.19.6 (A-TD-5): OUR country is Settings → Company's — App passes it in (the built-in "Poland" stands until it does, as COMPANY_DEFAULTS)
 let OUR_COUNTRY_V = "Poland";
 export function setOurCountry(c: any) { const v = String(c ?? "").trim(); if (v) OUR_COUNTRY_V = v; }
-export function ourCountry(): string { return OUR_COUNTRY_V; }
+function ourCountry(): string { return OUR_COUNTRY_V; }
 export interface TradeEnd { country: string; from: string; }
 export interface TradeEnds { origin: TradeEnd; destination: TradeEnd; direction: string; missing: string; }
 const S_ = (v: any) => String(v ?? "").trim();

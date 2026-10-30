@@ -171,20 +171,12 @@ export function requestedFromBasis(c: any): number {
 }
 
 // ── queries ────────────────────────────────────────────────────────────────
-export function subjectRefs(c: any, kind: ClaimSubject["kind"]): string[] {
+function subjectRefs(c: any, kind: ClaimSubject["kind"]): string[] {
   return (c?.subjects || []).filter((s: any) => s?.kind === kind).map((s: any) => str(s.ref)).filter(Boolean);
 }
 export function claimsForLot(claims: any[], lotNumber: any): any[] {
   const want = str(lotNumber);
   return (claims || []).filter(c => subjectRefs(c, "LOT").includes(want));
-}
-export function claimsForSO(claims: any[], soNumber: any): any[] {
-  const want = str(soNumber);
-  return (claims || []).filter(c => subjectRefs(c, "SO").includes(want));
-}
-export function claimsForShipment(claims: any[], shipmentNumber: any): any[] {
-  const want = str(shipmentNumber);
-  return (claims || []).filter(c => subjectRefs(c, "SHIPMENT").includes(want));
 }
 
 /**
@@ -202,7 +194,12 @@ export function incidentNet(claims: any[], rootClaimId: any) {
   const amount = (c: any) => (c.acceptedAmount != null && c.acceptedAmount !== "" ? num(c.acceptedAmount) : num(c.requestedAmount));
   const conceded = family.filter(c => c.direction === "CONCESSION").reduce((a, c) => a + amount(c), 0);
   const recovered = family.filter(c => c.direction === "RECOVERY").reduce((a, c) => a + amount(c), 0);
+  // v7.43.0 (AUD3-L4, external audit: "claim totals add amounts in different currencies"): the net per currency — never euros plus zloty
+  const byCurrency: Record<string, { conceded: number; recovered: number; net: number }> = {};
+  family.forEach((c: any) => { const cur = String(c?.currency || "EUR").toUpperCase(); const b = byCurrency[cur] || (byCurrency[cur] = { conceded: 0, recovered: 0, net: 0 });
+    if (c.direction === "CONCESSION") b.conceded += amount(c); else if (c.direction === "RECOVERY") b.recovered += amount(c); b.net = Math.round((b.conceded - b.recovered) * 100) / 100; });
   return {
+    byCurrency, mixedCurrencies: Object.keys(byCurrency).length > 1,
     conceded: Math.round(conceded * 100) / 100,
     recovered: Math.round(recovered * 100) / 100,
     net: Math.round((conceded - recovered) * 100) / 100,
@@ -225,8 +222,11 @@ export function claimsSummary(claims: any[], todayISO: string) {
     open: open.length,
     overdue: overdue.map(c => c.number),
     noEvidence: noEvidence.map(c => c.number),
-    openRecoveryEUR: Math.round(open.filter(c => c.direction === "RECOVERY").reduce((a, c) => a + amount(c), 0) * 100) / 100,
-    openConcessionEUR: Math.round(open.filter(c => c.direction === "CONCESSION").reduce((a, c) => a + amount(c), 0) * 100) / 100,
+    openRecoveryEUR: Math.round(open.filter(c => c.direction === "RECOVERY" && String(c?.currency || "EUR").toUpperCase() === "EUR").reduce((a, c) => a + amount(c), 0) * 100) / 100,
+    openConcessionEUR: Math.round(open.filter(c => c.direction === "CONCESSION" && String(c?.currency || "EUR").toUpperCase() === "EUR").reduce((a, c) => a + amount(c), 0) * 100) / 100,
+    // v7.43.0 (AUD3-L4): the open amounts per currency — the banner shows each, never one sum labelled in euros
+    openByCurrency: open.reduce((acc: Record<string, { recovery: number; concession: number }>, c: any) => { const cur = String(c?.currency || "EUR").toUpperCase(); const b = acc[cur] || (acc[cur] = { recovery: 0, concession: 0 });
+      if (c.direction === "RECOVERY") b.recovery = Math.round((b.recovery + amount(c)) * 100) / 100; else if (c.direction === "CONCESSION") b.concession = Math.round((b.concession + amount(c)) * 100) / 100; return acc; }, {}),
   };
 }
 
@@ -256,7 +256,7 @@ export interface ClaimPosting {
 }
 
 const POSTABLE = new Set<string>(["Accepted", "Partially accepted", "Settled"]);
-export function isPostable(c: any): boolean {
+function isPostable(c: any): boolean {
   return POSTABLE.has(str(c?.status)) && claimMoney(c).amount > 0;
 }
 

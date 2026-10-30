@@ -35,7 +35,7 @@ const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader fo
 // v6.79.0 (owner ruling, W-1): "Reserved" DROPPED as a status — reservation is an
 // INVENTORY fact (kg allocated to the order, shown as a figure on the lot), not
 // something a shipment can know. Only these three are shipment-derived.
-export const PHYSICAL_SO_STATUSES = ["Loading", "Shipped", "Delivered"];
+const PHYSICAL_SO_STATUSES = ["Loading", "Shipped", "Delivered"];
 export function isPhysicalStatus(s: any): boolean { return PHYSICAL_SO_STATUSES.includes(S(s)); }
 
 const LIVE = (sh: any) => {
@@ -58,7 +58,7 @@ export interface SoShipmentProgress {
 
 /** What this order's shipments say about it. Kilos, not counts — one truck can
  *  carry part of an order and an order can span several trucks. */
-export function soShipmentProgress(order: any, shipments: any[]): SoShipmentProgress {
+function soShipmentProgress(order: any, shipments: any[]): SoShipmentProgress {
   const soNo = S(order?.number);
   const orderedKg = (order?.items || []).reduce((a: number, it: any) => a + num(it.qty), 0);
   let movedKg = 0, deliveredKg = 0, bookedKg = 0;

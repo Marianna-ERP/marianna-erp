@@ -17,7 +17,7 @@ import { nextId } from "./ids";
 import { paymentBasisOf, PAYMENT_BASES } from "./po.domain";
 import { readCountries } from "./Contacts";
 import { useUnsavedGuard } from "./unsaved";
-import { CLIENTS, CURRENCIES, Inp, QUALITY_GRADES, QualityBadge, Sel, SourceBadge, computeLineAvailability, fmtMoney, fmtNum, lotReservations, netTotal, sameSoDuplicateSources, validatePOReadinessForSO, validateSourcing, useSalesData, lotColorationOf, withLotColorations } from "./SalesOrders";
+import { CURRENCIES, Inp, QUALITY_GRADES, QualityBadge, Sel, SourceBadge, computeLineAvailability, fmtMoney, fmtNum, lotReservations, netTotal, sameSoDuplicateSources, validatePOReadinessForSO, validateSourcing, useSalesData, lotColorationOf, withLotColorations } from "./SalesOrders";
 import { nbpRateBefore, orderBufferPct, orderRateFrom } from "./fx";   // v7.13.4 (A-AU-2)
 import { parseNum } from "./numbers";
 import { companyCountryName } from "./counterparty.domain";   // v7.28.11 (Batch L)
@@ -27,7 +27,7 @@ import { sourceMatch } from "./salesOrders.domain";   // v7.23.2 (A-SOL-1)
 // ─── SOURCE PICKER MODAL ──────────────────────────────────────────────────
 // Lets the user pick where a SO line's goods will come from: a stock lot, or a PO.
 // Filters intelligently by product (case-insensitive substring match).
-export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId = null, onCancel, onPick }: any) {
+function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId = null, onCancel, onPick }: any) {
   const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const [filter, setFilter] = useState(lineItem.product || "");
 
@@ -157,7 +157,7 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
   );
 }
 
-export function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, setPackagingTypes = null, onSave, onCancel, onPrint, onEmail , allInvoices = [] }: any) {
+export function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = [], contacts = [], productCatalog = [], setProductCatalog, setPackagingTypes = null, onSave, onCancel, onPrint, onEmail , allInvoices = [] }: any) {
   const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const { confirm: ofConfirm, alert: ofAlert, prompt: ofPrompt, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning) + v6.63.0 (D-10 forward-only alert)
   // v6.99.15: the destination is a LocationPicker over unifiedLocations() — no module-level list any more.
@@ -314,8 +314,8 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
   // v6.99.60 (A-SO-1, owner): a sale is not confirmed without what it sells and at what price. A line the producer's packing list
   // added to an already confirmed SO at "price to agree" is exempt from the PRICE here — the sales invoice waits for it (v6.99.56).
   const priceQtyGaps = (order.items || []).map((it: any, i: number) => { const miss: string[] = [];
-    if (!(parseFloat(it.qty) > 0 || parseFloat(it.boxes) > 0)) miss.push("quantity");
-    if (!(parseFloat(it.unitPrice) > 0) && !it.priceToAgree) miss.push("sell price");
+    if (!(parseNum(it.qty) > 0 || parseNum(it.boxes) > 0)) miss.push("quantity");
+    if (!(parseNum(it.unitPrice) > 0) && !it.priceToAgree) miss.push("sell price");
     return miss.length ? `line ${i + 1}${it.product ? ` (${[it.product, it.variety, it.size].filter(Boolean).join(" ")})` : ""}: ${miss.join(" and ")}` : null; }).filter(Boolean) as string[];
   const priceQtyBlock = priceQtyGaps.length > 0 && nonDraftStatuses.includes(order.status);
   const isBlocked = sourcingBlock || poReadinessBlock || availabilityBlock || priceQtyBlock;
@@ -547,18 +547,18 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     // v6.95.0 (SO-8): the rate becomes a locked fact at confirm, with its date.
                     if (!order.fxLockedAt && String(order.currency || "PLN").toUpperCase() !== "PLN") setOrder((o: any) => lockRate(o, localTodayISO()));
                     // v6.92.0 (A-R8-1, owner ruling R3): no line may be confirmed without a quantity and a price.
-                    const empty = (order.items || []).filter((it: any) => String(it.product || "").trim() && !((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) > 0 && (parseFloat(String(it.unitPrice)) || 0) > 0));
+                    const empty = (order.items || []).filter((it: any) => String(it.product || "").trim() && !((String(it.pricingUnit || "") === "box" ? (parseNum(String(it.boxes)) || 0) : (parseNum(String(it.qty)) || 0)) > 0 && (parseNum(String(it.unitPrice)) || 0) > 0));
                     if (empty.length) { await ofAlert({ tone: "warn", title: "Quantity and price required", message: `${empty.length} line(s) have no quantity or no price. A sales order cannot be confirmed with an empty line — fill them in first (owner ruling R3).` }); return; }
                     // v6.92.0 (A-R8-2): a foreign-currency order needs a real rate — 1.0 is the PLN default, not a rate.
-                    if (String(order.currency || "PLN").toUpperCase() !== "PLN" && Math.abs((parseFloat(String(order.fxRate)) || 0) - 1) < 1e-9) { await ofAlert({ tone: "warn", title: "FX rate missing", message: `The order is in ${order.currency} but its rate to PLN is 1.0. Set the rate before confirming — every amount in the ERP nets in PLN at the document's own locked rate.` }); return; }
+                    if (String(order.currency || "PLN").toUpperCase() !== "PLN" && Math.abs((parseNum(String(order.fxRate)) || 0) - 1) < 1e-9) { await ofAlert({ tone: "warn", title: "FX rate missing", message: `The order is in ${order.currency} but its rate to PLN is 1.0. Set the rate before confirming — every amount in the ERP nets in PLN at the document's own locked rate.` }); return; }
                     // v6.89.0 (R2, owner ruling): every sale rests on a purchase — a line without a PO line or a lot cannot be confirmed.
                     const unsourced = (order.items || []).filter((it: any) => String(it.product || "").trim() && !(["PO", "STOCK"].includes(String(it.sourceType || "")) && String(it.sourceRef || "").trim()));
                     if (unsourced.length) { await ofAlert({ tone: "warn", title: "Every sale rests on a purchase", message: `${unsourced.length} line(s) have no source. Pick the PO line or the stock lot each line sells from — a free-typed line cannot be confirmed (owner ruling R2).` }); return; }
                     // v6.68.0 (F-3): credit control at the moment of commitment.
                     const clientRec = (contacts || []).find((c: any) => String(c.id) === String(order.client?.id));   // v7.27.1 (FZ-24): by id
-                    const limit = parseFloat(String(clientRec?.terms?.creditLimitPLN ?? "")) || 0;   // v7.28.1 (Batch L)
+                    const limit = parseNum(String(clientRec?.terms?.creditLimitPLN ?? "")) || 0;   // v7.28.1 (Batch L)
                     if (limit > 0) {
-                      const soPLN = (order.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) * (parseFloat(String(it.unitPrice)) || 0)), 0) * (parseFloat(String(order.fxRate)) || 1);
+                      const soPLN = (order.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (parseNum(String(it.boxes)) || 0) : (parseNum(String(it.qty)) || 0)) * (parseNum(String(it.unitPrice)) || 0)), 0) * (parseNum(String(order.fxRate)) || 1);
                       const exposure = clientExposurePLN(order.client?.name, allInvoices || []);
                       if (exposure + soPLN > limit) {
                         const goOn = await ofConfirm({ tone: "danger", title: "Credit limit exceeded", message: `${order.client?.name}: open receivables ${exposure.toLocaleString("pl-PL")} PLN + this order ≈ ${Math.round(soPLN).toLocaleString("pl-PL")} PLN exceed the limit of ${limit.toLocaleString("pl-PL")} PLN.\n\nConfirm the order anyway?`, confirmLabel: "Confirm anyway", cancelLabel: "Hold the order" });
@@ -722,14 +722,14 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               <div>
                 <Lbl>Payment terms</Lbl>
                 <div style={{ display: "grid", gridTemplateColumns: paymentBasisOf(order) === "INVOICE" ? "90px 1fr" : "1fr", gap: 8 }}>
-                  {paymentBasisOf(order) === "INVOICE" && <Inp disabled={isLocked} type="number" value={order.paymentDays ?? ""} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder="days" title="v6.99.23: days from the invoice issue date (owner ruling); the sales invoice's due date derives from this" />}
+                  {paymentBasisOf(order) === "INVOICE" && <Inp disabled={isLocked} type="number" value={order.paymentDays ?? ""} onChange={e => sf("paymentDays", parseNum(e.target.value) || 0)} placeholder="days" title="v6.99.23: days from the invoice issue date (owner ruling); the sales invoice's due date derives from this" />}
                   <Sel disabled={isLocked} value={paymentBasisOf(order)} onChange={e => sf("paymentBasis", e.target.value)}>
                     {PAYMENT_BASES.map((b: any) => <option key={b.value} value={b.value}>{b.value === "INVOICE" ? "days from invoice date" : b.label}</option>)}
                   </Sel>
                 </div>
               </div>
               <div><Lbl>Currency</Lbl>
-                <Sel value={order.currency} onChange={e => { const cur = e.target.value; setOrder((o: any) => ({ ...o, currency: cur, fxRate: cur === "PLN" ? 1 : ((parseFloat(String(o.fxRate)) || 1) !== 1 ? o.fxRate : defaultFxRate(cur)) })); }} disabled={isLocked}>
+                <Sel value={order.currency} onChange={e => { const cur = e.target.value; setOrder((o: any) => ({ ...o, currency: cur, fxRate: cur === "PLN" ? 1 : ((parseNum(String(o.fxRate)) || 1) !== 1 ? o.fxRate : defaultFxRate(cur)) })); }} disabled={isLocked}>
                   {CURRENCIES.map(c => <option key={c}>{c}</option>)}
                 </Sel>
               </div>
@@ -899,7 +899,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                         so a line priced per kg had no kilo field at all — the order could not be completed. */}
                     {pricingUnitOf(it) === "box" ? (
                       <div><Lbl>Qty (boxes)</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => {
-                        const b = Math.round(parseFloat(e.target.value) || 0);
+                        const b = Math.round(parseNum(e.target.value) || 0);
                         const kgPerBox = kgPerBoxForLine(it, sd.packagingTypes);
                         setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? { ...x, boxes: Math.max(0, Math.round(parseNum(b))), qty: kgPerBox > 0 ? Math.round(Math.max(0, Math.round(parseNum(b))) * kgPerBox * 1000) / 1000 : x.qty } : x) }));
                       }} placeholder="e.g. 400" disabled={fullyLocked} /></div>
@@ -911,7 +911,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                       <option value="kg">kg</option>
                       <option value="box">box</option>
                     </Sel></div>
-                    <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}{it.priceToAgree && !(parseFloat(it.unitPrice) > 0) ? <span style={{ color: "#DC2626", fontWeight: 800 }}> · price to agree</span> : null}</Lbl><Inp type="number" value={it.unitPrice ?? ""} style={it.priceToAgree && !(parseFloat(it.unitPrice) > 0) ? { borderColor: "#DC2626", background: "#FEF2F2" } : undefined} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
+                    <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}{it.priceToAgree && !(parseNum(it.unitPrice) > 0) ? <span style={{ color: "#DC2626", fontWeight: 800 }}> · price to agree</span> : null}</Lbl><Inp type="number" value={it.unitPrice ?? ""} style={it.priceToAgree && !(parseNum(it.unitPrice) > 0) ? { borderColor: "#DC2626", background: "#FEF2F2" } : undefined} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 0.8fr 0.8fr 1fr 1.1fr 38px", gap: 8, alignItems: "end", marginTop: 8 }}>
                     {(() => { const fromLot = it.sourceType === "STOCK" && it.sourceRef ? lotColorationOf(it.sourceRef, sd) : ""; const own = String(it.coloration || ""); const differs = !!(own && fromLot && own.toLowerCase() !== fromLot.toLowerCase());   /* v7.23.1 (A-SOL-2): from the lot, like origin, size and class */

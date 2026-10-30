@@ -7,6 +7,7 @@ import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { formatDMY } from "./dates";
 import { placeForPrint } from "./locations";
 import { BiLbl, COMPANY, PrintLogo, destinationDisplay, netTotal, usePoData } from "./PurchaseOrders";
+import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 import { companyAddressLines } from "./useLocalStoredState";   // v7.19.6 (A-TD-5): the country printed when the address does not name it
 
 export function PODoc({ order }: any) {
@@ -130,7 +131,7 @@ export function PODoc({ order }: any) {
         </thead>
         <tbody>
           {order.items.map((item, i) => {
-            const lt = ((parseFloat(item.qty) || 0) * (parseFloat(item.unitPrice) || 0)).toFixed(2);
+            const lt = ((parseNum(item.qty) || 0) * (parseNum(item.unitPrice) || 0)).toFixed(2);
             return (
               <tr key={i}>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>
@@ -143,10 +144,10 @@ export function PODoc({ order }: any) {
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.packaging || "—"}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.pallets || "—"}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.unit || "Kg"}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseFloat(item.qty || 0).toLocaleString("pl-PL")}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : parseFloat(item.unitPrice || 0).toFixed(2)}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseNum(item.qty || 0).toLocaleString("pl-PL")}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : parseNum(item.unitPrice || 0).toFixed(2)}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : order.currency}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right", fontWeight: 600 }}>{(order.pricingMode || "firm") === "consignment" ? "Konsygnacja / Consignment" : parseFloat(lt).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right", fontWeight: 600 }}>{(order.pricingMode || "firm") === "consignment" ? "Konsygnacja / Consignment" : parseNum(lt).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
               </tr>
             );
           })}

@@ -32,14 +32,14 @@ export function soReservesStock(status: any): boolean { return !NON_RESERVING_ST
 
 // Shipped kg for one SO line, derived from movements. Memo-free; callers may
 // pass a prebuilt per-order map for efficiency, else it is computed on demand.
-export function shippedForSOLine(order: any, lineIndex: number, lots: any[], shipments: any[]): number {
+function shippedForSOLine(order: any, lineIndex: number, lots: any[], shipments: any[]): number {
   try {
     const r = shippedKgByLine(order, lots || [], shipments || []);
     return (r.perLine && r.perLine[lineIndex]) || 0;
   } catch { return 0; }
 }
 
-export function normalizeProduct(p: any): string {
+function normalizeProduct(p: any): string {
   return (p || "").toLowerCase().trim();
 }
 // FB-12: two lines match only if the product AND (when both specify a variety)
@@ -100,7 +100,7 @@ export function lotReservationsForPicker(lot: any, allOrders: any[], excludeOrde
       if (it.sourceType !== "STOCK") return;
       if (it.sourceRef !== lot.number) return;
       if (!productsMatch(it.product, lot.product, it.variety, lot.variety)) return;
-      const full = parseFloat(it.qty) || 0;
+      const full = parseNum(it.qty) || 0;
       if (full <= 0) return;
       const q = reservedForLine(o, it, li, full, ctx);
       if (q <= 0) return;
@@ -129,7 +129,7 @@ export function lotReservationsForStock(lot: any, sourceSOs: any[], ctx?: Reserv
       const matchesPOBackedLot = false;
       if (!matchesStock && !matchesPOBackedLot) return;
       if (!productsMatch(it.product, lot.product, it.variety, lot.variety)) return;
-      const full = parseFloat(it.qty) || 0;
+      const full = parseNum(it.qty) || 0;
       if (full <= 0) return;
       const q = reservedForLine(o, it, li, full, ctx);
       if (q <= 0) return;
@@ -172,8 +172,8 @@ export function takenBySale(lot: any, soNumber: any): number {
   const so = String(soNumber || ""); if (!so) return 0;
   return Math.max(0, (lot?.movements || []).reduce((a: number, m: any) => {
     if (!m || m.voided || String(m.soRef || "") !== so) return a;
-    if (m.type === "SHIP_OUT") return a + (parseFloat(m.qtyKg) || 0);
-    if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
+    if (m.type === "SHIP_OUT") return a + (parseNum(m.qtyKg) || 0);
+    if (m.type === "REVERSAL") return a - (parseNum(m.qtyKg) || 0);
     return a;
   }, 0));
 }
@@ -199,7 +199,7 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
     if (!(_ctx && _ctx.lots) && !SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
     (o.items || []).forEach((it: any, _li: number) => {
       if (!it.sourceType || !it.sourceRef) return;
-      const _full = parseFloat(it.qty) || 0;
+      const _full = parseNum(it.qty) || 0;
       const q = reservedForLine(o, it, _li, _full, _ctx);
       if (q <= 0) return;
       if (it.sourceType === "STOCK") {
@@ -224,7 +224,7 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
   const ownShippedFrom = (lot: any) => takenBySale(lot, selfSO);   // v7.27.7 (P-12): the shared rule
 
   return (soItems || []).map((it: any) => {
-    const lineQty = parseFloat(it.qty) || 0;
+    const lineQty = parseNum(it.qty) || 0;
 
     let primaryAvailable = 0;
     let primaryProductMismatch = false;

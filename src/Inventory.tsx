@@ -11,7 +11,7 @@ import { Card, Lbl, useConfirm, DocRef, cancelledDocSet} from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
-import { defaultFxRate } from "./fx";
+import { defaultFxRate , rateOf } from "./fx";
 import { unifiedLocations, locationById, isPortType, placeGroup } from "./locations";
 import { localTodayISO, formatDMY, addDaysISO } from "./dates";
 import { shipmentTradeDirection, shipmentTradeEnds, MOVEMENT_LABELS } from "./tradeFlow.domain";
@@ -549,7 +549,7 @@ function lotArrivalDate(lot: any): string | null {
 // v6.99.81: lotAgeDays retired — the Arrived · age column reads lotArrivedCell (lotView.domain)
 function ageColor(days: number): string { return days <= 7 ? "#16A34A" : days <= 14 ? "#D97706" : "#DC2626"; }
 
-export function totalCost(lot) {
+function totalCost(lot) {
   return (lot.costs || []).reduce((s, c) => s + (c.pln || 0), 0);
 }
 export function costPerKg(lot) {
@@ -559,7 +559,7 @@ export function costPerKg(lot) {
   const denom = lot.receivedKg || lot.expectedKg || 0;
   return denom > 0 ? total / denom : 0;
 }
-export function valueInStock(lot) {
+function valueInStock(lot) {
   // Value still on hand = what's physically here × per-kg cost basis.
   // Note: physicalKg already accounts for SHIP_OUT movements (goods gone).
   return (lot.physicalKg || 0) * costPerKg(lot);
@@ -1191,7 +1191,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
   // (REVERSAL) and book the return transport as its own shipment with the cost. It does
   // NOT reopen the original SO; value is settled via the quality-issue / credit-note path.
   function returnToWarehouse(d: any) {
-    const fx = parseNum(d.fxRate) || 1;
+    const fx = rateOf(d);
     const costN = parseNum(d.cost);
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;

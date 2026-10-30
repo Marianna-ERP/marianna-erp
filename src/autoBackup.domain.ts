@@ -13,13 +13,13 @@
 // so test and real files never mix even in one folder; the real copy's pattern is unchanged and ignores TEST files
 let COPY_LABEL = "";
 export function setBackupCopyLabel(label: string) { COPY_LABEL = String(label || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""); }
-export function autoPrefix(): string { return COPY_LABEL ? `marianna-erp-${COPY_LABEL}_auto_` : "marianna-erp_auto_"; }   // the real copy's prefix (kept for readers)
+function autoPrefix(): string { return COPY_LABEL ? `marianna-erp-${COPY_LABEL}_auto_` : "marianna-erp_auto_"; }   // the real copy's prefix (kept for readers)
 function autoRe(): RegExp { return new RegExp("^" + autoPrefix().replace(/[-_]/g, m => "\\" + m) + "(\\d{4}-\\d{2}-\\d{2})_(\\d{2})-(\\d{2})-(\\d{2})_v[0-9A-Za-z.-]+\\.json$"); }
 
 export const KEEP_NEWEST = 30;
 export const KEEP_DAILY_DAYS = 30;
-export const QUIET_MS = 2 * 60 * 1000;          // "two minutes after your changes stop"
-export const MIN_INTERVAL_MS = 15 * 60 * 1000;  // "at most every 15 minutes"
+const QUIET_MS = 2 * 60 * 1000;          // "two minutes after your changes stop"
+const MIN_INTERVAL_MS = 15 * 60 * 1000;  // "at most every 15 minutes"
 export const TICK_MS = 30 * 1000;               // how often the app looks
 
 const pad = (n: number) => String(n).padStart(2, "0");

@@ -81,6 +81,24 @@ if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the 
   ["Shipments.tsx", "Inventory.tsx", "ShipmentEditor.tsx", "shipments.domain.ts", "costAllocation.ts", "receipts.domain.ts", "pricingUnit.domain.ts", "bankReconciliation.domain.ts"].forEach(f => { const c = fs.readFileSync(path.join(src, f), "utf8"); if (/(?<!isNaN\()parseFloat\(/.test(c)) off.push(`${f} reads data with parseFloat`); });
   if (off.length) { failed++; console.log(`  ✗ numbers: ${off.join("; ")}`); } else console.log("  ✓ numbers: one number field, one reader where the audit looked");
 }
+// v7.42.0 (AUD3-A6): NO NEW IMPORT LOOPS — today 5 groups of files import each other in a loop (34 files); the number may only go down
+{
+  checked++; const prev = process.cwd(); process.chdir(path.join(__dirname, "..")); const { loops } = require("../scripts/import-loops.cjs"); const now = loops(); process.chdir(prev);
+  if (now.groups > 5 || now.files > 34) { failed++; console.log(`  ✗ no new import loops: ${now.groups} group(s), ${now.files} file(s) (allowed 5 / 34)`); } else console.log(`  ✓ no new import loops: ${now.groups} group(s), ${now.files} file(s)`);
+}
+// v7.50.0 (REV-25, owner 29 Oct): NO DEAD EXPORTS — every exported value is used by another source file, or is one of the named test seams
+// (a check sets or reads state through it) or kept for an approved card. Anything else exported is dead code or a needless export.
+{
+  checked++; const SEAMS = new Set(["__setNbpStore", "syncState", "openEditors", "numberingStatus", "getAutoBackupStatus", "currentAgreement", "auditForDoc"]);
+  const files = fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f)); const text = new Map(files.map(f => [f, fs.readFileSync(path.join(src, f), "utf8")]));
+  // a value a check imports is a test seam (the suites need it); the review of 29 Oct removed the ones nothing needed
+  const tests = fs.readdirSync(__dirname).filter(f => /\.cjs$/.test(f)).map(f => fs.readFileSync(path.join(__dirname, f), "utf8")).join("\n");
+  const off = [];
+  files.forEach(f => { const re = /^export (?:async )?(?:function|const|let|class) ([A-Za-z_$][\w$]*)/gm; let m; const c = text.get(f);
+    while ((m = re.exec(c))) { const n = m[1]; if (SEAMS.has(n)) continue; const w = new RegExp(`\\b${n.replace(/\$/g, "\\$")}\\b`);
+      if (!files.some(g => g !== f && w.test(text.get(g))) && !w.test(tests)) off.push(`${f}:${n}`); } });
+  if (off.length) { failed++; console.log(`  ✗ no dead exports: ${off.length} — ${off.slice(0, 6).join(", ")}`); } else console.log("  ✓ no dead exports: every exported value is used by another file or by a check (a test seam)");
+}
 // v7.28.11 (Batch L · FZ-03, P-13): A COMPANY'S COUNTRY IS ITS CODE — no file reads a company record's country name except the
 // helpers (companyCountryName / companyCountryIso) and the company tidy-up; the copies on documents keep the printed name
 {
@@ -190,7 +208,7 @@ if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the 
 // lot builder (its two callers renumber its lots from the counter). Each allowance is checked against its companion.
 {
   checked++; const off = [];
-  const GEN = /\b(nextPONumber|nextSONumber|nextShipmentNumber|nextShipmentNumberPure|nextClaimNumber|nextProtocolNumber|nextSettlementNumberPO|nextLotSerial)\(/;
+  const GEN = /\b(nextPONumber|nextSONumber|nextShipmentNumber|nextShipmentNumberPure|nextClaimNumber|nextProtocolNumber|nextLotSerial)\(/;
   const rd = f => fs.readFileSync(path.join(src, f), "utf8");
   const companion = { "PurchaseOrders.tsx": () => /issueNumber\("PO"/.test(rd("PurchaseOrders.tsx")) && (rd("PurchaseOrders.tsx").match(/issueNumbers\("LOT"/g) || []).length >= 2 && /issueNumber\("SET"/.test(rd("PurchaseOrders.tsx")),
     "SalesOrders.tsx": () => /issueNumber\("SO"/.test(rd("SalesOrders.tsx")), "loadingProtocol.domain.ts": () => /issueNumber\("LP"/.test(rd("LoadingProtocolModal.tsx")) };

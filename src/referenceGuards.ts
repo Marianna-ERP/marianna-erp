@@ -17,7 +17,7 @@
 //     the single list of which columns those FKs live on.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { shipmentStartPlaceId, shipmentEndPlaceId } from "./tradeFlow.domain";   // v7.28.7 (Batch L)
+
 export interface ReferenceReport {
   total: number;
   /** grouped, ready-to-print lines, e.g. "Purchase Order(s): PO-2026-0001, PO-2026-0002" */
@@ -69,31 +69,3 @@ export interface LocationRefStores {
   lots?: any[]; shipments?: any[]; pos?: any[]; orders?: any[]; contacts?: any[];
 }
 
-/** Every reference to a location id — including movement history, which is the
- *  reference that made a deleted location blank out a lot (M8/D-04). */
-export function referencesToLocation(locationId: any, stores: LocationRefStores): ReferenceReport {
-  const hits: Record<string, Set<string>> = {
-    "Lot(s)": new Set(), "Shipment(s)": new Set(), "Purchase Order(s)": new Set(),
-    "Sales Order(s)": new Set(), "Warehouse tariff(s)": new Set(),
-  };
-  (stores.lots || []).forEach(lot => {
-    const n = S(lot.number || lot.id);
-    if (same(lot?.locationId, locationId) || same(lot?.baseLocationId, locationId)) hits["Lot(s)"].add(n);
-    (lot?.movements || []).forEach((m: any) => { if (same(m?.fromId, locationId) || same(m?.toId, locationId)) hits["Lot(s)"].add(n); });
-  });
-  (stores.shipments || []).forEach(sh => {
-    const n = S(sh.number || sh.id);
-    if (same(shipmentStartPlaceId(sh), locationId) || same(shipmentEndPlaceId(sh), locationId)) hits["Shipment(s)"].add(n);   // v7.28.7: the route
-    (sh?.legs || []).forEach((l: any) => {
-      if (same(l?.fromLocationId, locationId) || same(l?.toLocationId, locationId)) hits["Shipment(s)"].add(n);
-      (l?.stops || []).forEach((st: any) => { if (same(st?.locationId, locationId)) hits["Shipment(s)"].add(n); });
-    });
-  });
-  (stores.pos || []).forEach(po => { if (same(po?.destinationLocationId, locationId)) hits["Purchase Order(s)"].add(S(po.number || po.id)); });
-  (stores.orders || []).forEach(so => { if (same(so?.destinationLocationId, locationId)) hits["Sales Order(s)"].add(S(so.number || so.id)); });
-  (stores.contacts || []).forEach(c => {
-    const ids = (c?.warehouseTariff?.locationIds || []).map(S);
-    if (ids.includes(S(locationId))) hits["Warehouse tariff(s)"].add(S(c.name || c.id));
-  });
-  return group(hits);
-}

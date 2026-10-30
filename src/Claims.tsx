@@ -331,7 +331,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
       <ModuleHeader title="Claims" right={<ActionButton action="create" label="Add new claim" onClick={addClaim} />} />   {/* v6.99.61 (A-HD-1) */}
       <div style={{ padding: "12px 28px 12px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>
         <div style={{ fontSize: 12, color: "#64748B", marginBottom: 8 }}>
-          {summary.total} total · {summary.open} open · recovery {eur(summary.openRecoveryEUR)} · concession {eur(summary.openConcessionEUR)}
+          {summary.total} total · {summary.open} open · {Object.entries(summary.openByCurrency || {}).map(([cur, v]: any) => `recovery ${num(v.recovery).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${cur} · concession ${num(v.concession).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${cur}`).join(" · ") || "nothing open"}
         </div>
 
         {(summary.overdue.length > 0 || summary.noEvidence.length > 0) && (

@@ -7,9 +7,9 @@ import { recomputeInvoiceMoney } from "./invoicing";
 const ISO = /^\d{4}-\d{2}-\d{2}/;
 const foreign = (i: any) => !!i && String(i.currency || "PLN").toUpperCase() !== "PLN" && i.paymentStatus !== "Cancelled";
 /** An invoice not yet rated from NBP (fxTableDate marks a rated one), outside a closed month. */
-export function fxNeedsInvoice(i: any, isClosed: (d: string) => boolean): boolean { return foreign(i) && ISO.test(String(i.issueDate || "")) && !i.fxTableDate && !isClosed(i.issueDate); }
+function fxNeedsInvoice(i: any, isClosed: (d: string) => boolean): boolean { return foreign(i) && ISO.test(String(i.issueDate || "")) && !i.fxTableDate && !isClosed(i.issueDate); }
 /** A payment of a foreign invoice with no rate yet, outside a closed month. */
-export function fxNeedsPayment(i: any, p: any, isClosed: (d: string) => boolean): boolean { return foreign(i) && !(Number(p?.settlementFxRate) > 0) && ISO.test(String(p?.date || "")) && !isClosed(p.date); }
+function fxNeedsPayment(i: any, p: any, isClosed: (d: string) => boolean): boolean { return foreign(i) && !(Number(p?.settlementFxRate) > 0) && ISO.test(String(p?.date || "")) && !isClosed(p.date); }
 /** The dates whose NBP tables are needed (sorted). */
 export function fxDatesNeeded(invoices: any[], isClosed: (d: string) => boolean): string[] {
   return (invoices || []).flatMap((i: any) => [fxNeedsInvoice(i, isClosed) ? String(i.issueDate).slice(0, 10) : "",

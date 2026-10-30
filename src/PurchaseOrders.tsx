@@ -5,7 +5,6 @@ import { lastReportNumber, issueReportNumber } from "./reportNumbers";
 import { effectiveCounts } from "./pricingUnit.domain";
 import { exportRowsToXlsx, stamp as xlsStamp, exportVegaProSalesReport } from "./exportXlsx";
 import { SmallButton, notifySaved, DocLink } from "./ui";
-import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
@@ -13,7 +12,7 @@ import { poDirectFromSOs } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { LOGO_DATA_URL } from "./brand";
 import { nextId } from "./ids";
-import { FX_RATES, nbpRateBefore } from "./fx";   // v7.18.6: + nbpRateBefore
+import { FX_RATES, nbpRateBefore , rateOf } from "./fx";   // v7.18.6: + nbpRateBefore
 import { getCounterpartiesByType } from "./Contacts";
 import { locationById } from "./locations";
 import { termsToReview, termsFindingsForDoc, incotermLine, deliveredAtDestination , isDRulePurchase } from "./incoterms.domain";   // v7.20.0 (A-INC-2): the PO view shows its terms to review
@@ -36,13 +35,20 @@ import { companyProfile } from "./useLocalStoredState";
 import { OrderForm } from "./PurchaseOrderForm";
 import { PackingResultWindow, SupplierTruckWindow, OrderDetail } from "./PurchaseOrderDetail";
 import { PODoc, PrintModal } from "./PurchaseOrderDocument";
+import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 import { promisedDateKind, poPromisedDate, poExpectedArrival, promisedDateLabel } from "./po.domain";   // v7.28.5 (Batch L)
 import { peopleOf, companyAddressLine, companyCountryName } from "./counterparty.domain";   // v7.28.2 (Batch L)
-import { issueNumber, issueNumbers } from "./numbering";   // v7.27.8 (A-W5)
+import { issueNumber, issueNumbers } from "./numbering";
+
+// v6.32.0 (R7b-5): demo seed INITIAL_ORDERS moved out of the production bundle → dev/demoSeed.reference.ts
+
+// ─── SHARED ATOMS ───────────────────────────────────────────────────────────
+import { Inp } from "./ui";   // v7.44.0 (AUD3 redundancy): one copy, in ui.tsx
+import { Sel } from "./ui";   // v7.27.8 (A-W5)
 // v7.22.4 (A-RV-16, Batch F): no hidden module copies — the packaging types and the counterparties the purchase screens and the
 // printed PO read are one value from the props (PoData), handed down through a context.
 export interface PoData { packagingTypes: any[]; contacts: any[] }
-export const EMPTY_PO_DATA: PoData = { packagingTypes: PACKAGING_SEED, contacts: [] };
+const EMPTY_PO_DATA: PoData = { packagingTypes: PACKAGING_SEED, contacts: [] };
 export const PoDataContext = React.createContext<PoData>(EMPTY_PO_DATA);
 export const usePoData = (): PoData => React.useContext(PoDataContext);
 
@@ -107,7 +113,6 @@ export const LOCATION_TYPES: Record<string, any> = {
 // FX_RATES now sourced from ./fx (single source of truth)
 
 // ─── SEED DATA ──────────────────────────────────────────────────────────────
-export const SUPPLIERS: any[] = [];   // v7.27.12 (A-RV-39): no company is written into the code — the forms read the directory
 
 function primaryContactValue(counterparty) {
   const contacts = peopleOf(counterparty);
@@ -133,21 +138,7 @@ function suppliersFromContacts(contacts) {
   // mirroring the SO-side clientsFromContacts fix from Batch 0. The demo SUPPLIERS
   // array remains for standalone/dev seeds only; a clean system must stay clean.
   return mapped;
-}
-
-// v6.32.0 (R7b-5): demo seed INITIAL_ORDERS moved out of the production bundle → dev/demoSeed.reference.ts
-
-// ─── SHARED ATOMS ───────────────────────────────────────────────────────────
-export function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max, min, noFuture }: any) {
-  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
-  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder || undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
-  const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
-  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
-}
-export function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
-  const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
-  return <select value={value || ""} onChange={onChange} disabled={disabled} style={{ ...base, ...style }}>{children}</select>;
-}
+} export { Inp }; export { Sel };   // v7.44.0 (AUD3 redundancy): one copy, in ui.tsx
 export function StatusBadge({ status }: any) {
   const s = PO_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };
   return <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{statusWord(status)}</span>;
@@ -212,7 +203,7 @@ export function destinationDisplay(order) {
   if (!loc) return "—";
   return `${loc.name}${loc.country ? `, ${loc.country}` : ""}`;
 }
-export function netTotal(items) { return items.reduce((s, i) => s + (parseFloat(i.qty) || 0) * (parseFloat(i.unitPrice) || 0), 0); }
+export function netTotal(items) { return items.reduce((s, i) => s + (parseNum(i.qty) || 0) * (parseNum(i.unitPrice) || 0), 0); }
 
 // Generate next PO number for the current year by finding the highest existing sequence and adding 1.
 // Format: PO-YYYY-NNNN (4-digit zero-padded sequence per year).
@@ -230,7 +221,7 @@ export function plnTotal(order) {
   const fx = order.fxRate || FX_RATES[order.currency] || 1;
   return netTotal(order.items) * fx;
 }
-export function totalQtyKg(items) { return items.reduce((s, i) => s + (parseFloat(i.qty) || 0), 0); }
+export function totalQtyKg(items) { return items.reduce((s, i) => s + (parseNum(i.qty) || 0), 0); }
 
 // ─── PO DOCUMENT (print template) ───────────────────────────────────────────
 // Small bilingual label helper for the print template — English bold on top, Polish italic gray below
@@ -478,7 +469,7 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
         <div><Lbl>{cur === "PLN" ? "Rate — the PO is in PLN" : `Rate PLN→${cur} · NBP`}</Lbl><div data-settlement-rate="1" style={{ ...inp, background: "#F8FAFC", fontVariantNumeric: "tabular-nums" }}>{cur === "PLN" ? "1" : rate > 0 ? rate.toFixed(4) : "—"}</div>
           {cur !== "PLN" && <div style={{ fontSize: 10, color: "#64748B", marginTop: 2 }}>{sr.kept ? `kept at closing${sr.tableDate ? ` · NBP ${formatDMY(sr.tableDate)}` : ""}` : sr.tableDate ? `NBP table A of ${formatDMY(sr.tableDate)}, the day before today — fixed when closed` : "NBP not read yet"}</div>}</div>{/* v7.18.6 (A-AU-12): not typed */}
-        <div><Lbl>Commission % {bandPct != null ? `(band on the net result → ${bandPct}%)` : ""}</Lbl><input type="number" step="0.1" disabled={closed} value={pctUsed ?? ""} onChange={e => upd({ commissionPct: parseFloat(e.target.value) || 0 })} style={inp} /></div>
+        <div><Lbl>Commission % {bandPct != null ? `(band on the net result → ${bandPct}%)` : ""}</Lbl><input type="number" step="0.1" disabled={closed} value={pctUsed ?? ""} onChange={e => upd({ commissionPct: parseNum(e.target.value) || 0 })} style={inp} /></div>
         <div><Lbl>Producer's provisional invoice</Lbl>
           <select disabled={closed} value={rec?.provisionalInvoiceId ?? ""} title="v6.99.85 (A-CS-1): the producer's invoice from the register — its net, currency, rate and payments follow; type it only when it is not registered yet" onChange={e => { const inv = candidates.find((i: any) => String(i.id) === e.target.value); upd(inv ? provisionalFromInvoice(inv) : { provisionalInvoiceId: null }); }} style={inp}>
             <option value="">{candidates.length ? "— pick the producer's invoice —" : "— waiting: no invoice from this producer imported yet —"}</option>
@@ -486,9 +477,9 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
           </select>
           {!chosenInv && rec?.provisionalInvoiceNo ? <div style={{ fontSize: 10, color: "#92400E", marginTop: 4 }}>typed before v7.27.16: {rec.provisionalInvoiceNo} — pick it from the register once imported</div> : null}</div>{/* v7.27.16 (A-AU-7, owner approved 17 Oct): only the imported invoices; the settlement waits for the import */}
         <div><Lbl>Provisional value</Lbl><div style={{ display: "grid", gridTemplateColumns: provCur !== cur && provCur !== "PLN" ? "1fr 64px 76px" : "1fr 64px", gap: 4 }}>
-          <input type="number" disabled={true} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseFloat(e.target.value) || 0 })} style={inp} />
+          <input type="number" disabled={true} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseNum(e.target.value) || 0 })} style={inp} />
           <select disabled={true} value={provCur} onChange={e => upd({ provisionalCurrency: e.target.value })} title="v6.99.84 (A-ST-1): the currency the producer invoiced in" style={inp}>{["EUR", "USD", "PLN"].map(c => <option key={c}>{c}</option>)}</select>
-          {provCur !== cur && provCur !== "PLN" && <input type="number" step="0.0001" disabled={true} value={rec?.provisionalRate ?? ""} placeholder="PLN rate" title={`PLN per 1 ${provCur}`} onChange={e => upd({ provisionalRate: parseFloat(e.target.value) || 0 })} style={inp} />}
+          {provCur !== cur && provCur !== "PLN" && <input type="number" step="0.0001" disabled={true} value={rec?.provisionalRate ?? ""} placeholder="PLN rate" title={`PLN per 1 ${provCur}`} onChange={e => upd({ provisionalRate: parseNum(e.target.value) || 0 })} style={inp} />}
         </div></div>
       </div>
       <div id={`sales-report-${order.id}`} style={{ fontSize: 11 }}>
@@ -635,8 +626,8 @@ function poInventoryTransferErrors(order) {
   const errors = [];
   (order.items || []).forEach((it, idx) => {
     const line = `Line ${idx + 1}`;
-    const qty = parseFloat(it.qty);
-    const unitPrice = parseFloat(it.unitPrice);
+    const qty = parseNum(it.qty);
+    const unitPrice = parseNum(it.unitPrice);
     if (!String(it.product || "").trim()) errors.push(`${line}: product is missing`);
     if (!isFinite(qty) || qty <= 0) errors.push(`${line}: quantity must be greater than zero`);
     if ((order.pricingMode || "firm") !== "consignment" && (!isFinite(unitPrice) || unitPrice <= 0)) errors.push(`${line}: purchase price must be greater than zero`);
@@ -663,7 +654,7 @@ function nextLotSerial(existingLots, year, offset = 1) {
 
 export function buildExpectedLotsFromPO(order, existingLots = []) {   // v6.99.56: exported so the packing-list plan is tested with the real builder
   const year = lotNumberYear(order);
-  const fx = parseFloat(order.fxRate) || 1;
+  const fx = rateOf(order);
   const existingForPO = (existingLots || []).filter(l => l.poRef === order.number);
   const lotRefs = [...existingForPO.map(l => l.number)];
   const newLots = [];
@@ -684,8 +675,8 @@ export function buildExpectedLotsFromPO(order, existingLots = []) {   // v6.99.5
       return firstSameNamedIdx === idx;
     });
 
-    const qty = parseFloat(it.qty) || 0;
-    const unitPrice = parseFloat(it.unitPrice) || 0;
+    const qty = parseNum(it.qty) || 0;
+    const unitPrice = parseNum(it.unitPrice) || 0;
     const isConsignment = (order.pricingMode || "firm") === "consignment";
     const purchaseAmount = isConsignment ? 0 : Math.round(qty * unitPrice * 100) / 100;
     const purchasePLN = isConsignment ? 0 : Math.round(purchaseAmount * fx * 100) / 100;
@@ -695,7 +686,7 @@ export function buildExpectedLotsFromPO(order, existingLots = []) {   // v6.99.5
       // and its edits SYNC the still-expected lot (instead of being silently ignored,
       // which is the old `if (already) return;` bug). Only touch lots that have NOT
       // received goods or moved — mirroring the prune guard — so real stock is safe.
-      const untouched = !(parseFloat(already.receivedKg) > 0) && !(parseFloat(already.physicalKg) > 0) && !((already.movements || []).length);
+      const untouched = !(parseNum(already.receivedKg) > 0) && !(parseNum(already.physicalKg) > 0) && !((already.movements || []).length);
       if (!untouched) return; // received/in-stock/moved → leave it exactly as is
       lotPatches.push({
         number: already.number,
@@ -850,7 +841,7 @@ function PurchaseOrdersScreen({ canOpenResult = false, onOpenResult = null, arch
   // move) — the old ARRIVED counter was permanently 0 and overdue-loading kept
   // flagging POs whose goods had long since shipped.
   const openPO = (o: any) => o.status !== "Closed" && o.status !== "Cancelled";
-  const goodsReceived = (o: any) => (lots || []).some((l: any) => l.poRef === o.number && (parseFloat(l.receivedKg) > 0 || parseFloat(l.physicalKg) > 0));
+  const goodsReceived = (o: any) => (lots || []).some((l: any) => l.poRef === o.number && (parseNum(l.receivedKg) > 0 || parseNum(l.physicalKg) > 0));
   const hasLiveShipment = (o: any) => (extShipments || []).some((s: any) => (s.poRefs || []).includes(o.number) && s.status !== "Cancelled" && s.status !== "Draft");
   const activeCount = orders.filter(openPO).length;
   const arrivedCount = orders.filter(o => openPO(o) && goodsReceived(o)).length;
@@ -889,7 +880,7 @@ function PurchaseOrdersScreen({ canOpenResult = false, onOpenResult = null, arch
     if (!extSetLots || !po?.number) return;
     extSetLots((prevLots: any[]) => (prevLots || []).map((lot: any) => {
       if (lot.poRef !== po.number) return lot;
-      const hasPhysical = (parseFloat(lot.receivedKg) || 0) > 0 || (parseFloat(lot.physicalKg) || 0) > 0 || (lot.movements || []).length > 0;
+      const hasPhysical = (parseNum(lot.receivedKg) || 0) > 0 || (parseNum(lot.physicalKg) || 0) > 0 || (lot.movements || []).length > 0;
       return {
         ...lot,
         poStatus: "Cancelled",
@@ -999,7 +990,7 @@ ${blockNote}`.trim(),
           && l.poLineId != null && String(l.poLineId) !== ""
           && !currentLineIds.has(String(l.poLineId))
           && (l.status === "Expected" || l.status === "Direct Expected")
-          && !(parseFloat(l.receivedKg) > 0) && !(parseFloat(l.physicalKg) > 0)
+          && !(parseNum(l.receivedKg) > 0) && !(parseNum(l.physicalKg) > 0)
           && !((l.movements || []).length))
         .map(l => l.number)
     );
@@ -1011,7 +1002,7 @@ ${blockNote}`.trim(),
         ? (lots || [])
             .filter(l => l.poRef === o.number
               && (l.status === "Expected" || l.status === "Direct Expected")
-              && !(parseFloat(l.receivedKg) > 0) && !(parseFloat(l.physicalKg) > 0)
+              && !(parseNum(l.receivedKg) > 0) && !(parseNum(l.physicalKg) > 0)
               && !((l.movements || []).length))
             .map(l => String(l.number))
         : []
@@ -1116,7 +1107,7 @@ ${blockNote}`.trim(),
     const poNum = po.number; const out: string[] = [];
     (extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(poNum))))).forEach((so: any) => out.push(so.number));
     (extShipments || []).filter((sh: any) => sh.status !== "Cancelled" && ((sh.poRefs || []).includes(poNum) || (sh.goods || []).some((g: any) => String(g.poRef) === String(poNum)))).forEach((sh: any) => out.push(sh.number));
-    (extLots || []).filter((l: any) => String(l.poRef) === String(poNum) && !/Cancelled/.test(String(l.status)) && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || (l.movements || []).some((m: any) => m && !m.voided))).forEach((l: any) => out.push(l.number));
+    (extLots || []).filter((l: any) => String(l.poRef) === String(poNum) && !/Cancelled/.test(String(l.status)) && ((parseNum(l.receivedKg) > 0) || (parseNum(l.physicalKg) > 0) || (l.movements || []).some((m: any) => m && !m.voided))).forEach((l: any) => out.push(l.number));
     (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "PO" && String(l.number) === String(poNum))).forEach((i: any) => out.push(i.number));
     return out;
   }
@@ -1143,7 +1134,7 @@ ${blockNote}`.trim(),
     // so "there is history here" is never the same question as "something
     // depends on this". Only LIVE movements and real kilos lock it.
     const liveMoves = (l.movements || []).filter((m: any) => m && !m.voided);
-    const received = (parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || liveMoves.length > 0;
+    const received = (parseNum(l.receivedKg) > 0) || (parseNum(l.physicalKg) > 0) || liveMoves.length > 0;
     if (!received) return false;
     // If this lot has any linked shipment, only a NON-cancelled one keeps it "live".
     const shs = shipmentsForLot(l.number);

@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2 } from "./format";
+import { rateOf } from "./fx";   // v7.44.0 (AUD3-L2)
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // financePlus.domain.ts — v6.99.1: FINANCE PART 2 (FN-4 client risk · FN-5 PO result for every PO · FN-6 warehouse agreement)
 // Pure. Reads; stores nothing.
@@ -17,14 +18,14 @@ const isMine = (party: any) => cid ? String(party?.id ?? "") === cid : (party?.i
   let exposure = 0, overdue = 0, maxOver = 0, open = 0, lastPay = ""; const payDays: number[] = [];
   (invoices || []).forEach(i => {
     if (!i || i.kind !== "SALES" || i.isProforma || ["Cancelled", "Draft"].includes(i.paymentStatus) || !isMine(i.counterparty)) return;
-    const fx = num(i.fxRate) || 1; const openAmt = r2((num(i.grossAmount) - num(i.paidAmount)) * fx);
+    const fx = rateOf(i); const openAmt = r2((num(i.grossAmount) - num(i.paidAmount)) * fx);
     (i.payments || []).forEach((p: any) => { if (S(p.date) > lastPay) lastPay = S(p.date); if (S(i.issueDate) && S(p.date)) payDays.push(days(S(i.issueDate), S(p.date))); });
     if (openAmt <= 0.005) return;
     exposure += openAmt; open++;
     if (S(i.dueDate) && S(i.dueDate) < todayISO) { overdue += openAmt; maxOver = Math.max(maxOver, days(S(i.dueDate), todayISO)); }
   });
   const openOrders = (orders || []).filter(o => o && ["Confirmed"].includes(o.status) && isMine(o.client))
-    .reduce((s, o) => s + (o.items || []).reduce((a: number, it: any) => a + (String(it.pricingUnit || "") === "box" ? num(it.boxes) : num(it.qty)) * num(it.unitPrice), 0) * (num(o.fxRate) || 1), 0);
+    .reduce((s, o) => s + (o.items || []).reduce((a: number, it: any) => a + (String(it.pricingUnit || "") === "box" ? num(it.boxes) : num(it.qty)) * num(it.unitPrice), 0) * rateOf(o), 0);
   const limit = num(contact?.terms?.creditLimitPLN);   // v7.28.1 (Batch L): the terms own the credit limit
   return { client: clientName, limitPLN: limit, exposurePLN: r2(exposure), usagePct: limit > 0 ? r2((exposure + openOrders) / limit * 100) : null, overduePLN: r2(overdue), maxOverdueDays: maxOver, openInvoices: open, lastPaymentDate: lastPay, avgDaysToPay: payDays.length ? Math.round(payDays.reduce((s, d) => s + d, 0) / payDays.length) : null, openOrdersPLN: r2(openOrders) };
 }
@@ -52,7 +53,7 @@ export function poResult(po: any, lots: any[], orders: any[], shipments: any[]):
   const live = (orders || []).filter(o => o && !["Draft", "Cancelled"].includes(o.status));
   let revenue = 0, sold = 0, concessions = 0;
   live.forEach(o => {
-    const fx = num(o.fxRate) || 1;
+    const fx = rateOf(o);
     (o.items || []).forEach((it: any) => {
       if (!myLots.some(l => sourcesLot(it, l))) return;
       const kg = num(it.qty); const price = String(it.pricingUnit || "") === "box" && num(it.kgPerBox) > 0 ? num(it.unitPrice) / num(it.kgPerBox) : num(it.unitPrice);

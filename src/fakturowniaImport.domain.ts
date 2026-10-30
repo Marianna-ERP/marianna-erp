@@ -1,5 +1,5 @@
 import { parseNum } from "./numbers";
-import { resolveFxRate } from "./fx";   // v6.99.133 (AUD-36): one FX fallback — a foreign invoice without a rate takes the settings' rate, never 1
+import { resolveFxRate , rateOf } from "./fx";   // v6.99.133 (AUD-36): one FX fallback — a foreign invoice without a rate takes the settings' rate, never 1
 // ─────────────────────────────────────────────────────────────────────────────
 // v6.39.0 — Fakturownia IMPORT domain (pure, tested).
 //
@@ -26,6 +26,7 @@ import { resolveFxRate } from "./fx";   // v6.99.133 (AUD-36): one FX fallback �
 import { nextId } from "./ids";
 import { localTodayISO } from "./dates";
 import { defaultFxRate } from "./fx";
+import { isCorrectionRow, findCorrectedInvoice } from "./corrections.domain";   // v7.45.0 (INV2-1)
 import { rolesOf } from "./counterparty.domain";   // v7.28.2 (Batch L)
 import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6)
 
@@ -44,6 +45,7 @@ export interface StagedRow {
   seller: string;
   sellerTaxNo?: string;
   sellerAddr?: { street?: string; postcode?: string; city?: string; country?: string };   // v7.32.1 (INV-QC): kept for "New company from this invoice"
+  ksefNo?: string; isCorrection?: boolean; correctedFktId?: any;   // v7.45.0 (INV2-1 / O4)
   date: string;        // issue date
   dueDate?: string;
   net: number;
@@ -72,7 +74,8 @@ export function stagedRowFromMapped(m: any, idx: number, myTaxNo?: string, myNam
   const cur = String(m.currency || "PLN").toUpperCase();
   const party = counterpartySideOfMapped(m, myTaxNo, myName);
   return {
-    ...(String(m.kind || "").toLowerCase() === "correction" ? { isCorrection: true, correctedFktId: m.correctedFktId ?? null } : {}),   // v7.34.0 (CN-1)
+    ...(isCorrectionRow({ kind: m.kind, gross: m.grossTotal, number: m.number, description: m.description }) ? { isCorrection: true, correctedFktId: m.correctedFktId ?? null } : {}),   // v7.45.0 (INV2-1): the one recogniser
+    ksefNo: String(m.ksefNo || ""),   // v7.45.0 (INV2-1 / O4)
     key: `api:${m.fktId ?? idx}`,
     number: String(m.number || ""),
     seller: party.name,
@@ -125,7 +128,7 @@ function contactTypes(c: any): string[] {
 }
 
 export function poValuePLN(po: any): number {
-  const fx = num(po?.fxRate) || 1;
+  const fx = rateOf(po);
   const total = (po?.items || []).reduce((s: number, it: any) => s + num(it.qty) * num(it.price), 0);
   return Math.round(total * fx * 100) / 100;
 }
@@ -232,7 +235,8 @@ const vatRate = vatRateOf(row.net, row.gross);
     category: (tag === "FREIGHT" ? "FREIGHT" : tag === "CUSTOMS" ? "CUSTOMS" : tag === "WAREHOUSE" ? "WAREHOUSE" : tag === "GOODS" ? "PURCHASE" : "OTHER") as any,   // v6.99.120 (AUD-18): the tag names the category
     costScope: scopeOf(tag === "FREIGHT" ? "FREIGHT" : tag === "CUSTOMS" ? "CUSTOMS" : tag === "WAREHOUSE" ? "WAREHOUSE" : tag === "GOODS" ? "PURCHASE" : "OTHER"),   // v7.26.1 (A-INV-6)
     number: row.number,
-    counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller, ...(row.sellerTaxNo ? { taxNo: row.sellerTaxNo } : {}), ...(row.sellerAddr ? { addr: row.sellerAddr } : {}) },   // v7.32.1 (INV-QC): what the invoice knows, for a company created from it
+    counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller, ...(row.sellerTaxNo ? { taxNo: row.sellerTaxNo } : {}), ...(row.sellerAddr ? { addr: row.sellerAddr } : {}) },
+    ...((row as any).ksefNo ? { ksefNo: String((row as any).ksefNo) } : {}),   // v7.45.0 (O4): the KSeF number kept   // v7.32.1 (INV-QC): what the invoice knows, for a company created from it
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "",
     paymentMethod: "Transfer",
     currency: row.currency, fxRate: resolveFxRate(row.fxRate, row.currency),
@@ -371,7 +375,7 @@ export function duplicateCostInvoiceInfo(number: string, invoices: any[]): { num
 // Most of the monthly invoices repeat: same seller, same kind, often the same amount. Before proposing anything from rules,
 // the import looks at the most recent earlier invoice of the same seller and proposes its tag, category and allocation
 // period; a same-seller invoice within ±10 % of the last amount is flagged recurring. Proposals are shown as proposals.
-export interface LearnedProposal { tag?: ImportTag; category?: string; operationalCategory?: string; warehouseId?: any; allocationPeriod?: "month"; recurring: boolean; from: string; }
+export interface LearnedProposal { basis?: string; tag?: ImportTag; category?: string; operationalCategory?: string; warehouseId?: any; allocationPeriod?: "month"; recurring: boolean; from: string; }
 const TAG_FROM_CATEGORY: Record<string, ImportTag> = { FREIGHT: "FREIGHT", CUSTOMS: "CUSTOMS", WAREHOUSE: "WAREHOUSE", PURCHASE: "GOODS" };
 const wordsOf = (v: any) => new Set(String(v || "").toLowerCase().replace(/[^a-ząćęłńóśźż0-9 ]/gi, " ").split(/\s+/).filter(w => w.length >= 4));
 const resembles = (a: any, b: any) => { const A = wordsOf(a), B = wordsOf(b); if (!A.size || !B.size) return false; let hit = 0; A.forEach(w => { if (B.has(w)) hit++; }); return hit / Math.min(A.size, B.size) >= 0.5; };
@@ -389,8 +393,12 @@ export function learnFromRegister(row: { seller: string; sellerTaxNo?: string; n
   const last = pool[0]; if (!last) return null;
   const amt = Number(row.net || row.gross || 0), lastAmt = Number(last.netAmount || last.grossAmount || 0);
   const recurring = sameSeller.length >= 2 && amt > 0 && lastAmt > 0 && Math.abs(amt - lastAmt) / lastAmt <= 0.10;
-  const cat = String(last.category || ""); const tag = TAG_FROM_CATEGORY[cat];
-  return { tag, category: cat || undefined, operationalCategory: last.operationalCategory || last.costCategory || undefined, warehouseId: cat === "WAREHOUSE" ? (last.warehouseId ?? last.counterparty?.id) : undefined, allocationPeriod: cat === "WAREHOUSE" && last.allocation ? "month" : undefined, recurring, from: `${last.number} (${String(last.issueDate || "").slice(0, 10)})${multiRole ? " · by content" : ""}` };
+  // v7.48.0 (INV2-8, Invoices analysis: "it copies only the last invoice, so one wrong booking teaches the wrong answer"): the category most
+  // used among the seller's last FIVE invoices (ties → the latest); the basis is said ("4 of the last 5 were Freight")
+  const five = pool.slice(0, 5); const counts: Record<string, number> = {}; five.forEach((i: any) => { const k = String(i.category || ""); if (k) counts[k] = (counts[k] || 0) + 1; });
+  const best = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || (five.findIndex((i: any) => String(i.category) === a) - five.findIndex((i: any) => String(i.category) === b)))[0];
+  const cat = String(best || last.category || ""); const tag = TAG_FROM_CATEGORY[cat];
+  return { basis: five.length > 1 && best ? `${counts[best]} of the last ${five.length}` : "", tag, category: cat || undefined, operationalCategory: last.operationalCategory || last.costCategory || undefined, warehouseId: cat === "WAREHOUSE" ? (last.warehouseId ?? last.counterparty?.id) : undefined, allocationPeriod: cat === "WAREHOUSE" && last.allocation ? "month" : undefined, recurring, from: `${last.number} (${String(last.issueDate || "").slice(0, 10)})${multiRole ? " · by content" : ""}` };
 }
 
 /** v7.26.0 (A-INV-1): an invoice already registered through the old overhead path (an operational cost turned into an invoice) carried
@@ -411,7 +419,10 @@ export function vatFixFor(row: StagedRow, invoices: any[]): { invoiceId: any; op
 export function salesRowFromMapped(m: any, idx: number): any {
   return { key: `issued:${m.fktId ?? idx}`, number: String(m.number || ""), buyer: String(m.buyerName || ""), buyerTaxNo: String(m.buyerTaxNo || ""),
     date: m.issueDate || m.sellDate || localTodayISO(), dueDate: m.dueDate || "", net: num(m.netTotal), gross: num(m.grossTotal),
-    currency: String(m.currency || "PLN").toUpperCase(), fxRate: num(m.exchangeRate), fktId: m.fktId, description: String(m.description || "") };
+    currency: String(m.currency || "PLN").toUpperCase(), fxRate: num(m.exchangeRate), fktId: m.fktId, description: String(m.description || ""),
+    kind: String(m.kind || "vat"), correctedFktId: m.correctedFktId ?? null, ksefNo: String(m.ksefNo || ""),   // v7.45.0 (INV2-1 / O4): kept, not dropped
+    positions: Array.isArray(m.positions) ? m.positions : [],   // v7.52.0: the invoice lines (kilos)
+    ...(isCorrectionRow({ kind: m.kind, gross: m.grossTotal, number: m.number, description: m.description }) ? { isCorrection: true } : {}) };
 }
 /** Already in the register (a sales invoice of the same number, not cancelled)? */
 export function isRegisteredSale(number: string, invoices: any[]): boolean {
@@ -435,7 +446,9 @@ export function buildIssuedSalesInvoice(row: any, soNumber: string, contact: any
   const net = num(row.net) || num(row.gross); const own = num(row.fxRate) > 0 && String(row.currency).toUpperCase() !== "PLN";
   return {
     id: nextId(), kind: "SALES", category: "SALES", costScope: "SALES", number: row.number,
-    counterparty: contact ? { id: contact.id, name: contact.name, ...(contact.nip ? { nip: contact.nip } : {}) } : { name: row.buyer },   // v7.35.0 (CR-2): the NIP kept on the copy
+    counterparty: contact ? { id: contact.id, name: contact.name, ...(contact.nip ? { nip: contact.nip } : {}) } : { name: row.buyer, ...(row.buyerTaxNo ? { taxNo: row.buyerTaxNo } : {}) },   // v7.35.0 (CR-2): the NIP kept on the copy
+    ...(row.ksefNo ? { ksefNo: String(row.ksefNo) } : {}),   // v7.45.0 (O4)
+    ...(Array.isArray(row.positions) && row.positions.length ? { positions: row.positions } : {}),   // v7.52.0: the kilos invoiced
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "", paymentMethod: "Transfer",
     currency: row.currency, fxRate: own ? num(row.fxRate) : resolveFxRate(defaultFxRate(row.currency), row.currency), ...(own ? { fxTableDate: row.date, fxSource: "fakturownia" } : {}),
     netAmount: net, vatRate: vatRateOf(row.net, row.gross), ...(!num(row.net) || !num(row.gross) ? { amountsIncomplete: true } : {}),
@@ -448,11 +461,26 @@ export function buildIssuedSalesInvoice(row: any, soNumber: string, contact: any
 /** v7.34.0 (CN-1, owner 26 Oct): A CORRECTING INVOICE FROM FAKTUROWNIA IS A NOTE — on the invoice it corrects (by its Fakturownia id), with
  *  its own number, issued: a correction that lowers the amount is a CREDIT note, one that raises it a DEBIT note; the party by id. */
 export function noteFromCorrection(row: any, direction: "incoming" | "outgoing", invoices: any[], contact: any | null, nextId: () => any): any {
-  const gross = Number(row.gross || row.net || 0); const fx = Number(row.fxRate) > 0 ? Number(row.fxRate) : 1;
-  const corrected = (invoices || []).find((i: any) => i && row.correctedFktId != null && String((i.fakturownia || {}).fktId ?? (i.fakturownia || {}).ref) === String(row.correctedFktId)) || null;
+  const gross = Number(row.gross || row.net || 0);
+  const corrected = findCorrectedInvoice(row, invoices, row.sellerTaxNo || row.buyerTaxNo);   // v7.45.0 (INV2-1): Fakturownia id → KSeF → the number named, same NIP
+  // v7.45.0 (owner decision 29 Oct): a correction carries the rate of the invoice it corrects; without one found, its own
+  const fx = corrected && Number(corrected.fxRate) > 0 ? Number(corrected.fxRate) : (Number(row.fxRate) > 0 ? Number(row.fxRate) : 1);
   return { id: nextId(), noteType: gross < 0 ? "CREDIT" : "DEBIT", direction, number: String(row.number || ""), date: row.date, invoiceId: corrected ? corrected.id : null,
     relatedRef: corrected ? String(corrected.number || "") : "", partyId: contact ? contact.id : (corrected && corrected.counterparty ? corrected.counterparty.id ?? null : null),
     partyName: contact ? contact.name : String(row.seller || row.buyer || ""), category: "Correcting invoice", amount: Math.abs(gross), currency: String(row.currency || "PLN"), fxRate: fx,
     amountPLN: Math.round(Math.abs(gross) * fx * 100) / 100, status: "Issued", reason: `Correcting invoice ${String(row.number || "")} from Fakturownia`, source: `fakturownia-correction:${row.fktId ?? row.number}`,
-    fakturownia: { fktId: row.fktId ?? null } };
+    fakturownia: { fktId: row.fktId ?? null }, ...(row.ksefNo ? { ksefNo: String(row.ksefNo) } : {}) };
 }
+
+/** v7.49.0 (INV2-8, Invoices analysis: "when the last invoice and the supplier's role disagree, the link still follows the role"): THE LINK
+ *  FOLLOWS THE CHOSEN CATEGORY — the same matching as the proposal, run as if the seller held the role that category means (Freight → a
+ *  carrier's expected freight line, Customs → a customs line, Goods → the supplier's PO, Warehouse / Overhead → no document link). */
+export function linkForTag(row: StagedRow, tag: string, contacts: any[], shipments: any[], pos: any[]): { shipmentNumber?: string; costLineId?: any; poNumber?: string; reason?: string } {
+  const role: Record<string, string[]> = { FREIGHT: ["Carrier"], CUSTOMS: ["Customs", "Customs agent"], GOODS: ["Supplier"], WAREHOUSE: ["Warehouse"] };
+  if (!role[tag]) return {};
+  const c = contactForSeller(row as any, contacts) || { id: "__seller", name: row.seller, nip: String(row.sellerTaxNo || "").replace(/^PL/i, "") };
+  const s: any = suggestForRow(row, [{ ...c, type: role[tag][0], roles: role[tag] }], shipments, pos);
+  return s && s.tag === tag ? { shipmentNumber: s.shipmentNumber, costLineId: s.costLineId, poNumber: s.poNumber, reason: s.reason } : {};
+}
+
+export { kgOnInvoice } from "./invoiceKg";   // v7.53.0: moved to a leaf file (no import loop)

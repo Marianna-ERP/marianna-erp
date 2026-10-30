@@ -15,7 +15,7 @@ import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
 import { readCountries } from "./Contacts";
 import { recordAudit } from "./audit";
 import { locationById, counterpartyLocations, ourMainWarehouse } from "./locations";
-import { CURRENCIES, FlowBadge, Inp, PO_STATUSES, QUALITY_GRADES, SUPPLIERS, Sel, StatusBadge, fmtMoney, fmtNum, netTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
+import { CURRENCIES, FlowBadge, Inp, PO_STATUSES, QUALITY_GRADES, Sel, StatusBadge, fmtMoney, fmtNum, netTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
 import { nbpRateBefore, orderBufferPct, orderRateFrom } from "./fx";   // v7.13.4 (A-AU-2)
 import { parseNum } from "./numbers";
 import { INCOTERM_CODES, isIncoterm2020, incotermLabel, incotermLine, namedPlaceGuide, handoverPointOf, takenAtSeller, ruleOf } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
@@ -23,7 +23,7 @@ import { INCOTERM_CODES, isIncoterm2020, incotermLabel, incotermLine, namedPlace
 // Batch 6b hard gate: a PO leaving Draft — or being printed/emailed to the
 // producer — must carry its purchase terms. "CIF" without "CIF Alexandria" is
 // only half the contract, so the incoterm and its named place gate together.
-export function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], productCatalog = [], setProductCatalog, setPackagingTypes = null, onSave, onCancel, onPrint, onEmail }: any) {
+export function OrderForm({ order, setOrder, productSuggestions = [], suppliers = [], contacts = [], allSOs = [], allShipments = [], lots = [], productCatalog = [], setProductCatalog, setPackagingTypes = null, onSave, onCancel, onPrint, onEmail }: any) {
   const sd = usePoData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const { alert: ofAlert, prompt: ofPOPrompt, dialogNode: ofPONode } = useConfirm(); // P2-6 completion · v7.13.4: + prompt
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
@@ -59,7 +59,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
     // so "there is history here" is never the same question as "something
     // depends on this". Only LIVE movements and real kilos lock it.
     const liveMoves = (l.movements || []).filter((m: any) => m && !m.voided);
-    const received = (parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || liveMoves.length > 0;
+    const received = (parseNum(l.receivedKg) > 0) || (parseNum(l.physicalKg) > 0) || liveMoves.length > 0;
     if (!received) return false;
     // If this lot has any linked shipment, only a NON-cancelled one keeps it "live".
     const shs = shipmentsForLot(l.number);
@@ -118,7 +118,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
 
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
-  const totalInPLN = total * (parseFloat(order.fxRate) || FX_RATES[order.currency] || 1);
+  const totalInPLN = total * (parseNum(order.fxRate) || FX_RATES[order.currency] || 1);
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -328,7 +328,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                 {/* v6.99.23 (owner): ONE payment-terms field — a basis, plus days only when days apply. The legacy text dropdown is retired. */}
                 <Lbl>Payment terms</Lbl>
                 <div style={{ display: "grid", gridTemplateColumns: paymentBasisOf(order) === "INVOICE" ? "90px 1fr" : "1fr", gap: 8 }}>
-                  {paymentBasisOf(order) === "INVOICE" && <Inp disabled={isLocked} type="number" value={order.paymentDays ?? paymentDaysFor(order, order.supplier)} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder={String(paymentDaysFor(order, order.supplier) || 30)} title="Days counted from the invoice issue date (owner ruling) — the purchase invoice's due date derives from this" />}
+                  {paymentBasisOf(order) === "INVOICE" && <Inp disabled={isLocked} type="number" value={order.paymentDays ?? paymentDaysFor(order, order.supplier)} onChange={e => sf("paymentDays", parseNum(e.target.value) || 0)} placeholder={String(paymentDaysFor(order, order.supplier) || 30)} title="Days counted from the invoice issue date (owner ruling) — the purchase invoice's due date derives from this" />}
                   <Sel disabled={isLocked} value={paymentBasisOf(order)} onChange={e => sf("paymentBasis", e.target.value)}>
                     {PAYMENT_BASES.map(b => <option key={b.value} value={b.value}>{b.value === "INVOICE" ? "days from invoice date" : b.label}</option>)}
                   </Sel>
@@ -367,7 +367,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
             </datalist>
             <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             {order.items.map((it, i) => {
-              const lineTotal = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
+              const lineTotal = (parseNum(it.qty) || 0) * (parseNum(it.unitPrice) || 0);
               // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
               return (
                 <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>

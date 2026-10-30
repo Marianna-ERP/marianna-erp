@@ -1,5 +1,6 @@
 import { shipmentTradeDirection } from "./tradeFlow.domain";   // v7.12.1 (A-TD-2)
 import { gradeStockNow } from "./seasonOps.domain";
+import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 // ─────────────────────────────────────────────────────────────────────────────
 // trace.domain.ts — one-click lot traceability (Safeguards batch 7a)
 //
@@ -82,7 +83,7 @@ export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; o
       const hits = (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number));
       if (hits) sales.push({
         soNumber: o.number, client: o.client?.name || "(client)",
-        qtyKg: parseFloat(it.qty) || 0, status: o.status,
+        qtyKg: parseNum(it.qty) || 0, status: o.status,
         destination: o.destinationText || o.client?.address || undefined,
         deliveredAt: o.actualDeliveryDate || (shipments.filter((s: any) => String(s?.status) !== "Cancelled" && ((s.soRefs || []).includes(o.number) || (s.goods || []).some((g: any) => g.soRef === o.number))).flatMap((s: any) => (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.unloadedAt || u.deliveredAt || "").slice(0, 10)))).filter(Boolean).sort().slice(-1)[0]) || undefined,
         incoterm: o.sellIncoterm || undefined,   // v6.99.19 (A-R14-5)

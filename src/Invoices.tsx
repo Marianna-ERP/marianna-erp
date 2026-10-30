@@ -8,7 +8,7 @@ import { paymentDaysFor, dueDateFromIssue } from "./po.domain";
 import { soInvoiceDueDate } from "./so.domain";
 import { requiredLinkMissing, proposeLinks, defaultCostDueDate, matchInvoiceToCostLine, positionsMismatch } from "./invoicePlus.domain";
 import { periodGuard } from "./periodClose.domain";
-import { fxMissing } from "./fx";
+import { fxMissing , rateOf } from "./fx";
 import DateInput from "./DateInput";
 import { useConfirm, notifySaved, SmallButton } from "./ui";
 import React, { useMemo, useState, useEffect } from "react";
@@ -21,7 +21,7 @@ import {
   buildFakturowniaPayload, noteSignedPLN, pushBlockers } from "./invoicing";
 import * as XLSX from "xlsx";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice , fetchInvoicePdf } from "./fakturownia";
-import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister , vatFixFor , salesRowFromMapped, isRegisteredSale, soCandidatesForSale, buildIssuedSalesInvoice , noteFromCorrection } from "./fakturowniaImport.domain";
+import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister, vatFixFor, salesRowFromMapped, isRegisteredSale, soCandidatesForSale, buildIssuedSalesInvoice, noteFromCorrection, linkForTag } from "./fakturowniaImport.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
@@ -33,6 +33,9 @@ import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6): where a 
 import { exportNotesForSale, isFromPoland } from "./invoiceNotes.domain";   // v7.26.4 (A-INV-4)
 import { destinationDisplay } from "./SalesOrders";
 import { locationById } from "./locations";
+import { registerExpense, expensePayload } from "./fakturownia";   // v7.48.0 (INV2-7)
+import { isOverdue } from "./overdue.domain";   // v7.46.0 (INV2-5)
+import { alreadyImported, findCorrectedInvoice } from "./corrections.domain";   // v7.45.0 (INV2-1 / INV2-2)
 import { takeNoteRequest } from "./noteRequest";   // v7.34.0 (CN-2)
 import { pdfFolderSupported, pdfFolder, choosePdfFolder, pdfFileName, savePdfToFolder } from "./invoicePdfFolder";   // v7.26.6 (A-INV-2)
 
@@ -66,6 +69,7 @@ const CATEGORY_META: Record<InvoiceCategory, { label: string; color: string; bg:
 const catKey = (c: any): InvoiceCategory => (({ SINV: "SALES", FORWARDER: "FREIGHT", TRANSPORT: "FREIGHT", BROKER: "CUSTOMS", LOGISTICS: "FREIGHT" } as any)[String(c || "")] || String(c || "OTHER")) as InvoiceCategory;
 const CHARGED_TO: Record<string, string> = { SALES: "the sale", PURCHASE: "the PO's lots", SHIPMENT: "a shipment (its lots)", OVERHEAD: "overheads", OTHER: "nothing — not allocated" };
 const STATUS_META: Record<PaymentStatus, { bg: string; color: string }> = {
+  Received: { bg: "#E0F2FE", color: "#0369A1" },   // v7.51.0 (BUG-3): a received purchase invoice — offered in the filter
   Draft: { bg: "#F3F4F6", color: "#6B7280" }, Issued: { bg: "#DBEAFE", color: "#2563EB" },
   Sent: { bg: "#E0F2FE", color: "#0284C7" }, "Partially paid": { bg: "#FEF3C7", color: "#D97706" },
   Paid: { bg: "#DCFCE7", color: "#16A34A" }, Overdue: { bg: "#FEF3C7", color: "#B45309" },
@@ -117,7 +121,7 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. bank ref, partial 1/2" style={inp} />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
           <button onClick={onClose} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
-          <button onClick={() => onSave({ date, amount, method, note, settlementFxRate: settleRate })} disabled={!(parseFloat(amount) > 0)} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: parseFloat(amount) > 0 ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: parseFloat(amount) > 0 ? "pointer" : "not-allowed" }}>Add payment</button>
+          <button onClick={() => onSave({ date, amount, method, note, settlementFxRate: settleRate })} disabled={!(parseNum(amount) > 0)} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: parseNum(amount) > 0 ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: parseNum(amount) > 0 ? "pointer" : "not-allowed" }}>Add payment</button>
         </div>
       </div>
     </div>
@@ -130,7 +134,11 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
 const TAG_LABELS: Record<string, string> = { GOODS: "Goods purchase", FREIGHT: "Freight", CUSTOMS: "Customs", WAREHOUSE: "Warehouse", OVERHEAD: "Overhead", SKIP: "Skip" };
 const OP_CATEGORIES = ["salary", "office_rent", "accountant", "petrol", "software", "bank_fees", "insurance", "phone_internet", "office_supplies", "other"];
 
-function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], pos = [], onClose, onPost }: any) {
+const lineless = (row: any, invoices: any[]) => { if (!Array.isArray(row?.positions) || !row.positions.length) return null; const no = String(row.number || "").replace(/\s+/g, "").toUpperCase();
+  const twin = (invoices || []).find((i: any) => i && ((row.fktId != null && i.fakturownia && String(i.fakturownia.fktId ?? i.fakturownia.ref) === String(row.fktId)) || String(i.number || "").replace(/\s+/g, "").toUpperCase() === no));
+  return twin && !(Array.isArray(twin.positions) && twin.positions.length) ? twin.id : null; };   // v7.53.1: the invoice already registered without its lines
+
+function ImportFakturowniaModal({ invoices = [], notes = [], contacts = [], shipments = [], pos = [], onClose, onPost }: any) {
   const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [rows, setRows] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
@@ -146,13 +154,14 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     const staged = raws.map((r: any, i: number) => {
       const sug = suggestForRow(r, contacts, shipments, pos);
       const learned = learnFromRegister(r, invoices, contacts);   // v6.99.135 (A-FI-1): what this seller's last invoice was
-      const dup = isDuplicateCostInvoice(r.number, invoices);
+      const seen = alreadyImported(r, invoices, notes);   // v7.45.0 (INV2-2): one key across invoices and notes — Fakturownia id, KSeF number, NIP + number
+      const dup = !!seen || isDuplicateCostInvoice(r.number, (invoices || []).filter((i2: any) => !String(i2?.counterparty?.taxNo || "").trim() || String(i2.counterparty.taxNo).replace(/\D/g, "") === String(r.sellerTaxNo || "").replace(/\D/g, "")));
       // v7.33.1 (INV-PDF): the registered twin has no Fakturownia id (typed by hand, or made from an operational cost) — adopt it
       const twin = dup ? (invoices || []).find((i2: any) => i2 && i2.kind === "COST" && i2.paymentStatus !== "Cancelled" && String(i2.number || "").replace(/\s+/g, "").toLowerCase() === String(r.number || "").replace(/\s+/g, "").toLowerCase()) : null;
       const sameCo = (a: any, b: any) => String(a || "").toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]/g, "").slice(0, 12) === String(b || "").toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]/g, "").slice(0, 12);
       const adopt = twin && !(twin.fakturownia && (twin.fakturownia.fktId || twin.fakturownia.ref)) && r.fktId != null && (sameCo(twin.counterparty?.name, r.seller) || (twin.counterparty?.taxNo && String(twin.counterparty.taxNo).replace(/\D/g, "") === String(r.sellerTaxNo || "").replace(/\D/g, ""))) ? twin.id : null;
       const vatFix = dup ? vatFixFor(r, invoices) : null;   // v7.26.0 (A-INV-1): the old overhead path left it without VAT — this corrects it
-      return { ...r, ...sug, ...(learned?.tag ? { tag: learned.tag } : {}), dup, vatFix, adopt, include: vatFix || adopt != null ? true : (!dup && !!r.net && !!r.gross),   /* v7.26.0: a row missing its net or gross is not ticked for you */
+      return { ...r, ...sug, ...(learned?.tag ? { tag: learned.tag } : {}), dup, seenAs: seen ? seen.as : (dup ? "invoice" : ""), vatFix, adopt: seen && seen.as === "note" ? null : adopt, include: (vatFix || adopt != null) && !(seen && seen.as === "note") ? true : (!dup && !!r.net && !!r.gross),   /* v7.26.0: a row missing its net or gross is not ticked for you */
         category: learned?.category || guessCostCategory(`${r.seller} ${r.description || ""}`),
         warehouseId: learned?.warehouseId ?? (warehouses[0]?.id ?? ""), learned: learned ? { from: learned.from, recurring: learned.recurring } : null };
     });
@@ -247,7 +256,8 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     });
     // v7.33.1 (INV-PDF): the adopted ones — their Fakturownia id, NIP and address onto the registered invoice
     const adopts = rows.filter((r: any) => r.include && r.adopt != null).map((r: any) => ({ invoiceId: r.adopt, fktId: r.fktId, taxNo: r.sellerTaxNo || "", addr: r.sellerAddr || null }));
-    onPost({ regs, flips, opCosts, fixes, adopts, notesIn });
+    const fills = rows.filter((r: any) => r.dup).map((r: any) => ({ invoiceId: lineless(r, invoices), positions: r.positions })).filter((x: any) => x.invoiceId != null);   // v7.53.1
+    onPost({ regs, flips, opCosts, fixes, adopts, notesIn, fills });
   }
 
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12 };
@@ -282,7 +292,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
               {["", "DATE", "SELLER", "NUMBER", "NET", "TAG", "ROUTE / LINK"].map((h, i) => <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
             </div>
             {rows.map((r: any) => {
-              const rowPLN = Math.round((r.net || r.gross) * (r.fxRate || 1) * 100) / 100;
+              const rowPLN = Math.round((r.net || r.gross) * rateOf(r) * 100) / 100;
               return (
                 <div key={r.key} style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "7px 0", borderBottom: "1px solid #F8FAFC", alignItems: "center", opacity: r.include ? 1 : 0.55 }}>
                   <input type="checkbox" checked={r.include} onChange={async (e: any) => {
@@ -295,10 +305,10 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                     upd(r.key, { include: e.target.checked });
                   }} />
                   <div style={{ fontSize: 11, color: "#64748B" }}>{formatDMY(r.date)}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.adopt != null && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#15803D" }}>already in the register — gets its Fakturownia link</span>}{r.vatFix && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#0E7490" }}>corrects the VAT of the invoice already registered ({r.vatFix.confirmZero ? "0 % confirmed" : `${Number(r.vatFix.vatRate).toFixed(2)} %`})</span>}{(!r.net || !r.gross) && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B45309" }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount — check it there before posting</span>}{r.dup && !r.vatFix && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{!contactForSeller(r, contacts) && <button type="button" data-row-new-company="1" title="the seller is not in Parties — create it with the Parties form, prefilled; then fetch the import again" onClick={() => { const prefill = newCompanyFromInvoice({ kind: "COST", number: r.number, currency: r.currency, counterparty: { name: r.seller, taxNo: r.sellerTaxNo, addr: r.sellerAddr } }, () => null); window.dispatchEvent(new CustomEvent("marianna:navigate", { detail: { module: "contacts", tab: "companies", newCompany: { prefill, linkInvoices: [], fromInvoice: r.number, returnTo: "invoices" } } })); }} style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 5, border: "1px solid #1D4ED8", background: "#fff", color: "#1D4ED8", cursor: "pointer" }}>+ New company</button>}   {/* v7.49.0 (INV2-8) */}{r.adopt != null && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#15803D" }}>already in the register — gets its Fakturownia link</span>}{r.vatFix && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#0E7490" }}>corrects the VAT of the invoice already registered ({r.vatFix.confirmZero ? "0 % confirmed" : `${Number(r.vatFix.vatRate).toFixed(2)} %`})</span>}{(!r.net || !r.gross) && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B45309" }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount — check it there before posting</span>}{r.dup && !r.vatFix && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
                   <div style={{ fontSize: 11, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.number || "—"}</div>
-                  <div style={{ fontSize: 12 }} data-import-amounts="1">net {(r.net || 0).toLocaleString("pl-PL")} · VAT {Math.round(((r.gross || 0) - (r.net || 0)) * 100 / 100).toLocaleString("pl-PL")} · <b>gross {(r.gross || r.net || 0).toLocaleString("pl-PL")} {r.currency}</b>{r.currency !== "PLN" ? <span style={{ color: "#64748B" }}> ({Math.round((r.gross || r.net || 0) * (r.fxRate || 1) * 100 / 100).toLocaleString("pl-PL")} PLN)</span> : null}</div>   {/* v7.34.0 (IMP-1) */}
-                  <select style={inp} value={r.tag} onChange={(e: any) => upd(r.key, { tag: e.target.value })}>
+                  <div style={{ fontSize: 12 }} data-import-amounts="1">net {(r.net || 0).toLocaleString("pl-PL")} · VAT {Math.round(((r.gross || 0) - (r.net || 0)) * 100 / 100).toLocaleString("pl-PL")} · <b>gross {(r.gross || r.net || 0).toLocaleString("pl-PL")} {r.currency}</b>{r.currency !== "PLN" ? <span style={{ color: "#64748B" }}> ({Math.round((r.gross || r.net || 0) * rateOf(r) * 100 / 100).toLocaleString("pl-PL")} PLN)</span> : null}</div>   {/* v7.34.0 (IMP-1) */}
+                  <select style={inp} value={r.tag} onChange={(e: any) => { const tag = e.target.value; upd(r.key, { tag, shipmentNumber: undefined, costLineId: undefined, poNumber: undefined, ...linkForTag(r, tag, contacts, shipments, pos) }); }}>   {/* v7.49.0 (INV2-8): the link follows the category chosen */}
                     {IMPORT_TAGS.map((t: string) => <option key={t} value={t}>{TAG_LABELS[t]}</option>)}
                   </select>
                   <div style={{ fontSize: 11 }}>
@@ -330,7 +340,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                     )}
                     {r.tag === "SKIP" && <span style={{ color: "#CBD5E1" }}>not posted</span>}
                     {r.reason && <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{r.reason}</div>}
-                    {r.learned && <div style={{ fontSize: 10, color: "#6D28D9", marginTop: 2, fontWeight: 700 }}>proposed from {r.learned.from}{r.learned.recurring ? " · recurring monthly" : ""}</div>}{/* v6.99.135 (A-FI-1) */}
+                    {r.learned && <div style={{ fontSize: 10, color: "#6D28D9", marginTop: 2, fontWeight: 700 }}>proposed from {r.learned.basis ? `${r.learned.basis} (last: ${r.learned.from})` : r.learned.from}{r.learned.recurring ? " · recurring monthly" : ""}</div>}{/* v6.99.135 (A-FI-1) */}
                   </div>
                 </div>
               );
@@ -360,7 +370,7 @@ function monthBounds(iso: string): { from: string; to: string } {
 }
 /** v7.26.3 (A-INV-3, owner 17 Oct): THE SALES INVOICES ISSUED IN FAKTUROWNIA, each linked to its SO — so the SO reads as invoiced and
  *  is never invoiced twice. The SO is suggested (the one named on the invoice, else the client's open SO closest in amount). */
-function ImportIssuedModal({ invoices = [], contacts = [], orders = [], onClose, onPost }: any) {
+function ImportIssuedModal({ invoices = [], notes = [], contacts = [], orders = [], onClose, onPost }: any) {
   const [period, setPeriod] = useState("this_month"); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [note, setNote] = useState("");
   const [rows, setRows] = useState<any[]>([]); const cfg = readFakturowniaConfig();
   async function fetchIssued() {
@@ -368,8 +378,9 @@ function ImportIssuedModal({ invoices = [], contacts = [], orders = [], onClose,
     setBusy(true); setError(""); const r = await fetchInvoices(cfg, { income: 1, period }); setBusy(false);
     if (!r.ok) { setError(r.error || "Fetch failed."); return; }
     const staged = (r.data || []).map(mapInvoice).map((m: any, i: number) => salesRowFromMapped(m, i)).map((row: any) => {
-      const dup = isRegisteredSale(row.number, invoices); const c = soCandidatesForSale(row, orders, invoices, contacts);
-      return { ...row, dup, candidates: c.list, companyId: c.companyId, so: c.list[0]?.number || "", include: !dup && !!row.net && !!row.gross };
+      const seen = alreadyImported(row, invoices, notes); const dup = !!seen || isRegisteredSale(row.number, invoices); const c = soCandidatesForSale(row, orders, invoices, contacts);   // v7.45.0 (INV2-2)
+      // v7.45.0 (INV2-1): a correction takes its parent's links — it never gets an SO of its own
+      return { ...row, dup, seenAs: seen ? seen.as : (dup ? "invoice" : ""), candidates: row.isCorrection ? [] : c.list, companyId: c.companyId, so: row.isCorrection ? "" : (c.list[0]?.number || ""), include: !dup && !!row.net && !!row.gross };
     });
     setRows(staged); setNote(`Fakturownia returned ${staged.length} sales invoice${staged.length === 1 ? "" : "s"}${staged.some((x: any) => x.dup) ? ` — ${staged.filter((x: any) => x.dup).length} already in the register` : ""}.`);
   }
@@ -379,7 +390,8 @@ function ImportIssuedModal({ invoices = [], contacts = [], orders = [], onClose,
     const coOf = (r: any) => (contacts || []).find((c: any) => String(c.id) === String(r.companyId)) || null;
     const notesIn = rows.filter((r: any) => r.include && r.isCorrection).map((r: any) => noteFromCorrection(r, "outgoing", invoices, coOf(r), nextId));   // v7.35.0 (CR-1): a correction is a note
     const regs = rows.filter((r: any) => r.include && !r.isCorrection).map(r => buildIssuedSalesInvoice(r, r.so, coOf(r)));
-    onPost({ regs, flips: [], opCosts: [], fixes: [], notesIn });
+    const fills = rows.filter((r: any) => r.dup).map((r: any) => ({ invoiceId: lineless(r, invoices), positions: r.positions })).filter((x: any) => x.invoiceId != null);   // v7.53.1
+    onPost({ regs, flips: [], opCosts: [], fixes: [], notesIn, fills });
   }
   const inp: React.CSSProperties = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 10px", fontSize: 12 };
   return (
@@ -402,7 +414,7 @@ function ImportIssuedModal({ invoices = [], contacts = [], orders = [], onClose,
             <tbody>{rows.map((r: any) => <tr key={r.key} style={{ opacity: r.include ? 1 : 0.55 }}>
               <td style={{ padding: "6px" }}><input type="checkbox" checked={r.include} disabled={r.dup} onChange={(e: any) => upd(r.key, { include: e.target.checked })} /></td>
               <td style={{ padding: "6px" }}>{formatDMY(r.date)}</td>
-              <td style={{ padding: "6px", fontWeight: 700 }}>{r.number}{r.dup && <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600 }}>already in the register</div>}{(!r.net || !r.gross) && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700 }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount</div>}</td>
+              <td style={{ padding: "6px", fontWeight: 700 }}>{r.number}{r.dup && <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600 }}>{r.seenAs === "note" ? "already imported as a note" : "already in the register"}</div>}{(!r.net || !r.gross) && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700 }}>Fakturownia sent no {!r.gross ? "gross" : "net"} amount</div>}</td>
               <td style={{ padding: "6px" }}>{r.buyer}{!r.companyId && <div style={{ fontSize: 10, color: "#B45309" }}>not in Counterparties by tax number — link it later in Review</div>}</td>
               <td style={{ padding: "6px", whiteSpace: "nowrap" }}>{money(r.net, r.currency)}</td>
               <td style={{ padding: "6px", whiteSpace: "nowrap", fontWeight: 600 }}>{money(r.gross, r.currency)}</td>
@@ -425,7 +437,7 @@ function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any
   const siteKey = sites.join(","); const siteList = useMemo(() => siteKey ? siteKey.split(",") : [], [siteKey]);
   const proposal = useMemo(() => proposeWarehouseAllocation(inv, lots || [], siteList, from, to), [inv, lots, from, to, siteList]);
   const [over, setOver] = useState<Record<string, string>>({});
-  const rows = proposal.rows.map(r => ({ ...r, pln: over[r.lotNumber] !== undefined && over[r.lotNumber] !== "" ? (parseFloat(String(over[r.lotNumber]).replace(",", ".")) || 0) : r.pln }));
+  const rows = proposal.rows.map(r => ({ ...r, pln: over[r.lotNumber] !== undefined && over[r.lotNumber] !== "" ? (parseNum(String(over[r.lotNumber]).replace(",", ".")) || 0) : r.pln }));
   const sum = Math.round(rows.reduce((a, r) => a + r.pln, 0) * 100) / 100; const diff = Math.round((sum - proposal.totalPLN) * 100) / 100;
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12, width: "100%", boxSizing: "border-box" };
   return (
@@ -473,10 +485,12 @@ function CorrectionsAsInvoices({ invoices = [], setInvoices = null, setNotes = n
   const [pick, setPick] = useState<Record<string, string>>({});
   const rows = (invoices || []).filter((i: any) => i && Number(i.grossAmount) < 0 && i.paymentStatus !== "Cancelled");
   if (!rows.length || typeof setNotes !== "function" || typeof setInvoices !== "function") return null;
-  const candidates = (i: any) => (invoices || []).filter((x: any) => x && x.id !== i.id && x.kind === i.kind && Number(x.grossAmount) > 0 && String(x.counterparty?.id ?? x.counterparty?.name) === String(i.counterparty?.id ?? i.counterparty?.name) && String(x.issueDate || "") <= String(i.issueDate || "9999")).sort((a: any, b: any) => String(b.issueDate).localeCompare(String(a.issueDate)));
+  const candidates = (i: any) => { const found = findCorrectedInvoice({ correctedFktId: i.correctedFktId, correctedKsef: i.correctedKsef, description: i.notes || i.description, number: i.number }, (invoices || []).filter((x: any) => x && x.kind === i.kind), i.counterparty?.taxNo || i.counterparty?.nip);   // v7.45.0 (INV2-1)
+    const rest = (invoices || []).filter((x: any) => x && x.id !== i.id && x.kind === i.kind && Number(x.grossAmount) > 0 && String(x.counterparty?.id ?? x.counterparty?.name) === String(i.counterparty?.id ?? i.counterparty?.name) && String(x.issueDate || "") <= String(i.issueDate || "9999")).sort((a: any, b: any) => String(b.issueDate).localeCompare(String(a.issueDate)));
+    return found ? [found, ...rest.filter((x: any) => x.id !== found.id)] : rest; };
   const convert = (i: any) => { const target = pick[String(i.id)] || String((candidates(i)[0] || {}).id || ""); const corr = (invoices || []).find((x: any) => String(x.id) === target) || null;
-    const note = { id: nextId(), noteType: "CREDIT", direction: i.kind === "SALES" ? "outgoing" : "incoming", number: String(i.number || ""), date: i.issueDate, invoiceId: corr ? corr.id : null, relatedRef: corr ? String(corr.number || "") : "", partyId: i.counterparty?.id ?? null, partyName: String(i.counterparty?.name || ""), category: "Correcting invoice", amount: Math.abs(Number(i.grossAmount) || 0), currency: i.currency || "PLN", fxRate: Number(i.fxRate) || 1, amountPLN: Math.abs(Number(i.grossPLN) || Number(i.grossAmount) || 0), status: "Issued", reason: `Correcting invoice ${String(i.number || "")} (converted from the register)`, source: `converted:${i.id}`, ...(i.pdfSavedAs ? { pdfSavedAs: i.pdfSavedAs } : {}), ...(i.fakturownia ? { fakturownia: i.fakturownia } : {}) };
-    setNotes((prev: any[]) => [...(prev || []), note]); setInvoices((prev: any[]) => (prev || []).filter((x: any) => x && x.id !== i.id).map((x: any) => corr && x.id === corr.id ? { ...x, creditNoteIds: Array.from(new Set([...(x.creditNoteIds || []), note.id])) } : x));
+    const note = { id: nextId(), noteType: "CREDIT", direction: i.kind === "SALES" ? "outgoing" : "incoming", number: String(i.number || ""), date: i.issueDate, invoiceId: corr ? corr.id : null, relatedRef: corr ? String(corr.number || "") : "", partyId: i.counterparty?.id ?? null, partyName: String(i.counterparty?.name || ""), category: "Correcting invoice", amount: Math.abs(Number(i.grossAmount) || 0), currency: i.currency || "PLN", fxRate: (corr && Number(corr.fxRate) > 0 ? Number(corr.fxRate) : rateOf(i)), amountPLN: Math.round(Math.abs(Number(i.grossAmount) || 0) * (corr && Number(corr.fxRate) > 0 ? Number(corr.fxRate) : rateOf(i)) * 100) / 100,   /* v7.50.1: the original invoice's rate (owner, 29 Oct) */ status: "Issued", reason: `Correcting invoice ${String(i.number || "")} (converted from the register)`, source: `converted:${i.id}`, ...(i.pdfSavedAs ? { pdfSavedAs: i.pdfSavedAs } : {}), ...(i.fakturownia ? { fakturownia: i.fakturownia } : {}) };
+    setNotes((prev: any[]) => [...(prev || []), note]); setInvoices((prev: any[]) => (prev || []).filter((x: any) => x && x.id !== i.id));   // v7.45.0 (O5): the note points at its invoice — no link written back
     recordAudit({ module: "Invoices", docType: "Note", docNumber: String(i.number || ""), action: "created", summary: `Correction converted from a negative invoice into a credit note${corr ? ` on ${corr.number}` : ""} — CR-1` }); };
   return <div data-corrections-as-invoices="1" style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 10, padding: "10px 12px", margin: "0 0 12px", fontSize: 12 }}>
     <b style={{ fontSize: 13 }}>{rows.length} correction{rows.length === 1 ? "" : "s"} recorded as {rows.length === 1 ? "an invoice" : "invoices"} with negative amounts — convert to credit notes</b>
@@ -596,10 +610,15 @@ export default function Invoices(props: any) {
     if (saved.length) { setInvoices((prev: any[]) => (prev || []).map((i: any) => { const s = saved.find(x => x.id === i.id); return s ? { ...i, pdfSavedAs: s.name, pdfSavedAt: localTodayISO() } : i; })); recordAudit({ module: "Invoices", docType: "PDF", docNumber: `${saved.length} invoice(s)`, action: "updated", summary: `Invoice PDFs saved in the folder: ${saved.map(s => s.name).slice(0, 10).join(", ")}${saved.length > 10 ? ` +${saved.length - 10}` : ""} (A-INV-2)` }); }
     await invAlert({ tone: failed.length ? "warn" : "info", title: "Invoice PDFs", message: `${saved.length} PDF(s) saved in the folder.${noLink ? `\n\n${noLink} invoice(s) have no Fakturownia link yet — typed by hand or made from an operational cost. The next "Import from Fakturownia" links the Polish ones; a foreign one gets its PDF dropped on its page.` : ""}${todo.length === 40 ? " Press again for the next ones." : ""}${failed.length ? `\n\nNot saved:\n${failed.slice(0, 8).join("\n")}` : ""}` });
   }
-  async function handleImportPost({ regs, flips, opCosts, fixes = [], adopts = [], notesIn = [] }: any) {
+  async function handleImportPost({ regs, flips, opCosts, fixes = [], adopts = [], notesIn = [], fills = [] }: any) {
+  if (fills.length) {   // v7.53.1 (PL-1 prerequisite completed): the lines (and kilos) of invoices registered before v7.52.0
+    const byId = new Map(fills.map((x: any) => [String(x.invoiceId), x.positions]));
+    setInvoices((prev: any[]) => (prev || []).map((i: any) => byId.has(String(i?.id)) && !(Array.isArray(i.positions) && i.positions.length) ? { ...i, positions: byId.get(String(i.id)) } : i));
+    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "updated", summary: `${fills.length} registered invoice(s) given their lines (kilos) from Fakturownia — PL-1 prerequisite` });
+  }
   if (notesIn.length && typeof setNotes === "function") {   // v7.34.0 (CN-1): correcting invoices as notes, each once
     setNotes((prev: any[]) => { const have = new Set((prev || []).map((n: any) => String(n.source || ""))); return [...(prev || []), ...notesIn.filter((n: any) => !have.has(String(n.source)))]; });
-    setInvoices((prev: any[]) => (prev || []).map((i: any) => { const mine = notesIn.filter((n: any) => n.invoiceId != null && String(n.invoiceId) === String(i?.id)); return mine.length ? { ...i, creditNoteIds: Array.from(new Set([...(i.creditNoteIds || []), ...mine.map((n: any) => n.id)])) } : i; }));
+    // v7.45.0 (O5): no creditNoteIds written back — the note points at its invoice
     recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "created", summary: `${notesIn.length} correcting invoice(s) recorded as notes — CN-1` });
   }
   if (adopts.length) {   // v7.33.1 (INV-PDF): a registered invoice is given its Fakturownia id (its PDF can be saved), its NIP and address
@@ -643,14 +662,14 @@ export default function Invoices(props: any) {
   const selected: Invoice | null = useMemo(() => invoices.find((i: Invoice) => i.id === selId) || null, [invoices, selId]);
 
   // KPIs (PLN, net of paid)
-  const recvOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "receivable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * (i.fxRate || 1)), 0);
-  const payOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "payable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * (i.fxRate || 1)), 0);
-  const overdue = invoices.filter((i: Invoice) => { if (i.paymentStatus === "Paid" || i.paymentStatus === "Cancelled") return false; const d = daysUntil(i.dueDate); return d !== null && d < 0; }).length;
+  const recvOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "receivable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * rateOf(i)), 0);
+  const payOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "payable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * rateOf(i)), 0);
+  const overdue = invoices.filter((i: Invoice) => isOverdue(i, localTodayISO(), notes, contacts)).length;   // v7.46.0 (INV2-5): the one overdue rule
 
   const filtered = invoices.filter((i: Invoice) => archiveShow(i) &&   /* v6.99.54 (AR-4) */
     (!search || i.number.toLowerCase().includes(search.toLowerCase()) || (i.counterparty?.name || "").toLowerCase().includes(search.toLowerCase()) || i.links.some(l => l.number.toLowerCase().includes(search.toLowerCase()))) &&
     (fDir === "All" || invoiceDirection(i) === fDir) &&
-    (fStatus === "All" ? i.paymentStatus !== "Cancelled" : i.paymentStatus === fStatus)   // v6.99.106 (A-DEL-4): deleted invoices show only under the Deleted entry
+    (fStatus === "All" ? i.paymentStatus !== "Cancelled" : fStatus === "Overdue" ? isOverdue(i, localTodayISO(), notes, contacts) : i.paymentStatus === fStatus)   // v7.46.0 (INV2-5): "Overdue" is worked out, never stored   // v6.99.106 (A-DEL-4): deleted invoices show only under the Deleted entry
   ).sort((a: Invoice, b: Invoice) => String(b.issueDate || "").localeCompare(String(a.issueDate || "")));
 
   // #7: credit/debit notes also belong in the main view (not only hidden on their
@@ -736,7 +755,7 @@ export default function Invoices(props: any) {
         const soRefs = (inv.links || []).filter((l: any) => l.type === "SO").map((l: any) => String(l.number));
         const notLoaded = soRefs.filter(n => { const so = (orders || []).find((o: any) => String(o.number) === n); if (!so) return false; return !["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(so, shipments || []))); });
         // v6.99.56 (A-PL-2, owner): a size the producer added joins the sale at a price to agree — no invoice until it is agreed
-        const unpriced = soRefs.flatMap(n => { const so = (orders || []).find((o: any) => String(o.number) === n); return so ? (so.items || []).filter((it: any) => !(parseFloat(it.unitPrice) > 0)).map((it: any) => `${n} · ${it.product || ""} ${it.size || ""}`.trim()) : []; });
+        const unpriced = soRefs.flatMap(n => { const so = (orders || []).find((o: any) => String(o.number) === n); return so ? (so.items || []).filter((it: any) => !(parseNum(it.unitPrice) > 0)).map((it: any) => `${n} · ${it.product || ""} ${it.size || ""}`.trim()) : []; });
         if (unpriced.length) { await invAlert({ tone: "warn", title: "Price to agree", message: `Agree the sales price first on: ${unpriced.join(", ")}` }); return; }
         if (notLoaded.length) { await invAlert({ tone: "warn", title: "Goods not loaded", message: `${notLoaded.join(", ")} ${notLoaded.length > 1 ? "have" : "has"} not been loaded yet — a sales invoice covers goods that left the warehouse. Issue a pro-forma for an advance, or load the truck first.` }); return; }
       } }
@@ -866,12 +885,12 @@ export default function Invoices(props: any) {
   }
   async function saveNote() {
     const f = noteForm;
-    if (!(parseFloat(f.amount) > 0)) { await invAlert({ tone: "warn", title: "Amount required", message: "Enter an amount greater than zero." }); return; }
+    if (!(parseNum(f.amount) > 0)) { await invAlert({ tone: "warn", title: "Amount required", message: "Enter an amount greater than zero." }); return; }
     if (!String(f.partyName || "").trim()) { await invAlert({ tone: "warn", title: "Counterparty required", message: "Enter the counterparty." }); return; }
     const fx = resolveFxRate(f.fxRate, f.currency);
-    const rec: FinanceNote = { ...f, id: f.id ?? nextId(), amount: parseFloat(f.amount) || 0, fxRate: fx, amountPLN: Math.round((parseFloat(f.amount) || 0) * fx * 100) / 100 };
+    const rec: FinanceNote = { ...f, id: f.id ?? nextId(), amount: parseNum(f.amount) || 0, fxRate: fx, amountPLN: Math.round((parseNum(f.amount) || 0) * fx * 100) / 100 };
     setNotes((prev: FinanceNote[]) => { const ex = (prev || []).find(p => p.id === rec.id); return ex ? prev.map(p => p.id === rec.id ? rec : p) : [...(prev || []), rec]; });
-    if (rec.invoiceId != null) setInvoices((prev: Invoice[]) => prev.map(p => p.id === rec.invoiceId ? { ...p, creditNoteIds: Array.from(new Set([...(p.creditNoteIds || []), rec.id])) } : p));
+    // v7.45.0 (O5): no creditNoteIds written back — the note points at its invoice
     setView(selected ? "detail" : "list"); setNoteForm(null);
   }
 
@@ -924,8 +943,8 @@ export default function Invoices(props: any) {
           <button disabled={pdfBusy} onClick={() => savePdfs(false)} title="v7.26.6 (A-INV-2): each invoice's PDF from Fakturownia into your Dropbox folder (chosen once) — date_number_company.pdf" style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{pdfBusy ? "Saving PDFs…" : "PDFs → folder"}</button>
           <button onClick={() => savePdfs(true)} title="Choose or change the folder the PDFs go to" style={{ padding: "6px 8px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Folder…</button>
           <button onClick={() => setShowIssued(true)} title="v7.26.3 (A-INV-3): the sales invoices your team issued in Fakturownia — registered here and linked to their sales order" style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Sales invoices from Fakturownia</button>
-          {showIssued && <ImportIssuedModal invoices={invoices} contacts={contacts} orders={orders} onClose={() => setShowIssued(false)} onPost={async (p: any) => { setShowIssued(false); await handleImportPost(p); }} />}
-          {showImport && <ImportFakturowniaModal invoices={invoices} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
+          {showIssued && <ImportIssuedModal invoices={invoices} notes={notes} contacts={contacts} orders={orders} onClose={() => setShowIssued(false)} onPost={async (p: any) => { setShowIssued(false); await handleImportPost(p); }} />}
+          {showImport && <ImportFakturowniaModal invoices={invoices} notes={notes} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
           <button onClick={() => newNote()} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>+ Credit/Debit note</button>
         </div>
       </div>
@@ -964,7 +983,7 @@ export default function Invoices(props: any) {
           </div>
           {filtered.length === 0 && filteredNotes.length === 0 && <div style={{ padding: "36px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No invoices yet. Create one above, or they'll appear here as Sales Orders are invoiced and cost invoices are recorded.</div>}
           {filtered.map((i: Invoice, idx: number) => {
-            const d = daysUntil(i.dueDate); const od = i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled" && d !== null && d < 0;
+            const d = daysUntil(i.dueDate); const od = isOverdue(i, localTodayISO(), notes, contacts);   /* v7.46.0 (INV2-5) */
             return (
               <div key={i.id} onClick={() => { setSelId(i.id); setView("detail"); }} style={{ display: "grid", gridTemplateColumns: "88px 150px 1fr 92px 92px 118px 118px 124px 90px", padding: "11px 16px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><CatBadge cat={i.category} /></div>
@@ -986,7 +1005,7 @@ export default function Invoices(props: any) {
             const linked = nt.invoiceId != null ? invoiceById.get(nt.invoiceId) : null;
             const isCredit = nt.noteType !== "DEBIT";
             return (
-              <div key={`note-${nt.id}`} onClick={() => { if (linked) { setSelId(linked.id); setView("detail"); } else { setNoteForm({ ...nt }); setView("note"); } }} style={{ display: "grid", gridTemplateColumns: "88px 150px 1fr 92px 92px 118px 118px 124px 90px", padding: "11px 16px", borderBottom: idx < filteredNotes.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
+              <div key={`note-${nt.id}`} onClick={() => { setNoteForm({ ...nt }); setView("note"); }}   /* v7.50.1: a note opens its own page, which names the invoice it corrects */ style={{ display: "grid", gridTemplateColumns: "88px 150px 1fr 92px 92px 118px 118px 124px 90px", padding: "11px 16px", borderBottom: idx < filteredNotes.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><span style={{ background: isCredit ? "#FFF7ED" : "#EFF6FF", color: isCredit ? "#9A3412" : "#1D4ED8", padding: "1px 7px", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em" }}>{isCredit ? "CREDIT" : "DEBIT"}</span></div>
                 <div><div style={{ fontSize: 12, fontWeight: 600, color: "#9A3412", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{nt.number || "(note)"}</div><div style={{ fontSize: 10, color: "#AAA" }}>{nt.category || nt.reason || "—"}</div></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{nt.partyName || "—"}</div></div>
@@ -1022,19 +1041,26 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Invoices</button>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>   {/* v7.51.0 (BUG-4): the buttons keep one size */}
           {inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark issued</button>}
           {inv.paymentStatus === "Issued" && <button onClick={() => onMarkStatus("Sent")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0284C7", color: "#0284C7", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Locks the invoice permanently">Mark sent 🔒</button>}
           {inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete invoice</button>}
           {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
           {onAllocate && inv.paymentStatus !== "Cancelled" && <SmallButton kind="amber" onClick={onAllocate} title="v6.99.109 (A-ST-7): spread this warehouse invoice over the lots that were at the warehouse in its period, by kilo-days — the lots' warehouse cost lines feed the settlement">{allocatedLots.length ? `Allocated to ${allocatedLots.length} lot${allocatedLots.length === 1 ? "" : "s"} · change` : "Allocate to lots"}</SmallButton>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
-          {(() => {
+          {/* v7.51.0 (BUG-4): the payments box moved into the page, under the header */}
+          {inv.kind === "SALES" && inv.paymentStatus === "Issued" && <button onClick={onSend} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#0284C7", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>→ Send to Fakturownia</button>}
+          {/* v6.65.0: duplicate "Mark Issued" removed — the status buttons above are the single path. */}
+          <button onClick={onNote} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>↩ Credit/Debit note</button>
+        </div>
+      </div>
+      <div data-invoice-payments="1" style={{ padding: "0 28px" }}>
+        {(() => {
             const evts = normalizeInvoicePayments(inv);
             if (!evts.length) return null;
             return (
               <div style={{ marginTop: 10, border: "1px solid #E5E7EB", borderRadius: 9, padding: "8px 12px", background: "#FAFAFA" }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 6 }}>PAYMENTS ({evts.length}) — {money(evts.reduce((t: number, p: any) => t + (parseFloat(p.amount) || 0), 0), inv.currency)} of {money(inv.grossAmount, inv.currency)}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 6 }}>PAYMENTS ({evts.length}) — {money(evts.reduce((t: number, p: any) => t + (parseNum(p.amount) || 0), 0), inv.currency)} of {money(inv.grossAmount, inv.currency)}</div>
                 {evts.map((p: any) => (
                   <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "3px 0", borderTop: "1px solid #F1F5F9" }}>
                     <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", color: "#64748B", minWidth: 82 }}>{formatDMY(p.date) || "—"}</span>
@@ -1047,10 +1073,6 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
               </div>
             );
           })()}
-          {inv.kind === "SALES" && inv.paymentStatus === "Issued" && <button onClick={onSend} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#0284C7", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>→ Send to Fakturownia</button>}
-          {/* v6.65.0: duplicate "Mark Issued" removed — the status buttons above are the single path. */}
-          <button onClick={onNote} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>↩ Credit/Debit note</button>
-        </div>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "24px 32px" }}>
@@ -1080,7 +1102,7 @@ function InvoiceDetail({ contacts = [], inv, notes, onBack, onEdit, onPayment, o
               <Row k="Net" v={money(inv.netAmount, inv.currency)} /><Row k={`VAT ${fmtRate(inv.vatRate)}%`} v={money(inv.vatAmount, inv.currency)} /><Row k="Gross" v={money(inv.grossAmount, inv.currency)} bold />
               {inv.currency !== "PLN" && <Row k="Gross (PLN)" v={money(inv.grossPLN, "PLN")} />}
               {inv.kind === "COST" && <Row k="Charged to" v={CHARGED_TO[scopeOf(catKey(inv.category))] || "—"} />}
-              {inv.pdfSavedAs && <Row k="PDF in the folder" v={`${inv.pdfSavedAs}${inv.pdfSavedAt ? ` · ${formatDMY(inv.pdfSavedAt)}` : ""}`} />}
+              {inv.pdfSavedAs && <Row k="PDF in the folder" v={<span><PdfLink name={inv.pdfSavedAs} />{inv.pdfSavedAt ? ` · ${formatDMY(inv.pdfSavedAt)}` : ""}</span>} />}   {/* v7.54.0 (INV-PDF-LINK) */}
               {setInvoices && <InvoicePdfTools inv={inv} setInvoices={setInvoices} />}   {/* v7.33.1 (INV-PDF) */}
             </Card>
           </div>
@@ -1129,6 +1151,12 @@ function InvoicePdfTools({ inv, setInvoices }: any) {
   return <div data-invoice-pdf-tools="1" style={{ marginTop: 8, padding: "8px 10px", border: "1px dashed #CBD5E1", borderRadius: 8, fontSize: 12 }}
     onDragOver={(e: any) => e.preventDefault()} onDrop={(e: any) => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) dropPdf(f); }}>
     <div style={{ fontWeight: 700, marginBottom: 4 }}>This invoice's PDF is not in the folder yet</div>
+    {!fid && inv.kind === "COST" && <div style={{ marginBottom: 6 }}><button type="button" data-register-expense="1" onClick={async () => {   // v7.48.0 (INV2-7): one register
+      const us = companyProfile(); const r = await registerExpense(expensePayload(inv, { name: us.name, nip: us.nip }));
+      if (!r.ok || !r.data || (r.data as any).id == null) { setMsg(String(r.error || "Fakturownia did not register it.")); return; }
+      upd((x: any) => ({ fakturownia: { ...(x.fakturownia || {}), fktId: (r.data as any).id, registeredFromErp: true } })); setMsg("Registered in Fakturownia — the next import recognises it; its PDF can now be saved.");
+      recordAudit({ module: "Invoices", docType: "Invoice", docNumber: String(inv.number || ""), action: "updated", summary: `Registered in Fakturownia as a purchase invoice (id ${(r.data as any).id}) — INV2-7` }); }}
+      style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #1D4ED8", background: "#fff", color: "#1D4ED8", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Register in Fakturownia (purchase invoice)</button></div>}
     {!fid && <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}><input value={link} onChange={e => setLink(e.target.value)} placeholder="Fakturownia link of this invoice (…/invoices/123456)" style={{ flex: 1, padding: "5px 8px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12 }} /><button type="button" onClick={useLink} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Use</button></div>}
     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
       <label style={{ cursor: "pointer", color: "#1D4ED8", textDecoration: "underline" }}>Drop or choose the PDF received<input type="file" accept="application/pdf" style={{ display: "none" }} onChange={e => dropPdf((e.target.files || [])[0] || null)} /></label>
@@ -1136,6 +1164,19 @@ function InvoicePdfTools({ inv, setInvoices }: any) {
     </div>
     {msg && <div style={{ marginTop: 4, color: "#475569" }}>{msg}</div>}
   </div>;
+}
+/** v7.54.0 (INV-PDF-LINK, owner 29 Oct): the name of a PDF saved in the folder opens it — read from the folder the system saves into
+ *  (Chrome / Edge ask once for permission to read it); a file moved or renamed is said so. */
+function PdfLink({ name }: { name: string }) {
+  const [msg, setMsg] = useState("");
+  const open = async () => {
+    try {
+      const folder: any = await pdfFolder(); if (!folder) { setMsg("No PDF folder chosen on this computer — choose it with 'Folder…' in Invoices."); return; }
+      if (folder.queryPermission && (await folder.queryPermission({ mode: "read" })) !== "granted" && folder.requestPermission && (await folder.requestPermission({ mode: "read" })) !== "granted") { setMsg("Permission to read the folder was not given."); return; }
+      const fh = await folder.getFileHandle(name); const file = await fh.getFile(); const url = URL.createObjectURL(file); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); setMsg("");
+    } catch (e: any) { setMsg(e && e.name === "NotFoundError" ? "Not found in the folder — moved or renamed? Drop the PDF on this invoice again." : "This browser cannot open files from the folder — use Chrome or Edge."); }
+  };
+  return <><button type="button" data-pdf-link="1" onClick={open} title="open the PDF from the folder" style={{ border: "none", background: "none", padding: 0, color: "#1D4ED8", textDecoration: "underline", cursor: "pointer", font: "inherit", textAlign: "right" }}>{name}</button>{msg && <div style={{ fontSize: 11, color: "#B45309" }}>{msg}</div>}</>;
 }
 function Row({ k, v, bold }: any) { return <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #F7F7F7" }}><span style={{ fontSize: 12, color: "#666" }}>{k}</span><span style={{ fontSize: 13, fontWeight: bold ? 700 : 500 }}>{v}</span></div>; }
 
@@ -1275,6 +1316,7 @@ function NoteForm({ form, setForm, onSave, onCancel, contacts, invoices, orders,
   // v7.27.15 (A-RV-26): the note's party by id — the companies of the wanted kinds; the one the note already names stays
   const partyOptions = (contacts || []).filter((c: any) => c && (((!c.archived && !c.deleted) && rolesOf(c).some((t: string) => wanted.includes(t))) || (form.partyId != null && String(c.id) === String(form.partyId)))).slice().sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "pl"));   // v7.10.2 (A-RV-15 · CP-4): archived companies out; the one the note already names stays
   const invoiceOptions = (invoices || []).filter((i: Invoice) => form.direction === "outgoing" ? i.kind === "SALES" : i.kind === "COST");
+  const corrected: any = (invoices || []).find((i: any) => i && form.invoiceId != null && String(i.id) === String(form.invoiceId)) || null;   // v7.50.1
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
@@ -1288,6 +1330,8 @@ function NoteForm({ form, setForm, onSave, onCancel, contacts, invoices, orders,
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               <div><Lbl>Note type</Lbl><Sel value={form.noteType} onChange={(e: any) => sf("noteType", e.target.value)}><option value="CREDIT">Credit note (reduces amount)</option><option value="DEBIT">Debit note (increases amount)</option></Sel></div>
               <div><Lbl>Direction</Lbl><Sel value={form.direction} onChange={(e: any) => sf("direction", e.target.value)}><option value="outgoing">Outgoing (to a client)</option><option value="incoming">Incoming (from a supplier/carrier)</option></Sel></div>
+              <div data-note-corrects="1" style={{ gridColumn: "span 2", padding: "8px 10px", borderRadius: 8, background: corrected ? "#EFF6FF" : "#FFFBEB", border: `1px solid ${corrected ? "#BFDBFE" : "#FDE68A"}`, fontSize: 12 }}>{corrected ? <>Corrects invoice <b>{corrected.number}</b> · {corrected.counterparty?.name} · {formatDMY(String(corrected.issueDate || "").slice(0, 10))} · {money(corrected.grossAmount, corrected.currency)}{corrected.fxRate ? ` · rate ${corrected.fxRate}` : ""}</> : <>Not linked to the invoice it corrects — choose it below</>}</div>   {/* v7.50.1 (owner 29 Oct: "no reference to which invoice it belongs to") */}
+              {form.pdfSavedAs && <div data-note-pdf="1" style={{ gridColumn: "span 2", fontSize: 12 }}>PDF in the folder: <PdfLink name={form.pdfSavedAs} /></div>}   {/* v7.54.0 (INV-PDF-LINK) */}
               <div style={{ gridColumn: "span 2" }}><Lbl>Against invoice (optional but recommended)</Lbl><Sel value={form.invoiceId ?? ""} onChange={(e: any) => { const id = e.target.value ? parseInt(e.target.value) : null; const inv = invoiceOptions.find((x: Invoice) => x.id === id); setForm((f: any) => ({ ...f, invoiceId: id, partyName: inv?.counterparty?.name || f.partyName, currency: inv?.currency || f.currency, relatedRef: inv?.links?.[0]?.number || f.relatedRef })); }}><option value="">— not linked —</option>{invoiceOptions.map((i: Invoice) => <option key={i.id} value={i.id}>{i.number || "(no number)"} · {i.counterparty?.name} · {money(i.grossAmount, i.currency)}</option>)}</Sel></div>
               <div><Lbl>Counterparty</Lbl><Sel value={form.partyId != null ? String(form.partyId) : ""} onChange={(e: any) => { const c: any = (contacts || []).find((x: any) => String(x.id) === e.target.value); setForm((f0: any) => ({ ...f0, partyId: c ? c.id : null, partyName: c ? c.name : "" })); }}><option value="">{form.partyId == null && form.partyName ? `"${form.partyName}" — typed, not linked: pick its company` : "— select —"}</option>{partyOptions.map((c: any) => <option key={String(c.id)} value={String(c.id)}>{c.name}</option>)}</Sel></div>
               <div><Lbl>Reason</Lbl><Sel value={form.category} onChange={(e: any) => sf("category", e.target.value)}>{["Quality complaint", "Short delivery", "Pricing correction", "Returned goods", "Damaged in transit", "Additional charge", "Other"].map(r => <option key={r}>{r}</option>)}</Sel></div>

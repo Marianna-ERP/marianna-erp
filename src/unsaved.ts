@@ -10,7 +10,7 @@ import { useEffect, useRef } from "react";
 export interface UnsavedEntry { id: string; label: string; isDirty: () => boolean; save?: () => any; }
 const registry = new Map<string, UnsavedEntry>();
 
-export function registerUnsaved(e: UnsavedEntry): () => void {
+function registerUnsaved(e: UnsavedEntry): () => void {
   registry.set(e.id, e);
   return () => { if (registry.get(e.id) === e) registry.delete(e.id); };
 }

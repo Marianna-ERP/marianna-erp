@@ -7,11 +7,11 @@ import { recordAudit } from "./audit";
 
 const KEY = "marianna-erp:v2:reportRegister";
 export type ReportKind = "TRC" | "QR" | "SRP" | "SET";
-export const REPORT_LABEL: Record<string, string> = { TRC: "Traceability / recall report", QR: "Quality report", SRP: "Sales report", SET: "Settlement" };
+const REPORT_LABEL: Record<string, string> = { TRC: "Traceability / recall report", QR: "Quality report", SRP: "Sales report", SET: "Settlement" };
 
 export interface IssuedReport { number: string; kind: ReportKind; subject: string; issuedAt: string; by: string; }
 
-export function readReportRegister(): IssuedReport[] {
+function readReportRegister(): IssuedReport[] {
   try { const raw = window.localStorage.getItem(KEY); const list = raw ? JSON.parse(raw) : []; return Array.isArray(list) ? list : []; } catch { return []; }
 }
 /** Mint the next number of its kind for this year and record the issue. */

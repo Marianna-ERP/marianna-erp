@@ -26,7 +26,7 @@ export function shipmentAllocationSourcePrefix(shipmentNumber: string): string {
 }
 
 /** Kg carried per lot on this shipment (from goods rows). */
-export function goodsKgByLot(shipment: any): Record<string, number> {
+function goodsKgByLot(shipment: any): Record<string, number> {
   const byLot: Record<string, number> = {};
   (shipment.goods || []).forEach((g: any) => {
     if (!g.lotRef) return;

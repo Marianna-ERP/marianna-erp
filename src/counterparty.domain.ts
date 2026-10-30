@@ -8,7 +8,6 @@ import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─────────────────────────────────────────────────────────────────────────────
 const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
-export const ROLES = ["Client", "Supplier", "Carrier", "Forwarder", "Broker", "Warehouse", "ShippingLine", "Other"] as const;
 
 // ── CP-6: country as ISO code + EU flag ───────────────────────────────────────
 const COUNTRY_ISO: Record<string, string> = { poland: "PL", polska: "PL", germany: "DE", deutschland: "DE", italy: "IT", italia: "IT", spain: "ES", france: "FR", hungary: "HU", croatia: "HR", slovenia: "SI", greece: "GR", "czech republic": "CZ", czechia: "CZ", slovakia: "SK", austria: "AT", netherlands: "NL", belgium: "BE", romania: "RO", bulgaria: "BG", lithuania: "LT", latvia: "LV", estonia: "EE", portugal: "PT", ireland: "IE", denmark: "DK", sweden: "SE", finland: "FI", cyprus: "CY", malta: "MT", luxembourg: "LU",
@@ -26,7 +25,7 @@ export function addressWithCountry(address: any, country: any): string[] {
 }
 /** v7.28.11 (Batch L · FZ-03, P-12): A COMPANY'S COUNTRY IS ITS CODE — the name is read from the countries list (Settings ›
  *  Countries), or the built-in names; the old name field only for a company whose code is still missing. */
-export function countryNameOf(iso: any): string {
+function countryNameOf(iso: any): string {
   const k = S(iso).toUpperCase(); if (!k) return "";
   const u = USER_COUNTRIES.find(x => S(x.iso).toUpperCase() === k); if (u && S(u.name)) return S(u.name);
   const n = Object.keys(COUNTRY_ISO).find(name => (COUNTRY_ISO as any)[name] === k && name.length > 2);
@@ -122,13 +121,6 @@ export function pickerParties(contacts: any[], keep?: any): any[] {
 export const archivedMark = (c: any): string => (c && c.deleted ? " (deleted)" : c && c.archived ? " (archived)" : "");   // v7.17.0 (A-DEL-5)
 
 // ── CP-5: Fakturownia id kept; match by id, then NIP ──────────────────────────
-export function matchImported(contacts: any[], imported: { fakturowniaId?: any; nip?: any; name?: any }): any | null {
-  const byId = imported.fakturowniaId != null ? (contacts || []).find(c => String(c.fakturowniaId) === String(imported.fakturowniaId)) : null;
-  if (byId) return byId;
-  const nip = S(imported.nip).replace(/\D/g, "");
-  if (nip) { const byNip = (contacts || []).find(c => S(c.nip).replace(/\D/g, "") === nip); if (byNip) return byNip; }
-  return null;
-}
 
 // ── CP-7: producer agreement block with validity ──────────────────────────────
 export interface ProducerAgreement { season: string; validFrom?: string; validTo?: string; commissionPct?: any; bands?: Array<{ fromPLN: any; toPLN?: any; pct: any }>; qualityReportDays?: any; salesReportDays?: any; noticeDays?: any; reportRatePLNperEUR?: any; template?: string; notes?: string; }
@@ -145,8 +137,6 @@ export function currentAgreement(contact: any, dateISO: string): ProducerAgreeme
 const primaryPersonOf = (c: any) => peopleOf(c).find((p: any) => p.isPrimary) || peopleOf(c)[0] || {};   // v7.28.2
 /** The company as a document shows it (the fields the documents have always carried). */
 /** v7.28.1: the terms of a company, read in one place — payment days, credit limit (PLN), currency. */
-export function creditLimitOf(c: any): number { return num(c?.terms?.creditLimitPLN); }
-export function currencyOf(c: any): string { return S(c?.terms?.defaultCurrency).toUpperCase(); }
 export function companyCopy(c: any): any {
   const p = primaryPersonOf(c);
   // v7.28.1 (Batch L · FZ-27): the copy carries the currency from the terms and none of the retired payment-terms text
@@ -154,7 +144,7 @@ export function companyCopy(c: any): any {
   defaultCurrency: (c.terms || {}).defaultCurrency || "", services: c.services || [], contact: p?.name || "", email: p?.email || "", phone: p?.phone || "" };
 }
 /** The company a document names, read live by its id or a merged duplicate's id — never by name. Not found: the copy as stored. */
-export function liveCompany(saved: any, contacts: any[]): any {
+function liveCompany(saved: any, contacts: any[]): any {
   if (!saved || saved.id == null) return saved;
   const id = String(saved.id);
   const c = (contacts || []).find((x: any) => x && String(x.id) === id) || (contacts || []).find((x: any) => x && (x.mergedFromIds || []).map(String).includes(id));

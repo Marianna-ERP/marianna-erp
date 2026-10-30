@@ -1,7 +1,7 @@
 import { useConfirm } from "./ui";   // v7.22.5 (A-RV-17)
 // v6.99.148: the login and the sync status for the shared store — shown only when the two settings are present
 import React, { useEffect, useState } from "react";
-import { remoteConfigured, readSession, login, logout, pullAll, uploadStores, storesFromExport, startSync, onSync, SyncState, clearConflict, ENV_LABEL, keepMine, dismissNotice } from "./remoteStore";   // v7.14.0: + keepMine, dismissNotice
+import { clashDiff, remoteConfigured, readSession, login, logout, pullAll, uploadStores, storesFromExport, startSync, onSync, SyncState, clearConflict, ENV_LABEL, keepMine, dismissNotice } from "./remoteStore";   // v7.14.0: + keepMine, dismissNotice
 
 export function useSharedStore(userLabel: string): { ready: boolean; sync: SyncState; node: React.ReactNode } {
   const configured = remoteConfigured();
@@ -54,7 +54,7 @@ export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLa
   const [busy, setBusy] = useState(false);
   if (sync.status === "off") return null;
   const color = sync.status === "refused" ? "#B91C1C" : sync.status === "synced" ? "#15803D" : sync.status === "saving" || sync.status === "pulling" ? "#B45309" : sync.status === "offline" ? "#DC2626" : "#6366F1";
-  const label = sync.status === "refused" ? `shared · a change to ${sync.refusedKey || "a list"} was refused — only the owner can make it` : sync.status === "synced" ? "shared · synced" : sync.status === "saving" ? "shared · saving…" : sync.status === "pulling" ? "shared · loading…" : sync.status === "offline" ? "shared · offline — changes kept here, retried on the next save" : sync.status === "empty" ? "shared store is empty" : "shared";
+  const label = sync.status === "refused" ? (sync.refusedKey === "auditLog" ? "shared · the audit trail only grows — this window was behind; it has been brought up to date" : `shared · a change to ${sync.refusedKey || "a list"} was refused — only the owner (Settings › Users) can change it`) :   /* v7.50.2 (BUG-1): the real reason */ sync.status === "synced" ? "shared · synced" : sync.status === "saving" ? "shared · saving…" : sync.status === "pulling" ? "shared · loading…" : sync.status === "offline" ? "shared · offline — changes kept here, retried on the next save" : sync.status === "empty" ? "shared store is empty" : "shared";
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 700, color }} title={sync.lastPull ? `last pulled ${sync.lastPull.slice(11, 19)} UTC` : ""}>{dialogNode}
       <span style={{ width: 8, height: 8, borderRadius: 4, background: color, display: "inline-block" }} />{label}
@@ -78,7 +78,7 @@ export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLa
       {(sync.notices || []).map(n => (   /* v7.14.0 (A-RV-01): what a merge with a colleague's save has to say — amber, a choice where there is one */
         <span key={`${n.kind}:${n.key}:${n.id}`} data-sync-notice={n.kind} style={{ padding: "2px 8px", borderRadius: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}>
           {n.kind === "clash"
-            ? <>{n.label}: {n.by || "a colleague"} changed it at the same time — their version is kept, yours is set aside <button onClick={() => { keepMine(n.key, n.id); }} style={{ marginLeft: 4, fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 5, cursor: "pointer" }}>Use mine</button></>
+            ? <>{n.label}: {String(n.by || "").toLowerCase() === String(readSession()?.email || "").toLowerCase() ? "you changed it in another window or device at the same time — that version is kept, this window's is set aside" : `${n.by || "a colleague"} changed it at the same time — their version is kept, yours is set aside`}{(() => { const df = clashDiff(n.key, n.id); return df.length ? <span title={df.map(x => `${x.field}: kept ${x.kept} · yours ${x.mine}`).join(" · ")} style={{ marginLeft: 4, textDecoration: "underline dotted", cursor: "help" }}>({df.length} field{df.length === 1 ? "" : "s"} differ: {df.slice(0, 3).map(x => x.field).join(", ")}{df.length > 3 ? "…" : ""})</span> : null; })()} <button onClick={() => { keepMine(n.key, n.id); }} style={{ marginLeft: 4, fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 5, cursor: "pointer" }}>Use mine</button></>
             : <>your new {n.label} is now {n.to} — {n.by || "a colleague"} took that number meanwhile</>}
           <button onClick={() => dismissNotice(n.key, n.id, n.kind)} style={{ marginLeft: 4, fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 5, cursor: "pointer" }}>OK</button>
         </span>))}

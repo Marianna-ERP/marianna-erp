@@ -15,7 +15,7 @@
 import { nextId } from "./ids";
 import { resolveFxRate } from "./fx";
 import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
-import { scopeOf } from "./invoicePlus.domain";   // v7.26.1 (A-INV-6): the scope follows the category
+
 import { countryIso, isEU } from "./counterparty.domain";   // v7.27.4 (AUD-16)
 
 export type InvoiceKind = "SALES" | "COST";
@@ -27,7 +27,7 @@ export type CostScope = "SALES" | "PURCHASE" | "SHIPMENT" | "OVERHEAD" | "OTHER"
 // SALES invoice with this category; it was previously outside the union and
 // unmapped in the Invoices UI (CATEGORY_META lookup crashed the list render).
 export type InvoiceCategory = "SALES" | "COMMISSION" | "PURCHASE" | "FREIGHT" | "CUSTOMS" | "WAREHOUSE" | "OVERHEAD" | "OTHER";
-export type PaymentStatus = "Draft" | "Issued" | "Sent" | "Partially paid" | "Paid" | "Overdue" | "Cancelled";
+export type PaymentStatus = "Draft" | "Issued" | "Sent" | "Partially paid" | "Paid" | "Overdue" | "Cancelled" | "Received";   // v7.51.0 (BUG-3): a received purchase invoice
 
 export interface InvoiceLink { type: "SO" | "PO" | "Shipment" | "Lot"; number: string; }
 export interface InvoicePosition { name: string; quantity: number; unit?: string; vatRate: number; netPrice?: number; grossTotal?: number; 
@@ -177,72 +177,10 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
   } as Invoice;
 }
 
-export function migrateLegacyInvoices(opts: {
-  existing: Invoice[];
-  operationalCosts: any[];
-}): Invoice[] {
-  const existing = arr<Invoice>(opts.existing);
-  const haveSource = new Set(existing.map(i => i.source).filter(Boolean));
-  const out: Invoice[] = [...existing];
-
-  const pushIf = (source: string, build: () => Invoice) => {
-    if (haveSource.has(source)) return;
-    out.push(build());
-    haveSource.add(source);
-  };
-
-  // v7.28.12 (Batch L · FZ-01): the folds of the old sales drafts (SO pendingInvoices) and of the old warehouse-invoice store are gone
-  // — neither exists in the data any more; what stays is the operational cost that carries an invoice number
-  // v6.64.1 (D-17): number-level twin guard — a register invoice written DIRECTLY (e.g. by an import) with the same legal number +
-  // counterparty is not folded again; the same number from a DIFFERENT counterparty is legitimate and still folds
-  const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
-  const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
-  const registerTwins = new Set(arr(opts.existing).filter((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim()).map((i: any) => normNo(i.number) + "|" + normParty(i.counterparty?.name)));
-  const hasTwin = (number: any, party: any) => registerTwins.has(normNo(number) + "|" + normParty(party));
-  // COST from operationalCosts that carry an invoice number
-  arr(opts.operationalCosts).forEach((c: any) => {
-    if (!String(c.invoiceNo || "").trim()) return; // payroll/taxes without an invoice stay out
-    if (String(c.source || "").startsWith("invoice:")) return; // v6.68.0 (D-34): this opCost IS a mirror of a register invoice — folding it back would loop
-    if (hasTwin(c.invoiceNo, c.supplierName)) return; // v6.64.1 (D-17)
-    const src = `migrated:opCost:${c.id}`;
-    pushIf(src, () => {
-      const fx = resolveFxRate(c.fxRate, c.currency);
-      const net = r2(n(c.amount));
-      const rate = n(c.vatRate);   // v7.26.0 (A-INV-1): the VAT the import found on the invoice (0 for a cost typed by hand)
-      const grossAmt = r2(net + r2(net * rate / 100));
-      const cat: InvoiceCategory =
-        /forward|transport|freight|carrier/i.test(c.category || "") ? "FREIGHT" :
-        /custom|broker|cło|clo/i.test(c.category || c.description || "") ? "CUSTOMS" :
-        /warehouse|storage|magazyn/i.test(c.category || "") ? "WAREHOUSE" :
-        /purchase|goods|towar/i.test(c.category || "") ? "PURCHASE" : "OTHER";
-      const scope: CostScope = cat === "OTHER" && c.costCenter === "general" ? "OVERHEAD" : scopeOf(cat);   // v7.26.1: the scope follows the category
-      return {
-        id: nextId(), kind: "COST", category: (cat === "OTHER" && scope === "OVERHEAD" ? "OVERHEAD" : cat) as InvoiceCategory, costScope: scope,
-        number: c.invoiceNo, counterparty: { name: c.supplierName || c.seller || "—" },
-        issueDate: c.date || "", saleDate: c.date || "", dueDate: c.dueDate || "",
-        paymentMethod: "Transfer", currency: c.currency || "PLN", fxRate: fx,
-        netAmount: net, vatRate: rate, vatAmount: r2(grossAmt - net), grossAmount: grossAmt,
-        netPLN: r2(net * fx), grossPLN: r2(grossAmt * fx),
-        periodFrom: c.period ? `${c.period}-01` : undefined,
-        positions: [], links: [],
-        paymentStatus: (c.status as PaymentStatus) || "Issued", paidAmount: 0,
-        notes: c.notes || c.description || "", attachment: null,
-        allocation: null, fakturownia: { exported: false },
-        source: src, createdAt: c.date || "",
-      };
-    });
-  });
-
-  // 4. (retired v7.22.1 — FZ-12, Batch F) A firm PO in Arrived / Received / Closed used to become an invented PURCHASE invoice
-  //    ("Awaiting the supplier's invoice number"). Those statuses are retired by normalisePO, so it could only fire on an old
-  //    backup restored into TEST — and a purchase invoice is never invented from an order: it comes from Fakturownia or is entered.
-
-  return out;
-}
 
 /** v7.16.4 (AUD-17): the one summary line of an invoice that has no lines is named from what it is for — its linked
  *  documents — never from the notes, which are free text and would become a line of a legal invoice. */
-export function fallbackLineName(inv: any): string {
+function fallbackLineName(inv: any): string {
   const refs = arr<any>(inv?.links).map((l: any) => String(l?.number || "").trim()).filter(Boolean);
   return refs.length ? `Sales invoice — ${refs.join(", ")}`.slice(0, 120) : "Sales invoice";
 }
@@ -253,7 +191,7 @@ export function fallbackLineName(inv: any): string {
 /** v7.27.4 (AUD-16): the buyer as Fakturownia (and later KSeF) needs it — address, ISO country and the KIND of its tax number: a Polish
 *  NIP (kind left empty = NIP), an EU VAT number of another member state ('nip_ue'), another country's tax number ('other'), or none
 *  ('empty'). Read from the live company (by id) the caller passes. */
-export function buyerFields(inv: any, company: any): Record<string, any> {
+function buyerFields(inv: any, company: any): Record<string, any> {
 const S = (v: any) => String(v ?? "").trim();
 const iso = countryIso(company?.countryIso || company?.addr?.country || company?.country || "");
 const nip = S(inv?.counterparty?.nip || company?.nip), eu = S(company?.vatEuId);
@@ -415,4 +353,32 @@ export function importedTwice(invoices: any[], opCosts: any[] = []): { invoices:
       const own = (opCosts || []).some((c: any) => c && String(c.invoiceNo || "") === String(dup.number || "") && !String(c.source || "").startsWith("invoice:"));
       if (own) mirrors.forEach((c: any) => goneOp.push(c.id)); }); });
   return { invoices: goneInv, opCosts: goneOp };
+}
+
+/** v7.45.0 (INV2-2): the copies a re-import made of a correction — two notes with one Fakturownia id (the later goes), or a note and a negative
+ *  invoice sharing one (the negative invoice goes: the note is the correction). Nothing paid is removed. */
+export function notesImportedTwice(invoices: any[], notes: any[]): { notes: any[]; invoices: any[] } {
+  const fidOf = (d: any) => String((d?.fakturownia || {}).fktId ?? (d?.fakturownia || {}).ref ?? (String(d?.source || "").match(/^fakturownia-correction:(\d+)$/) || [])[1] ?? "");
+  const goneN: any[] = [], goneI: any[] = []; const byId = new Map<string, any[]>();
+  (notes || []).forEach((n: any) => { const k = fidOf(n); if (!k || String(n?.status) === "Cancelled") return; byId.set(k, [...(byId.get(k) || []), n]); });
+  const order = (a: any, b: any) => { const x = Number(a.id), y = Number(b.id); return isFinite(x) && isFinite(y) ? x - y : String(a.id).localeCompare(String(b.id)); };   // the earliest kept
+  byId.forEach(list => { if (list.length < 2) return; [...list].sort(order).slice(1).forEach((n: any) => goneN.push(n.id)); });
+  (invoices || []).forEach((i: any) => { const k = fidOf(i); if (k && byId.has(k) && Number(i.grossAmount) < 0 && !(Number(i.paidAmount) > 0) && !(i.payments || []).length) goneI.push(i.id); });
+  return { notes: goneN, invoices: goneI };
+}
+/** v7.45.0 (INV2-3, O1): purchase invoices imported from Fakturownia before v6.99.120 were saved as Draft and never moved on — they are
+ *  received invoices: Issued. */
+export function importedDrafts(invoices: any[]): any[] {
+  return (invoices || []).filter((i: any) => i && i.kind === "COST" && String(i.paymentStatus) === "Draft" && (String(i.source || "").startsWith("fakturownia") || (i.fakturownia && (i.fakturownia.fktId != null)))).map((i: any) => i.id);
+}
+
+/** v7.51.0 (owner 29 Oct, Decision 2 applied to what is already there): a correction note carries the rate of the invoice it corrects —
+ *  the notes made before that rule (converted in the banner, or imported) that carry another rate, with the rate and PLN they should carry. */
+export function notesOffOriginalRate(invoices: any[], notes: any[]): Array<{ id: any; fxRate: number; amountPLN: number }> {
+  const byId = new Map((invoices || []).filter(Boolean).map((i: any) => [String(i.id), i]));
+  return (notes || []).filter((n: any) => n && /^(converted:|fakturownia-correction:)/.test(String(n.source || "")) && n.invoiceId != null && !/Cancelled/i.test(String(n.status || ""))).map((n: any) => {
+    const inv: any = byId.get(String(n.invoiceId)); const r = Number(inv?.fxRate);
+    if (!inv || !(r > 0) || String(inv.currency || "PLN") !== String(n.currency || "PLN") || Math.abs(r - Number(n.fxRate || 0)) <= 0.00005) return null;
+    return { id: n.id, fxRate: r, amountPLN: Math.round(Math.abs(Number(n.amount) || 0) * r * 100) / 100 };
+  }).filter(Boolean) as any[];
 }

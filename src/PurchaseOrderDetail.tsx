@@ -12,6 +12,7 @@ import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { isEstimatedLine } from "./so.domain";
 import { paymentText, poExpectedArrival } from "./po.domain";   // v6.99.76 (A-PV-2)
 import { FlowBadge, LOCATION_TYPES, LifecycleTimeline, LinkRow, QUALITY_GRADES, QualityBadge, StatusBadge, TruckSettlementCard, VarianceBadge, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, plnTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
+import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 import { DatesChain } from "./DatesChain";   // v7.27.18 (A-D-4)
 import { poDatesChain } from "./datesChain.domain";   // v7.27.18 (A-D-4)
 import { nextId } from "./ids";   // v7.17.5 (A-RV-06): extra packing-list lines take the one counter
@@ -29,11 +30,11 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
   const [prices, setPrices] = React.useState<Record<string, any>>({});
   // v6.99.65 (A-PK-6, owner): every field except coloration — variety only when the catalogue item has varieties
   const missingOf = (a: any): string[] => { const hasVar = ((catalog || []).find((c: any) => String(c.item) === String(a.product))?.varieties || []).length > 0;
-    return [!String(a.product || "").trim() && "item", hasVar && !String(a.variety || "").trim() && "variety", !String(a.size || "").trim() && "size", !String(a.quality || "").trim() && "quality", !(parseFloat(a.qty) > 0) && "quantity", !(parseFloat(a.unitPrice) > 0) && "unit price", !(a.packagingId || String(a.packaging || "").trim()) && "packaging"].filter(Boolean) as string[]; };
+    return [!String(a.product || "").trim() && "item", hasVar && !String(a.variety || "").trim() && "variety", !String(a.size || "").trim() && "size", !String(a.quality || "").trim() && "quality", !(parseNum(a.qty) > 0) && "quantity", !(parseNum(a.unitPrice) > 0) && "unit price", !(a.packagingId || String(a.packaging || "").trim()) && "packaging"].filter(Boolean) as string[]; };
   const incomplete = added.map((a: any, i: number) => ({ i, miss: missingOf(a) })).filter(x => x.miss.length);
-  const payload = () => [...rows.map(r => ({ lineId: r.lineId, qty: String(r.qty).trim() === "" ? undefined : parseFloat(String(r.qty).replace(",", ".")), boxes: String(r.boxes ?? "").trim() === "" ? undefined : parseFloat(String(r.boxes).replace(",", ".")) })), ...added.filter(a => parseFloat(a.qty) > 0).map(a => ({ newLine: { ...a, qty: parseFloat(String(a.qty).replace(",", ".")), unitPrice: parseFloat(String(a.unitPrice).replace(",", ".")) || 0 } }))];
+  const payload = () => [...rows.map(r => ({ lineId: r.lineId, qty: String(r.qty).trim() === "" ? undefined : parseNum(String(r.qty).replace(",", ".")), boxes: String(r.boxes ?? "").trim() === "" ? undefined : parseNum(String(r.boxes).replace(",", ".")) })), ...added.filter(a => parseNum(a.qty) > 0).map(a => ({ newLine: { ...a, qty: parseNum(String(a.qty).replace(",", ".")), unitPrice: parseNum(String(a.unitPrice).replace(",", ".")) || 0 } }))];
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 8px", fontSize: 12, width: "100%", boxSizing: "border-box" };
-  const total = rows.reduce((s, r) => s + (parseFloat(String(r.qty).replace(",", ".")) || (String(r.qty).trim() === "" ? (parseFloat(r.it.qty) || 0) : 0)), 0) + added.reduce((s, a) => s + (parseFloat(String(a.qty).replace(",", ".")) || 0), 0);
+  const total = rows.reduce((s, r) => s + (parseNum(String(r.qty).replace(",", ".")) || (String(r.qty).trim() === "" ? (parseNum(r.it.qty) || 0) : 0)), 0) + added.reduce((s, a) => s + (parseNum(String(a.qty).replace(",", ".")) || 0), 0);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "50px 16px", overflow: "auto" }}>
       <div style={{ background: "#fff", borderRadius: 12, width: "min(900px, 100%)", border: "2px solid #7C3AED", overflow: "hidden" }}>
@@ -45,10 +46,10 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
           <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.8fr 1fr 1fr 0.9fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>LINE</div><div>SIZE</div><div>CLASS</div><div>ESTIMATED / ORDERED</div><div>FINAL KG</div><div>BOXES LOADED</div></div>
           {rows.map((r, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.8fr 1fr 1fr 0.9fr", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F1F5F9" }}>
             <div style={{ fontSize: 12, fontWeight: 700 }}>{r.it.product}{r.it.variety ? ` — ${r.it.variety}` : ""}</div><div style={{ fontSize: 12 }}>{r.it.size || "—"}</div><div style={{ fontSize: 12 }}>{r.it.quality || "—"}</div>
-            <div style={{ fontSize: 12 }}>{Math.round(parseFloat(r.it.qty) || 0).toLocaleString("pl-PL")} kg {isEstimatedLine(r.it) ? <span style={{ color: "#B45309" }}>≈ estimated</span> : <span style={{ color: "#94A3B8" }}>final</span>}</div>
+            <div style={{ fontSize: 12 }}>{Math.round(parseNum(r.it.qty) || 0).toLocaleString("pl-PL")} kg {isEstimatedLine(r.it) ? <span style={{ color: "#B45309" }}>≈ estimated</span> : <span style={{ color: "#94A3B8" }}>final</span>}</div>
             <input type="number" value={r.qty} onChange={e => setRows(rows.map((x, k) => k === i ? { ...x, qty: e.target.value } : x))} placeholder={isEstimatedLine(r.it) ? "final kg" : String(r.it.qty)} style={inp} />
             {/* v6.99.65 (A-PK-4): the boxes follow the final kilos (from the packaging); type the producer's count if it differs */}
-            {(() => { const fk = String(r.qty).trim() === "" ? parseFloat(r.it.qty) : parseFloat(String(r.qty).replace(",", ".")); const d = counts ? counts({ ...r.it, qty: fk, boxesManual: undefined, palletsManual: undefined }).boxes : null;
+            {(() => { const fk = String(r.qty).trim() === "" ? parseNum(r.it.qty) : parseNum(String(r.qty).replace(",", ".")); const d = counts ? counts({ ...r.it, qty: fk, boxesManual: undefined, palletsManual: undefined }).boxes : null;
               return <input type="number" value={r.boxes} onChange={e => setRows(rows.map((x, k) => k === i ? { ...x, boxes: e.target.value } : x))} placeholder={d != null ? String(d) : "boxes"} title={d != null ? `${d} from the final kilos and the packaging — type the producer's count if it differs` : "no packaging on this line"} style={inp} />; })()}
           </div>)}
           <div style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", margin: "12px 0 4px" }}>ADDITIONAL ITEMS — loaded, not on the order</div>
@@ -80,7 +81,7 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
               {pv.soChanges.map((s: string, i: number) => <div key={i} style={{ fontSize: 12, marginTop: 3 }}>• {s}</div>)}
               {pv.questions.map((q: any) => <div key={q.key} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}><span style={{ color: "#92400E", fontWeight: 700 }}>? {q.label}</span>
                 <select value={choice[q.key] || ""} onChange={e => setChoice({ ...choice, [q.key]: e.target.value })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 6px", fontSize: 12 }}><option value="">— choose —</option>{q.options.map((o: string) => <option key={o}>{o}</option>)}</select></div>)}
-              {added.filter(a => parseFloat(a.qty) > 0).map((a: any) => <div key={a.id} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
+              {added.filter(a => parseNum(a.qty) > 0).map((a: any) => <div key={a.id} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
                 <span>Sales price for {[a.product, a.variety, a.size].filter(Boolean).join(" ") || "the additional item"} <span style={{ color: "#94A3B8" }}>(blank = to agree — the sales invoice waits for it)</span></span>
                 <input type="number" value={prices[a.id] ?? ""} onChange={e => setPrices({ ...prices, [a.id]: e.target.value })} placeholder="price / kg" style={{ width: 110, border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 6px", fontSize: 12 }} /></div>)}
             </div>); })()}
@@ -220,7 +221,7 @@ export function OrderDetail({ onChangeRule = null, termsFindings = [], users = [
                   </thead>
                   <tbody>
                     {order.items.map((it, i) => {
-                      const lt = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
+                      const lt = (parseNum(it.qty) || 0) * (parseNum(it.unitPrice) || 0);
                       return (
                         <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
                           <td style={{ padding: "10px", fontWeight: 600 }}>
@@ -231,16 +232,16 @@ export function OrderDetail({ onChangeRule = null, termsFindings = [], users = [
                           <td style={{ padding: "10px", color: "#555" }}>{it.size || "—"}</td>
                           <td style={{ padding: "10px" }}><QualityBadge quality={it.quality} /></td>
                           <td style={{ padding: "10px", color: "#666", fontSize: 11 }}>{it.packaging || "—"}</td>
-                          <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{(() => { const b = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes; return b ? fmtNum(b) : "—"; })()}</td>
+                          <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{(() => { const b = String(it.pricingUnit || "kg") !== "kg" ? parseNum(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes; return b ? fmtNum(b) : "—"; })()}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{fmtNum(it.qty)}</td>
-                          <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {order.currency}</>}</td>
+                          <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseNum(it.unitPrice || 0).toFixed(2)} {order.currency}</>}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{lt.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
                         </tr>
                       );
                     })}
                     <tr style={{ background: "#F9FAFB" }}>
                       <td colSpan={5} style={{ padding: "10px", fontWeight: 700, color: "#111" }}>Total</td>
-                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s: number, it: any) => s + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes) || 0), 0)) || "—"}</td>
+                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s: number, it: any) => s + ((String(it.pricingUnit || "kg") !== "kg" ? parseNum(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes) || 0), 0)) || "—"}</td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(totalKg)} kg</td>
                       <td></td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtMoney(total, order.currency)}</td>
@@ -270,7 +271,7 @@ export function OrderDetail({ onChangeRule = null, termsFindings = [], users = [
                   <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <span style={{ fontSize: 10, color: "#92400E", fontWeight: 700 }}>Expected · direct receipt:</span>
                     {expectedLots.map((l: any) => (
-                      <button key={String(l.id)} onClick={() => onReceiveLot(l)} title="DDP / supplier-delivered arrival with no shipment of ours — posts the receipt movement" style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📥 Receive {l.number} ({Math.round(parseFloat(l.expectedKg) || 0).toLocaleString("pl-PL")} kg)</button>
+                      <button key={String(l.id)} onClick={() => onReceiveLot(l)} title="DDP / supplier-delivered arrival with no shipment of ours — posts the receipt movement" style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📥 Receive {l.number} ({Math.round(parseNum(l.expectedKg) || 0).toLocaleString("pl-PL")} kg)</button>
                     ))}
                   </div>
                 )}

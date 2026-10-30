@@ -13,6 +13,7 @@ import { localTodayISO, formatDMY } from "./dates";
 import { gradeSplit, inspectionTotals } from "./seasonOps.domain";
 import { INSPECTION_CONTEXTS, countryOfLot, INSPECTION_OUTCOMES, LocationPill, LotDirectionBadge, LotWorkbench, MOVEMENT_TYPES, QualityBadge, SectionTitle, StatusBadge, VarianceBadge, costPerKg, customsStagesForLot, fmtMoney, journeyForLot, locById, lotReservations, num, printHtmlNodeInv, soRefsFor, standardStageLabel } from "./Inventory";
 import { SeasonActions } from "./InventoryWindows";
+import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
 import { deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
@@ -270,7 +271,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                       const withCustoms = carrying.filter((s: any) => (s.customs || {}).applies);
                       const customsCostPLN = (lot.costs || [])
                         .filter((c: any) => String(c.type || "").toLowerCase().includes("customs"))
-                        .reduce((a: number, c: any) => a + (parseFloat(c.pln) || 0), 0);
+                        .reduce((a: number, c: any) => a + (parseNum(c.pln) || 0), 0);
                       if (!withCustoms.length && !customsCostPLN) {
                         return <div style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6 }}>
                           No customs clearance recorded on the shipments carrying this lot. Clearance is captured on the shipment (Shipments → <em>Customs clearance</em>) and summarised here.

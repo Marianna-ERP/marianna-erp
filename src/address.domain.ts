@@ -10,7 +10,7 @@ import { S } from "./format";
 export interface Address { street?: string; postcode?: string; city?: string; country?: string; note?: string; }
 
 /** Is there anything in it? */
-export function hasAddress(a: any): boolean {
+function hasAddress(a: any): boolean {
   // v6.99.47 (A-PO-16): a country alone is not an address — the one-line text wins over an `addr` holding only the country
   return !!(a && (S(a.street) || S(a.postcode) || S(a.city) || S(a.note)));
 }

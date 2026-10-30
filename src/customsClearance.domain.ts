@@ -118,7 +118,7 @@ export const CUSTOMS_FILE_LABEL: Record<CustomsFileKind, string> = { CC529C: "Re
 const normPlate = (v: any) => S(v).toUpperCase().replace(/[\s-]/g, "");
 const normRef = (v: any) => S(v).replace(/\s/g, "").toUpperCase();
 /** The day the truck loaded — the same field order the cut-off check uses. */
-export function unitLoadingDate(sh: any, leg: any, u: any): string { return S(u?.loadedAt || u?.plannedLoadingDate || leg?.plannedPickupDate || sh?.loadedOn || sh?.plannedLoadingDate).slice(0, 10); }
+function unitLoadingDate(sh: any, leg: any, u: any): string { return S(u?.loadedAt || u?.plannedLoadingDate || leg?.plannedPickupDate || sh?.loadedOn || sh?.plannedLoadingDate).slice(0, 10); }
 const daysApart = (a: string, b: string): number | null => { if (!a || !b) return null; const d = (new Date(a).getTime() - new Date(b).getTime()) / 86400000; return isFinite(d) ? Math.abs(d) : null; };
 
 export interface ClearanceHome { shipment: any; unit: any; leg: any; line: UnitClearance | null; confidence: "exact" | "probable"; reasons: string[]; score: number; }
@@ -175,7 +175,7 @@ export function findClearanceHome(p: ParsedCustomsFile, shipments: any[], invoic
 }
 
 /** The register rows a file produces — one per kind, keyed by MRN so a file dropped twice adds nothing. */
-export function registerRowsFor(p: ParsedCustomsFile, unit: any, fileName: string): Array<{ type: string; ref: string; status: string; date: string; notes: string }> {
+function registerRowsFor(p: ParsedCustomsFile, unit: any, fileName: string): Array<{ type: string; ref: string; status: string; date: string; notes: string }> {
   const plate = S(unit?.truckPlate || unit?.containerNo || "");
   if (p.kind === "CC599C") return [{ type: "Exit confirmation (CC599C)", ref: p.mrn || "", status: "Have it", date: p.exitedOn || "", notes: `${plate} · left the EU at ${p.exitOffice || "?"} · from ${fileName}` }];
   if (p.kind === "SAD") return [{ type: "Customs declaration copy (SAD)", ref: p.agentRef ? `SAD ${p.agentRef}` : (p.invoiceRef || ""), status: "Have it", date: p.declaredOn || "", notes: `${plate} · from ${fileName}` }];
