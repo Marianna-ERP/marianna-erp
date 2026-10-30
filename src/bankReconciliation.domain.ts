@@ -111,7 +111,9 @@ function parseSantander(text: string): ParsedStatement {
     if (cols.length < 7) { skipped++; return; }
     const [d1, , title, cpty, cptyAcc, amount, balance, seq] = cols;
     lines.push({
-      id: `san:${account}:${String(seq || "").trim() || idx}:${isoFrom(d1)}:${String(amount).trim()}:${String(balance).trim()}`,
+      // v7.62.5 (owner 30 Oct: "does a new upload rewrite everything?"): the movement's identity no longer contains its ROW NUMBER in the file
+      // — the same movement downloaded again in another statement (other rows above it) kept a new id and was kept twice (429 on 30 Oct)
+      id: `san:${account}:${isoFrom(d1)}:${String(amount).trim()}:${String(balance).trim() || `#${String(seq || "").trim() || idx}`}`,
       date: isoFrom(d1),
       amount: num(amount),
       currency,
@@ -297,4 +299,18 @@ export function upsertBankAccountFromStatement(accounts: BankAccount[], parsed: 
     currency: parsed.currency || "mixed", lastImportDate: deps.todayISO(),
     lastKnownBalance: latestBalance, label: `${bankName} …${parsed.account.slice(-4)}`,
   }];
+}
+
+/** v7.62.5: the identity of a kept bank movement without the file's row number (older Santander ids carried it) — so the same movement
+ *  from two statements is recognised as one. */
+export function stableBankId(id: any): string {
+  const p = String(id || "").split(":"); return p[0] === "san" && p.length === 6 ? [p[0], p[1], p[3], p[4], p[5]].join(":") : String(id || "");
+}
+/** v7.62.5: the kept movements with each one kept once (the copy already handled wins), the handled marks carried to the kept ids. */
+export function dedupeBankLines(store: any): { lines: any[]; done: Record<string, any>; removed: number } {
+  const cur = store && typeof store === "object" ? store : { lines: [], done: {} }; const done0 = cur.done || {}; const byKey = new Map<string, any>();
+  (cur.lines || []).forEach((l: any) => { if (!l) return; const k = stableBankId(l.id); const prev = byKey.get(k); if (!prev || (done0[l.id] != null && done0[prev.id] == null)) byKey.set(k, l); });
+  const lines = Array.from(byKey.values()).map((l: any) => ({ ...l, id: stableBankId(l.id) })); const done: Record<string, any> = {};
+  Object.entries(done0).forEach(([id, v]) => { done[stableBankId(id)] = v; });
+  return { lines, done, removed: (cur.lines || []).length - lines.length };
 }

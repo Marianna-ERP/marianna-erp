@@ -5296,6 +5296,17 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.62.5 — a bank movement is kept once, whichever statement it came from ══
+(function v76205(){
+  console.log("\n══ v7.62.5 ══");
+  const BR = B("bankReconciliation.domain.js");
+  t("v7.62.5 (owner 30 Oct, Santander statements per currency): uploads add to what is kept, never replace; the same movement from two statements is one line (its row number in the file is no longer part of it); copies already kept are removed, the handled copy and its match kept", () => {
+    eq(BR.stableBankId("san:0710:1:2026-10-27:-119,22:877,52"), "san:0710:2026-10-27:-119,22:877,52");
+    const r = BR.dedupeBankLines({ lines: [{ id: "san:A:1:2026-10-27:-5:10" }, { id: "san:A:7:2026-10-27:-5:10" }, { id: "san:A:2:2026-10-26:-3:15" }], done: { "san:A:7:2026-10-27:-5:10": "inv9" } });
+    eq(r.removed, 1); eq(r.lines.length, 2); eq(r.done["san:A:2026-10-27:-5:10"], "inv9");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);

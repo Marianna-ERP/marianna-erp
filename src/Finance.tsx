@@ -7,7 +7,7 @@ import { recordAudit } from "./audit";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { printHtmlNode } from "./documentService";
 import DateInput from "./DateInput";
-import { parseBankCSV, matchBankLines, bankPaymentEvent, upsertBankAccountFromStatement , splitBankLine, bankShareEvent } from "./bankReconciliation.domain";
+import { parseBankCSV, matchBankLines, bankPaymentEvent, upsertBankAccountFromStatement, splitBankLine, bankShareEvent, stableBankId, dedupeBankLines } from "./bankReconciliation.domain";
 import { advanceFromBankLine, advanceRemaining, applyAdvanceToInvoice, advanceSources, linkAdvanceToProforma, finalInvoicesFor } from "./advances.domain";
 import { realizedFxPLN, fxDifferencesByCounterparty } from "./payments.domain";   // v7.13.5 (A-AU-2)
 import { statementFor, statementCurrencies } from "./statement.domain";
@@ -423,6 +423,7 @@ function AdvancesPanel({ advancePayments = [], setAdvancePayments = null, invoic
 // A confirmed line becomes a standard payment event with source bank:{lineId} —
 // re-importing the same statement can never double-post.
 function BankImportPanel({ financeNotes = [], invoices = [], setInvoices = null, nextId, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, bankLines = null, setBankLines = null }: any) {
+  const { confirm: bkConfirm, dialogNode: bkNode } = useConfirm();   // v7.62.5: the app's own window for the clean-up
   // v7.34.0 (BANK-1, owner 26 Oct: "the import is deleted when you change screen"): the lines read are KEPT in a shared store with their
   // state — matched (to what), ignored (a fee, a transfer between own accounts) — until matched; the same file read again adds nothing
   const store: any = bankLines && typeof bankLines === "object" && !Array.isArray(bankLines) ? bankLines : { lines: [], done: {} };
@@ -430,7 +431,7 @@ function BankImportPanel({ financeNotes = [], invoices = [], setInvoices = null,
   const [localParsed, setLocalParsed] = React.useState<any>(null); const [localDone, setLocalDone] = React.useState<Record<string, string>>({});
   const parsed: any = React.useMemo(() => keep ? (store.lines && store.lines.length ? { lines: store.lines, account: store.account || "" } : null) : localParsed, [keep, store.lines, store.account, localParsed]);
   const done: Record<string, string> = keep ? (store.done || {}) : localDone;
-  const setParsed = (p: any) => { if (!keep) { setLocalParsed(p); return; } setBankLines((prev: any) => { const cur = prev && typeof prev === "object" && !Array.isArray(prev) ? prev : { lines: [], done: {} }; const have = new Set((cur.lines || []).map((l: any) => String(l.id))); return { ...cur, account: p?.account || cur.account || "", lines: [...(cur.lines || []), ...((p?.lines || []).filter((l: any) => !have.has(String(l.id))))] }; }); };
+  const setParsed = (p: any) => { if (!keep) { setLocalParsed(p); return; } setBankLines((prev: any) => { const cur = prev && typeof prev === "object" && !Array.isArray(prev) ? prev : { lines: [], done: {} }; const have = new Set((cur.lines || []).map((l: any) => stableBankId(l.id))); return { ...cur, account: p?.account || cur.account || "", lines: [...(cur.lines || []), ...((p?.lines || []).filter((l: any) => !have.has(stableBankId(l.id))))] }; }); };   // v7.62.5: one movement, one line — whichever statement it came from
   const setDone = (u: any) => { if (!keep) { setLocalDone(u); return; } setBankLines((prev: any) => { const cur = prev && typeof prev === "object" && !Array.isArray(prev) ? prev : { lines: [], done: {} }; const d = typeof u === "function" ? u(cur.done || {}) : u; return { ...cur, done: d }; }); };
   const [pick, setPick] = React.useState<Record<string, any>>({});
   const [split, setSplit] = React.useState<Record<string, Record<string, string>>>({});   // v7.26.5 (A-INV-5): line → invoice → amount typed
@@ -474,10 +475,12 @@ function BankImportPanel({ financeNotes = [], invoices = [], setInvoices = null,
 
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+      {bkNode}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, fontWeight: 800 }}>🏦 Bank import — receivables &amp; payables</div>
         <div style={{ fontSize: 11, color: "#888" }}>PKO & Santander CSV, one file per account (any currency) · credits settle sales invoices, debits settle cost invoices · every match takes your click</div>
         <div style={{ marginLeft: "auto" }}>
+          {keep && (() => { const dd = dedupeBankLines(store); return dd.removed > 0 ? <button type="button" data-bank-dedupe="1" onClick={async () => { if (!(await bkConfirm({ title: "Please confirm", message: `${dd.removed} bank movement(s) were kept twice — the same movement from two statements (older uploads numbered it by its row in the file). Keep each once? Handled ones keep their match.`, confirmLabel: "Keep each once" }))) return; setBankLines(() => ({ ...store, lines: dd.lines, done: dd.done })); recordAudit({ module: "Finance", docType: "Bank statement", docNumber: "DEDUPE", action: "deleted", summary: `${dd.removed} bank movement(s) kept twice removed — v7.62.5` }); }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #FDE68A", background: "#FFFBEB", color: "#92400E", fontSize: 12, fontWeight: 600, cursor: "pointer", marginRight: 6 }}>⧉ {dd.removed} movement(s) kept twice — keep each once</button> : null; })()}   {/* v7.62.5 */}
           <button onClick={() => fileRef.current?.click()} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Upload statement CSV</button>
           <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={(e: any) => onFile(e.target.files?.[0])} />
         </div>
