@@ -112,7 +112,10 @@ export function contactForSeller(row: { seller: string; sellerTaxNo?: string }, 
     // vatNumber/taxNo names were phantoms).
     const cNip = norm(c.nip).replace(/[^0-9a-z]/g, "");
     const cVatEu = norm(c.vatEuId).replace(/[^0-9a-z]/g, "");
-    if (tax && ((cNip && tax === cNip) || (cVatEu && tax === cVatEu))) return true;
+    // v7.62.2 (owner 30 Oct, FS I/118/2026 with no seller): the NIP compared WITHOUT its country prefix — "PL6010038651" on the company and
+    // "6010038651" on the invoice are one NIP (the strict match at posting missed it, so the invoice kept its seller as text only)
+    const core = (s: string) => s.replace(/^[a-z]{2}(?=\d)/, "");
+    if (tax && ((cNip && core(tax) === core(cNip)) || (cVatEu && core(tax) === core(cVatEu)))) return true;
     if (!byName) return false;
     const cName = norm(c.name);
     return !!cName && (cName === name || (name.length > 4 && (cName.includes(name) || name.includes(cName))));

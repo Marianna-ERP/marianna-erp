@@ -1190,7 +1190,12 @@ function Row({ k, v, bold }: any) { return <div style={{ display: "flex", justif
 // ════════════════ FORM ════════════════
 function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, shipments, lots }: any) {
   const legalLocked = isLegalDocument(form);   // v7.55.0 (ACC-1): Fakturownia owns the legal content
+  const [linkMsg, setLinkMsg] = useState("");   // v7.62.2
   const sf = (k: string, v: any) => { if (legalLocked && LEGAL_FIELDS.includes(k)) return; setForm((f: any) => recomputeInvoiceMoney({ ...f, [k]: v })); };
+  // v7.62.2: linking the invoice to its company in Parties is the ERP's own field — allowed on a legal document when the company's NIP (or,
+  // without a NIP on the invoice, its name) is the invoice's; the name and NIP printed on the invoice are kept as they are
+  const nipCore = (s: any) => String(s || "").toLowerCase().replace(/[^0-9a-z]/g, "").replace(/^[a-z]{2}(?=\d)/, "");
+  const sameCompany = (c: any) => { const inv = form.counterparty || {}; const a = nipCore(inv.nip || inv.taxNo), b = nipCore(c?.nip || c?.vatEuId); return a ? a === b : String(inv.name || "").trim().toLowerCase() === String(c?.name || "").trim().toLowerCase(); };
   // v7.13.2 (A-AU-2, owner 9 Oct): the invoice's rate is the NBP average of the last working day BEFORE its issue date — filled, not typed
   const [fxNote, setFxNote] = React.useState("");
   React.useEffect(() => {
@@ -1231,7 +1236,9 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
     return out;
   }, [orders, pos, shipments, form, linkQuery]);
 
-  function setParty(id: string) { const c = partyOptions.find((x: any) => String(x.id) === String(id)); sf("counterparty", c ? { id: c.id, name: c.name, nip: c.nip || c.vatEuId } : null);
+  function setParty(id: string) { const c = partyOptions.find((x: any) => String(x.id) === String(id));
+    if (legalLocked) { if (!c || !sameCompany(c)) { setLinkMsg(c ? `${c.name} has another NIP than this invoice — it cannot be its seller.` : ""); return; } setLinkMsg(""); setForm((f: any) => ({ ...f, counterparty: { ...(f.counterparty || {}), id: c.id } })); return; }   // v7.62.2
+    sf("counterparty", c ? { id: c.id, name: c.name, nip: c.nip || c.vatEuId } : null);
     // v7.18.7 (BP-46): the company's default VAT rate (Terms), when it has one, starts the draft — still changeable on the invoice
     const live: any = c ? (contacts || []).find((x: any) => String(x.id) === String(c.id)) : null; const dv = live?.terms?.defaultVatRate;
     if (dv !== undefined && dv !== null && dv !== "" && [0, 5, 8, 23].includes(Number(dv))) sf("vatRate", Number(dv)); }
@@ -1267,13 +1274,13 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
               <div><Lbl>Due date</Lbl><Inp type="date" value={form.dueDate} onChange={(e: any) => sf("dueDate", e.target.value)} /></div>
               <div><Lbl>Payment method</Lbl><Sel value={form.paymentMethod} onChange={(e: any) => sf("paymentMethod", e.target.value)}>{PAYMENT_METHODS.map(p => <option key={p}>{p}</option>)}</Sel></div>
               {catKey(form.category) === "WAREHOUSE" && <><div><Lbl>Period from</Lbl><Inp type="date" value={form.periodFrom} onChange={(e: any) => sf("periodFrom", e.target.value)} /></div><div><Lbl>Period to</Lbl><Inp type="date" value={form.periodTo} onChange={(e: any) => sf("periodTo", e.target.value)} /></div></>}
-              <div style={{ gridColumn: "span 2" }}><Lbl>{isSales ? "Buyer (client)" : "Seller (counterparty)"}</Lbl><Sel disabled={legalLocked} value={form.counterparty?.id || ""} onChange={(e: any) => setParty(e.target.value)}><option value="">— select —</option>{partyOptions.map((c: any) => <option key={c.id} value={c.id}>{c.name}{c.nip ? ` (NIP ${c.nip})` : ""}</option>)}</Sel></div>
+              <div style={{ gridColumn: "span 2" }}><Lbl>{isSales ? "Buyer (client)" : "Seller (counterparty)"}</Lbl>{linkMsg && <div style={{ fontSize: 11, color: "#B45309" }}>{linkMsg}</div>}<Sel disabled={legalLocked} value={form.counterparty?.id || ""} onChange={(e: any) => setParty(e.target.value)}><option value="">— select —</option>{partyOptions.map((c: any) => <option key={c.id} value={c.id}>{c.name}{c.nip ? ` (NIP ${c.nip})` : ""}</option>)}</Sel></div>
             </div>
           </Card>
 
           <Card style={{ marginBottom: 16 }}><SectionTitle>AMOUNTS & CURRENCY</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
-              <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={(e: any) => { setForm((f: any) => recomputeInvoiceMoney({ ...f, currency: e.target.value, fxRate: defaultFxRate(e.target.value) })); }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
+              <div><Lbl>Currency</Lbl><Sel disabled={legalLocked} value={form.currency} onChange={(e: any) => { setForm((f: any) => recomputeInvoiceMoney({ ...f, currency: e.target.value, fxRate: defaultFxRate(e.target.value) })); }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
               <div><Lbl>FX rate to PLN</Lbl><Inp type="number" value={form.fxRate} onChange={() => {}} disabled title="The NBP rate of the day before the issue date — filled automatically (A-AU-2)" />{fxNote && <div data-fx-note="1" style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{fxNote}</div>}</div>
               <div><Lbl>Net amount</Lbl><Inp disabled={legalLocked} type="number" value={form.netAmount} onChange={(e: any) => sf("netAmount", e.target.value)} /></div>
               <div><Lbl>VAT rate (%)</Lbl><Sel disabled={legalLocked} value={form.vatRate} onChange={(e: any) => sf("vatRate", e.target.value)}>{[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}</Sel></div>

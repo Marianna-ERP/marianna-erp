@@ -5263,6 +5263,17 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.62.2 — the seller of a legal invoice: matched by NIP without its prefix, linkable, never retyped ══
+(function v76202(){
+  console.log("\n══ v7.62.2 ══");
+  const FI = B("fakturowniaImport.domain.js"); const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("v7.62.2 (owner 30 Oct, FS I/118/2026 with a blank seller): 'PL6010038651' on the company and '6010038651' on the invoice are one NIP; on a legal invoice the company can still be linked (same NIP or name), the printed name and NIP are kept", () => {
+    const c = FI.contactForSeller({ seller: "Marta Malek AGRO MALEK sp", sellerTaxNo: "6010038651" }, [{ id: 7, name: "Someone else", nip: "PL6010038651" }], { byName: false });
+    eq(c && c.id, 7, "the NIP with its PL prefix is not matched");
+    ok(/if \(legalLocked\) \{ if \(!c \|\| !sameCompany\(c\)\)/.test(src) && /counterparty: \{ \.\.\.\(f\.counterparty \|\| \{\}\), id: c\.id \}/.test(src), "a legal invoice cannot be linked to its company");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
