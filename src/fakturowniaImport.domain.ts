@@ -421,7 +421,7 @@ export function vatFixFor(row: StagedRow, invoices: any[]): { invoiceId: any; op
 // invoiced and is never invoiced twice. Its rate is the one printed on it (FZ-06: the invoice locks its rate); when Fakturownia sends
 // none, the register's NBP rule (the day before the issue date) fills it, as for every foreign invoice.
 export function salesRowFromMapped(m: any, idx: number): any {
-  return { key: `issued:${m.fktId ?? idx}`, number: String(m.number || ""), buyer: String(m.buyerName || ""), buyerTaxNo: String(m.buyerTaxNo || ""),
+  return { key: `issued:${m.fktId ?? idx}`, number: String(m.number || ""), buyer: String(m.buyerName || ""), buyerTaxNo: String(m.buyerTaxNo || ""), ...((m as any).buyerAddr ? { buyerAddr: (m as any).buyerAddr } : {}),   // v7.62.3: the client's address kept for the company form
     date: m.issueDate || m.sellDate || localTodayISO(), dueDate: m.dueDate || "", net: num(m.netTotal), gross: num(m.grossTotal),
     currency: String(m.currency || "PLN").toUpperCase(), fxRate: num(m.exchangeRate), fktId: m.fktId, description: String(m.description || ""),
     kind: String(m.kind || "vat"), correctedFktId: m.correctedFktId ?? null, ksefNo: String(m.ksefNo || ""),   // v7.45.0 (INV2-1 / O4): kept, not dropped

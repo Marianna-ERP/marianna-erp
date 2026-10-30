@@ -139,6 +139,12 @@ const refreshOf = (row: any, invoices: any[]) => {   // v7.62.1 (DUE-1 / PAY-1 o
   if (Array.isArray(row.positions) && row.positions.length && !(Array.isArray(twin.positions) && twin.positions.length)) patch.positions = row.positions;
   if (row.dueDate && (!twin.dueDate || (twin.dueDate === twin.issueDate && row.dueDate !== twin.dueDate))) patch.dueDate = row.dueDate;
   if (row.paymentMethod && row.paymentMethod !== "Transfer" && String(twin.paymentMethod || "Transfer") === "Transfer") patch.paymentMethod = row.paymentMethod;
+  // v7.62.3 (owner 30 Oct: "+ New company prefills some companies and not others"): invoices imported before the import kept the company's NIP
+  // and address hold only its name — Fakturownia has both; the next import fills what is missing (never over what is there), so the company
+  // form opened from the invoice is prefilled for every one
+  const cp: any = twin.counterparty || {}; const tax = row.sellerTaxNo || row.buyerTaxNo; const addr = row.sellerAddr || row.buyerAddr;
+  if (tax && !cp.taxNo && !cp.nip) patch.counterparty = { ...cp, taxNo: tax };
+  if (addr && !(cp.addr && Object.values(cp.addr).some((v: any) => String(v || "").trim()))) patch.counterparty = { ...(patch.counterparty || cp), addr };
   return Object.keys(patch).length ? { invoiceId: twin.id, patch } : null; };
 
 function ImportFakturowniaModal({ invoices = [], notes = [], contacts = [], shipments = [], pos = [], onClose, onPost }: any) {
@@ -621,7 +627,7 @@ export default function Invoices(props: any) {
   if (fills.length) {   // v7.53.1 (PL-1 prerequisite completed): the lines (and kilos) of invoices registered before v7.52.0
     const byId = new Map(fills.map((x: any) => [String(x.invoiceId), x.patch || { positions: x.positions }]));   // v7.62.1: lines, due date, payment method
     setInvoices((prev: any[]) => (prev || []).map((i: any) => byId.has(String(i?.id)) ? { ...i, ...(byId.get(String(i.id)) as any) } : i));
-    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "updated", summary: `${fills.length} registered invoice(s) updated from Fakturownia (lines, due date, payment method) — PL-1 prerequisite` });
+    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "updated", summary: `${fills.length} registered invoice(s) updated from Fakturownia (lines, due date, payment method, the company's NIP and address) — PL-1 prerequisite` });
   }
   if (notesIn.length && typeof setNotes === "function") {   // v7.34.0 (CN-1): correcting invoices as notes, each once
     setNotes((prev: any[]) => { const have = new Set((prev || []).map((n: any) => String(n.source || ""))); return [...(prev || []), ...notesIn.filter((n: any) => !have.has(String(n.source)))]; });

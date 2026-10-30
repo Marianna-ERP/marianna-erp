@@ -5166,7 +5166,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ v7.53.1 / v7.54.0 ══");
   const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
   t("v7.53.1 (owner approved 29 Oct): an invoice registered without its lines gets them (and its kilos) from the next import; v7.54.0: the saved PDF's name opens it from the folder, on the invoice and the note page", () => {
-    ok(/const refreshOf = \(row: any, invoices: any\[\]\) =>/.test(src) && /onPost\(\{ regs, flips: \[\], opCosts: \[\], fixes: \[\], notesIn, fills \}\)/.test(src) && /updated from Fakturownia \(lines, due date, payment method\)/.test(src), "registered invoices are not updated");
+    ok(/const refreshOf = \(row: any, invoices: any\[\]\) =>/.test(src) && /onPost\(\{ regs, flips: \[\], opCosts: \[\], fixes: \[\], notesIn, fills \}\)/.test(src) && /updated from Fakturownia \(lines, due date, payment method/.test(src), "registered invoices are not updated");
     ok(/function PdfLink\(/.test(src) && /<PdfLink name=\{inv\.pdfSavedAs\} \/>/.test(src) && /data-note-pdf="1"/.test(src), "the PDF name does not open the PDF");
   });
 })();
@@ -5271,6 +5271,15 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const c = FI.contactForSeller({ seller: "Marta Malek AGRO MALEK sp", sellerTaxNo: "6010038651" }, [{ id: 7, name: "Someone else", nip: "PL6010038651" }], { byName: false });
     eq(c && c.id, 7, "the NIP with its PL prefix is not matched");
     ok(/if \(legalLocked\) \{ if \(!c \|\| !sameCompany\(c\)\)/.test(src) && /counterparty: \{ \.\.\.\(f\.counterparty \|\| \{\}\), id: c\.id \}/.test(src), "a legal invoice cannot be linked to its company");
+  });
+})();
+
+// ══ v7.62.3 — the company's NIP and address filled on registered invoices ══
+(function v76203(){
+  console.log("\n══ v7.62.3 ══");
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("v7.62.3 (owner 30 Oct: '+ New company' prefilled for some companies, empty for others): an invoice that holds only the company's name gets its NIP and address from the next import — never over what is there", () => {
+    ok(/if \(tax && !cp\.taxNo && !cp\.nip\) patch\.counterparty = \{ \.\.\.cp, taxNo: tax \};/.test(src) && /patch\.counterparty = \{ \.\.\.\(patch\.counterparty \|\| cp\), addr \};/.test(src), "the company's NIP / address are not filled");
   });
 })();
 
