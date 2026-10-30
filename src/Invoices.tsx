@@ -143,6 +143,9 @@ const refreshOf = (row: any, invoices: any[]) => {   // v7.62.1 (DUE-1 / PAY-1 o
   // and address hold only its name — Fakturownia has both; the next import fills what is missing (never over what is there), so the company
   // form opened from the invoice is prefilled for every one
   const cp: any = twin.counterparty || {}; const tax = row.sellerTaxNo || row.buyerTaxNo; const addr = row.sellerAddr || row.buyerAddr;
+  // v7.62.4: a purchase invoice registered with OUR company as its seller (read inverted before) gets its real seller back from Fakturownia
+  const core = (s: any) => String(s || "").toLowerCase().replace(/[^0-9a-z]/g, "").replace(/^[a-z]{2}(?=\d)/, ""); const ours = core((companyProfile() as any).nip);
+  if (twin.kind === "COST" && ours && core(cp.taxNo || cp.nip) === ours && row.seller && core(row.sellerTaxNo) !== ours) { patch.counterparty = { name: row.seller, ...(row.sellerTaxNo ? { taxNo: row.sellerTaxNo } : {}), ...(row.sellerAddr ? { addr: row.sellerAddr } : {}) }; return { invoiceId: twin.id, patch }; }
   if (tax && !cp.taxNo && !cp.nip) patch.counterparty = { ...cp, taxNo: tax };
   if (addr && !(cp.addr && Object.values(cp.addr).some((v: any) => String(v || "").trim()))) patch.counterparty = { ...(patch.counterparty || cp), addr };
   return Object.keys(patch).length ? { invoiceId: twin.id, patch } : null; };

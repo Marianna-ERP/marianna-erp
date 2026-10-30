@@ -61,11 +61,17 @@ export interface StagedRow {
  *  the seller slot of an expense record — importing that blindly made every cost
  *  invoice show Marianna as its own supplier. Whichever side's tax number (or,
  *  failing that, name) matches OUR company is us; the counterparty is the other. */
-function normTax(v: any): string { return String(v ?? "").toLowerCase().replace(/[^0-9a-z]/g, ""); }
+// v7.62.4 (owner 30 Oct, a purchase invoice read inverted): the tax number compared WITHOUT its country prefix — our NIP stored with "PL"
+// in Settings and the bare NIP from Fakturownia are one NIP; before, they differed, the name check missed a misspelt name too, and our own
+// company was taken for the supplier
+function normTax(v: any): string { return String(v ?? "").toLowerCase().replace(/[^0-9a-z]/g, "").replace(/^[a-z]{2}(?=\d)/, ""); }
+const normName = (v: any) => String(v ?? "").toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]+/g, " ").trim();
 export function counterpartySideOfMapped(m: any, myTaxNo?: string, myName?: string): { name: string; taxNo: string; addr?: any } {
-  const sellerIsUs =
-    (!!myTaxNo && normTax(m.sellerTaxNo) !== "" && normTax(m.sellerTaxNo) === normTax(myTaxNo)) ||
-    (!!myName && String(m.sellerName || "").toLowerCase().includes(String(myName).toLowerCase()));
+  const me = normTax(myTaxNo); const mine = normName(myName);
+  const buyerIsUs = !!me && normTax(m.buyerTaxNo) === me;   // the normal case: we are the buyer — the seller is the supplier
+  const sellerIsUs = !buyerIsUs && (
+    (!!me && normTax(m.sellerTaxNo) !== "" && normTax(m.sellerTaxNo) === me) ||
+    (!!mine && (normName(m.sellerName).includes(mine) || normName(m.sellerName).split(" ")[0] === mine.split(" ")[0])));
   if (sellerIsUs) return { name: String(m.buyerName || ""), taxNo: String(m.buyerTaxNo || ""), addr: m.buyerAddr };
   return { name: String(m.sellerName || ""), taxNo: String(m.sellerTaxNo || ""), addr: m.sellerAddr };
 }

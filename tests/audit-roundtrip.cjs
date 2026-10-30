@@ -5283,6 +5283,19 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.62.4 — a purchase invoice never takes our own company for its supplier ══
+(function v76204(){
+  console.log("\n══ v7.62.4 ══");
+  const FI = B("fakturowniaImport.domain.js");
+  t("v7.62.4 (owner 30 Oct, 51/2026 from Elżbieta Kowalska AGRO-KOWALSKI read inverted): our NIP is matched without its PL prefix and the buyer side is checked first — the supplier is the side that is not us", () => {
+    const inverted = { sellerName: "MARIANNA , Marianna Hazen Osman", sellerTaxNo: "5252842787", buyerName: "Elżbieta Kowalska AGRO-KOWALSKI", buyerTaxNo: "7981064870" };
+    eq(FI.counterpartySideOfMapped(inverted, "PL5252842787", "Marianna Hazem Osman").name, "Elżbieta Kowalska AGRO-KOWALSKI");
+    const normal = { sellerName: "Elżbieta Kowalska AGRO-KOWALSKI", sellerTaxNo: "7981064870", buyerName: "MARIANNA", buyerTaxNo: "5252842787" };
+    eq(FI.counterpartySideOfMapped(normal, "PL5252842787", "MARIANNA").name, "Elżbieta Kowalska AGRO-KOWALSKI");
+    ok(/a purchase invoice registered with OUR company as its seller/.test(require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8")), "an invoice already registered inverted is not corrected");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict (v7.27.8: after the asynchronous checks)
 Promise.all(pendingChecks).then(() => {
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
