@@ -128,9 +128,19 @@ async function flushUnsent(by: string): Promise<boolean> {
   for (const [k, v] of Object.entries(u)) { if (pending.has(k)) continue; try { await pushNow(k, v.json, by); } catch { emit({ status: "offline", unsent: Object.keys(readUnsent()).length } as any); return false; } }
   return !Object.keys(readUnsent()).length;
 }
+// v7.54.1 (owner 29 Oct: "after the import I have all these warnings — no other window is open"): two saves of the same list from THIS
+// window overlapped (the import changes the invoices several times in a row); the second read the version from before the first and was
+// taken for a colleague's change. Saves of one list now go one after the other — a window never clashes with itself.
+const inflight = new Map<string, Promise<void>>();
 async function pushNow(key: string, json: string, by: string, attempt = 0): Promise<void> {
-  const sent = key === "auditLog" ? await mergeAuditWithShared(json) : json;   // v7.50.2 (BUG-1): the audit trail is merged, never cut
-  await pushInner(key, sent, by, attempt); clearUnsent(key, json);
+  const prev = inflight.get(key) || Promise.resolve();
+  const run = prev.catch(() => { /* the earlier save's failure is its own */ }).then(async () => {
+    const sent = key === "auditLog" ? await mergeAuditWithShared(json) : json;   // v7.50.2 (BUG-1): the audit trail is merged, never cut
+    await pushInner(key, sent, by, attempt); clearUnsent(key, json);
+  });
+  const tail = run.catch(() => { /* reported by the caller */ }).then(() => { if (inflight.get(key) === tail) inflight.delete(key); });
+  inflight.set(key, tail);
+  return run;
 }
 /** v7.50.2 (BUG-1, owner 29 Oct: "a change to auditLog was refused"): the audit trail only grows — a window that is behind (the same person
  *  in another tab or device added lines) would send a copy without those lines and be refused. So before it is sent, the shared trail is read
@@ -179,7 +189,7 @@ async function pushInner(key: string, json: string, by: string, attempt = 0): Pr
     emit({ notices: [...(state.notices || []), ...notices], by: { ...(state.by || {}), [key]: who } });
     if (mergedJson === JSON.stringify(fresh.data)) { applyStoreFromRemote(key, fresh.data); emit({ status: "synced" }); return; }
     applyStoreFromRemote(key, merge.merged);   // the screen shows the merge at once; known still holds theirs, so it is pushed next
-    return pushNow(key, mergedJson, by, attempt + 1);   // pinned to their version; a third colleague in between merges again
+    return pushInner(key, mergedJson, by, attempt + 1);   // pinned to their version; a third colleague in between merges again (v7.54.1: within the same turn, no queue)
   }
   // the old rule, for a store that is not records with ids (or after three tries): keep my copy aside, take theirs, say so
   try { window.localStorage.setItem(`marianna:conflict:${key}:${now}`, json); } catch { /* best effort */ }

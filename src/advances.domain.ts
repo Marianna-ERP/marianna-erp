@@ -88,3 +88,15 @@ export function linkAdvanceToProforma(adv: AdvancePayment, invoice: any): Advanc
   if (String(invoice?.currency || "PLN").toUpperCase() !== adv.currency) return { error: `Currency mismatch — the pro-forma is in ${invoice?.currency}, the advance in ${adv.currency}.` };
   return { ...adv, proformaId: invoice.id, proformaNumber: String(invoice.number || "") };
 }
+
+/** v7.62.0 (ACC-2, owner 30 Oct — CargoX: "we pay on a pro-forma; after the payment they issue the final invoice, with another number"):
+ *  the final invoices an open advance can settle — the same company, the same currency, not a pro-forma, still open — the one whose open
+ *  amount is closest to what remains of the advance first. The pro-forma itself is never a payable; the advance waits for the final one. */
+export function finalInvoicesFor(adv: any, invoices: any[]): any[] {
+  const party = (x: any) => String(x?.counterparty?.id ?? x?.partyId ?? "") || String(x?.counterparty?.name ?? x?.partyName ?? "").trim().toLowerCase();
+  const p = String(adv?.partyId ?? "") || String(adv?.partyName ?? adv?.counterparty?.name ?? "").trim().toLowerCase(); const left = advanceRemaining(adv);
+  const open = (i: any) => Math.round(((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)) * 100) / 100;
+  return (invoices || []).filter((i: any) => i && !i.isProforma && !["Cancelled", "Draft", "Paid"].includes(String(i.paymentStatus)) && Number(i.grossAmount) > 0
+      && String(i.currency || "PLN").toUpperCase() === String(adv?.currency || "PLN").toUpperCase() && (party(i) === p || String(i.counterparty?.name || "").trim().toLowerCase() === String(adv?.partyName || "").trim().toLowerCase()) && open(i) > 0.005)
+    .sort((a: any, b: any) => Math.abs(open(a) - left) - Math.abs(open(b) - left));
+}

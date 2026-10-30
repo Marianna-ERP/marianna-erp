@@ -45,7 +45,7 @@ export interface StagedRow {
   seller: string;
   sellerTaxNo?: string;
   sellerAddr?: { street?: string; postcode?: string; city?: string; country?: string };   // v7.32.1 (INV-QC): kept for "New company from this invoice"
-  ksefNo?: string; isCorrection?: boolean; correctedFktId?: any;   // v7.45.0 (INV2-1 / O4)
+  ksefNo?: string; isCorrection?: boolean; correctedFktId?: any; paymentMethod?: string; positions?: any[];   // v7.45.0 (INV2-1 / O4) · v7.57.0
   date: string;        // issue date
   dueDate?: string;
   net: number;
@@ -76,6 +76,7 @@ export function stagedRowFromMapped(m: any, idx: number, myTaxNo?: string, myNam
   return {
     ...(isCorrectionRow({ kind: m.kind, gross: m.grossTotal, number: m.number, description: m.description }) ? { isCorrection: true, correctedFktId: m.correctedFktId ?? null } : {}),   // v7.45.0 (INV2-1): the one recogniser
     ksefNo: String(m.ksefNo || ""),   // v7.45.0 (INV2-1 / O4)
+    paymentMethod: m.paymentMethod || "Transfer",   // v7.57.0 (PAY-1)
     key: `api:${m.fktId ?? idx}`,
     number: String(m.number || ""),
     seller: party.name,
@@ -111,7 +112,10 @@ export function contactForSeller(row: { seller: string; sellerTaxNo?: string }, 
     // vatNumber/taxNo names were phantoms).
     const cNip = norm(c.nip).replace(/[^0-9a-z]/g, "");
     const cVatEu = norm(c.vatEuId).replace(/[^0-9a-z]/g, "");
-    if (tax && ((cNip && tax === cNip) || (cVatEu && tax === cVatEu))) return true;
+    // v7.62.2 (owner 30 Oct, FS I/118/2026 with no seller): the NIP compared WITHOUT its country prefix — "PL6010038651" on the company and
+    // "6010038651" on the invoice are one NIP (the strict match at posting missed it, so the invoice kept its seller as text only)
+    const core = (s: string) => s.replace(/^[a-z]{2}(?=\d)/, "");
+    if (tax && ((cNip && core(tax) === core(cNip)) || (cVatEu && core(tax) === core(cVatEu)))) return true;
     if (!byName) return false;
     const cName = norm(c.name);
     return !!cName && (cName === name || (name.length > 4 && (cName.includes(name) || name.includes(cName))));
@@ -238,7 +242,7 @@ const vatRate = vatRateOf(row.net, row.gross);
     counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller, ...(row.sellerTaxNo ? { taxNo: row.sellerTaxNo } : {}), ...(row.sellerAddr ? { addr: row.sellerAddr } : {}) },
     ...((row as any).ksefNo ? { ksefNo: String((row as any).ksefNo) } : {}),   // v7.45.0 (O4): the KSeF number kept   // v7.32.1 (INV-QC): what the invoice knows, for a company created from it
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "",
-    paymentMethod: "Transfer",
+    paymentMethod: (row as any).paymentMethod || "Transfer",   // v7.57.0 (PAY-1): the method Fakturownia gives
     currency: row.currency, fxRate: resolveFxRate(row.fxRate, row.currency),
     netAmount: net, vatRate, ...(incomplete ? { amountsIncomplete: true } : {}),
     positions: [], links,
@@ -417,10 +421,11 @@ export function vatFixFor(row: StagedRow, invoices: any[]): { invoiceId: any; op
 // invoiced and is never invoiced twice. Its rate is the one printed on it (FZ-06: the invoice locks its rate); when Fakturownia sends
 // none, the register's NBP rule (the day before the issue date) fills it, as for every foreign invoice.
 export function salesRowFromMapped(m: any, idx: number): any {
-  return { key: `issued:${m.fktId ?? idx}`, number: String(m.number || ""), buyer: String(m.buyerName || ""), buyerTaxNo: String(m.buyerTaxNo || ""),
+  return { key: `issued:${m.fktId ?? idx}`, number: String(m.number || ""), buyer: String(m.buyerName || ""), buyerTaxNo: String(m.buyerTaxNo || ""), ...((m as any).buyerAddr ? { buyerAddr: (m as any).buyerAddr } : {}),   // v7.62.3: the client's address kept for the company form
     date: m.issueDate || m.sellDate || localTodayISO(), dueDate: m.dueDate || "", net: num(m.netTotal), gross: num(m.grossTotal),
     currency: String(m.currency || "PLN").toUpperCase(), fxRate: num(m.exchangeRate), fktId: m.fktId, description: String(m.description || ""),
     kind: String(m.kind || "vat"), correctedFktId: m.correctedFktId ?? null, ksefNo: String(m.ksefNo || ""),   // v7.45.0 (INV2-1 / O4): kept, not dropped
+    paymentMethod: m.paymentMethod || "Transfer",   // v7.57.0 (PAY-1)
     positions: Array.isArray(m.positions) ? m.positions : [],   // v7.52.0: the invoice lines (kilos)
     ...(isCorrectionRow({ kind: m.kind, gross: m.grossTotal, number: m.number, description: m.description }) ? { isCorrection: true } : {}) };
 }
@@ -449,7 +454,7 @@ export function buildIssuedSalesInvoice(row: any, soNumber: string, contact: any
     counterparty: contact ? { id: contact.id, name: contact.name, ...(contact.nip ? { nip: contact.nip } : {}) } : { name: row.buyer, ...(row.buyerTaxNo ? { taxNo: row.buyerTaxNo } : {}) },   // v7.35.0 (CR-2): the NIP kept on the copy
     ...(row.ksefNo ? { ksefNo: String(row.ksefNo) } : {}),   // v7.45.0 (O4)
     ...(Array.isArray(row.positions) && row.positions.length ? { positions: row.positions } : {}),   // v7.52.0: the kilos invoiced
-    issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "", paymentMethod: "Transfer",
+    issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "", paymentMethod: row.paymentMethod || "Transfer",
     currency: row.currency, fxRate: own ? num(row.fxRate) : resolveFxRate(defaultFxRate(row.currency), row.currency), ...(own ? { fxTableDate: row.date, fxSource: "fakturownia" } : {}),
     netAmount: net, vatRate: vatRateOf(row.net, row.gross), ...(!num(row.net) || !num(row.gross) ? { amountsIncomplete: true } : {}),
     positions: [], links: soNumber ? [{ type: "SO", number: soNumber }] : [],

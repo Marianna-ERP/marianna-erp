@@ -102,6 +102,7 @@
     "../src/corrections.domain.ts",
     "../src/overdue.domain.ts",
     "../src/correctionCosts.domain.ts",
-    "../src/invoiceKg.ts"
+    "../src/invoiceKg.ts",
+    "../src/monthReport.domain.ts"
   ]
 }

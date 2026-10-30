@@ -93,7 +93,7 @@ export function offsetNoteAgainstInvoice(note: any, invoice: any, deps: { nextId
   const open = outstandingAmount(invoice);
   const amt = r2(Math.min(remaining, open));
   if (!(amt > 0)) return { invoice, note, appliedAmount: 0, error: "Nothing left to offset." };
-  const inv2 = applyPaymentEvent(invoice, { date: deps.todayISO(), amount: amt, method: "Offset / compensation", note: `${note.noteType} note ${note.number || note.id} — claim ${note.relatedRef || ""}`.trim(), source }, deps.nextId);
+  const inv2 = applyPaymentEvent(invoice, { date: deps.todayISO(), amount: amt, method: "Offset", note: `${note.noteType} note ${note.number || note.id} — claim ${note.relatedRef || ""}`.trim(), source }, deps.nextId);
   const note2 = { ...note, appliedAmount: r2(num(note.appliedAmount) + amt), appliedTo: [...(note.appliedTo || []), { invoiceId: invoice.id, invoiceNumber: invoice.number, amount: amt, date: deps.todayISO() }], status: r2(num(note.amount) - num(note.appliedAmount) - amt) <= 0.005 ? "Settled" : (note.status === "Draft" ? "Issued" : note.status) };
   return { invoice: inv2, note: note2, appliedAmount: amt };
 }

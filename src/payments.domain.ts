@@ -24,7 +24,17 @@ export interface PaymentEvent {
   note?: string;
 }
 
-export const PAYMENT_METHODS = ["Bank transfer", "Cash", "Offset / compensation", "Other"];
+/** v7.57.0 (PAY-1, owner 30 Oct: "payment method — more than one source; unify"): THE ONE LIST of payment methods — an invoice's method
+ *  (as Fakturownia gives it) and a payment's channel read the same list; the company's payment TERMS (days) are a separate fact. */
+export const PAYMENT_METHODS = ["Transfer", "Card", "Cash", "Offset", "Other"];
+/** Fakturownia's payment_type → the one list (transfer, card, cash, compensation / offset, anything else). */
+export function paymentMethodFrom(raw: any): string {
+  const s = String(raw ?? "").toLowerCase().trim();
+  if (!s || /transfer|przelew|bank/.test(s)) return "Transfer"; if (/card|karta|karty/.test(s)) return "Card"; if (/cash|got[oó]wk/.test(s)) return "Cash";
+  if (/compens|offset|kompens|potr/.test(s)) return "Offset"; return "Other";
+}
+/** An older stored value in the one list ("Bank transfer" → Transfer, "Compensation" → Offset, "Prepaid" → Other). */
+export function normalizeMethod(v: any): string { return PAYMENT_METHODS.includes(String(v)) ? String(v) : paymentMethodFrom(v); }
 
 /** Normalise: returns the invoice's payment events, synthesising one from a
  *  legacy paidAmount when no events exist yet. Pure — does not mutate. */
@@ -68,7 +78,7 @@ function statusFor(inv: any, paid: number): string {
 export function applyPaymentEvent(inv: any, evt: { date: string; amount: any; method?: string; note?: string; source?: string; settlementFxRate?: any }, nextId: () => any): any {
   const events = [...normalizeInvoicePayments(inv), {
     id: nextId(), date: String(evt.date || "").slice(0, 10), amount: r2(n(evt.amount)),
-    method: evt.method || "Bank transfer", note: evt.note || "",
+    method: normalizeMethod(evt.method || "Transfer"), note: evt.note || "",
     // v6.68.0 (F-2): the bank's actual conversion rate for this payment — the
     // realized FX gain/loss derives from (settlement − invoice) per event.
     ...(n(evt.settlementFxRate) > 0 ? { settlementFxRate: r2n4(n(evt.settlementFxRate)), settledPLN: r2(r2n4(n(evt.settlementFxRate)) * r2(n(evt.amount))) } : {}),

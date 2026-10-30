@@ -19,6 +19,7 @@ export function openOf(inv: any, notes: any[] = []): number {
 export function isOverdue(inv: any, todayISO: string, notes: any[] = [], contacts: any[] = []): boolean {
   if (!inv) return false; const st = S(inv.paymentStatus);
   if (st === "Draft" || st === "Cancelled" || st === "Paid" || inv.isProforma) return false;
+  if (["Card", "Cash"].includes(String(inv.paymentMethod || ""))) return false;   // v7.56.0 (DUE-1): paid at the counter — never "due"
   if (!(Number(inv.grossAmount ?? inv.grossPLN) > 0)) return false;   // a correction (a negative document) is never overdue
   const due = dueDateOf(inv, contacts); if (!due || due >= S(todayISO).slice(0, 10)) return false;
   return openOf(inv, notes) > 0.009;

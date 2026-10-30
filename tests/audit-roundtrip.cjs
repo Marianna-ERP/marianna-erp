@@ -1233,7 +1233,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(note.currency, "PLN"); approx(note.amount, 1200);
     const inv = { id: 3, kind: "SALES", number: "FV/3", currency: "PLN", grossAmount: 5000, paidAmount: 0, paymentStatus: "Sent", payments: [], counterparty: { name: "Agromax" } };
     const r = CP.offsetNoteAgainstInvoice(note, inv, deps);
-    ok(!r.error); approx(r.appliedAmount, 1200); approx(pay.outstandingAmount(r.invoice), 3800); eq(r.invoice.payments[0].method, "Offset / compensation"); eq(r.note.status, "Settled");
+    ok(!r.error); approx(r.appliedAmount, 1200); approx(pay.outstandingAmount(r.invoice), 3800); eq(r.invoice.payments[0].method, "Offset"); eq(r.note.status, "Settled");
     ok(CP.offsetNoteAgainstInvoice(r.note, r.invoice, deps).error, "applying twice is refused");
   });
   t("CL-8: the counterparty's agreed notice period overrides the legal default", () => {
@@ -5166,8 +5166,120 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ v7.53.1 / v7.54.0 ══");
   const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
   t("v7.53.1 (owner approved 29 Oct): an invoice registered without its lines gets them (and its kilos) from the next import; v7.54.0: the saved PDF's name opens it from the folder, on the invoice and the note page", () => {
-    ok(/const lineless = \(row: any, invoices: any\[\]\) =>/.test(src) && /onPost\(\{ regs, flips: \[\], opCosts: \[\], fixes: \[\], notesIn, fills \}\)/.test(src) && /given their lines \(kilos\) from Fakturownia/.test(src), "the lines are not filled for registered invoices");
+    ok(/const refreshOf = \(row: any, invoices: any\[\]\) =>/.test(src) && /onPost\(\{ regs, flips: \[\], opCosts: \[\], fixes: \[\], notesIn, fills \}\)/.test(src) && /updated from Fakturownia \(lines, due date, payment method/.test(src), "registered invoices are not updated");
     ok(/function PdfLink\(/.test(src) && /<PdfLink name=\{inv\.pdfSavedAs\} \/>/.test(src) && /data-note-pdf="1"/.test(src), "the PDF name does not open the PDF");
+  });
+})();
+
+// ══ v7.54.1 — one save at a time per list; the notices in a panel ══
+(function v75401(){
+  console.log("\n══ v7.54.1 — no self-clash; notices panel ══");
+  const fsx = require("fs"), px = require("path"); const rs = fsx.readFileSync(px.join(__dirname, "../src/remoteStore.ts"), "utf8"), sg = fsx.readFileSync(px.join(__dirname, "../src/SharedStoreGate.tsx"), "utf8");
+  t("v7.54.1 (owner 29 Oct, warnings after the import with no other window open): saves of one list go one after the other — a window never clashes with itself; the notices sit in one badge and a panel with 'Use mine for all' and 'OK all'", () => {
+    ok(/const inflight = new Map<string, Promise<void>>\(\);/.test(rs) && /const prev = inflight\.get\(key\) \|\| Promise\.resolve\(\);/.test(rs), "saves of one list still overlap");
+    ok(/return pushInner\(key, mergedJson, by, attempt \+ 1\);/.test(rs), "a retry would wait for itself");
+    ok(/data-sync-notices="1"/.test(sg) && /Use mine for all/.test(sg) && /OK all/.test(sg), "the notices still run across the top bar");
+  });
+})();
+
+// ══ v7.55.0 — ACC-1: a legal document's content is read-only ══
+(function v75500(){
+  console.log("\n══ v7.55.0 — ACC-1 ══");
+  const IV = B("invoicing.js"); const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("ACC-1 (v7.55.0, owner 30 Oct): an invoice imported from or issued in Fakturownia is a legal document — its legal fields cannot change in the ERP, it cannot be deleted; category, due date, payment method, links and notes stay editable", () => {
+    ok(IV.isLegalDocument({ source: "fakturownia:12" }) && IV.isLegalDocument({ fakturownia: { ref: 5 } }) && !IV.isLegalDocument({ source: "manual:1" }), "a legal document not recognised");
+    ok(IV.LEGAL_FIELDS.includes("netAmount") && !IV.LEGAL_FIELDS.includes("dueDate") && !IV.LEGAL_FIELDS.includes("paymentMethod") && !IV.LEGAL_FIELDS.includes("category"), "the wrong fields are locked");
+    ok(/if \(legalLocked && LEGAL_FIELDS\.includes\(k\)\) return;/.test(src) && /!isLegalDocument\(inv\) && <button onClick=\{\(\) => onMarkStatus\("Cancelled"\)\}/.test(src) && /data-legal-locked="1"/.test(src), "the form or the page does not respect it");
+  });
+})();
+
+// ══ v7.56.0 DUE-1 · v7.57.0 PAY-1 · v7.58.0 UI-1 ══
+(function v75800(){
+  console.log("\n══ v7.56.0–v7.58.0 — due dates, payment methods, the invoice page ══");
+  const FK = B("fakturownia.js"), PD = B("payments.domain.js"), OD = B("overdue.domain.js"); const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("DUE-1 / PAY-1 / UI-1 (owner approved 30 Oct): the due date from Fakturownia's date or its number of days; card stays card (one list of methods); paid at the counter is never overdue; the invoice page's line shows the company, readable", () => {
+    eq(FK.mapInvoice({ id: 1, issue_date: "2026-10-20", payment_to: "", payment_to_kind: "14", payment_type: "card" }).dueDate, "2026-11-03");
+    eq(FK.mapInvoice({ id: 2, issue_date: "2026-10-20", payment_to: "2026-11-30" }).dueDate, "2026-11-30");
+    eq(FK.mapInvoice({ id: 3, payment_type: "card" }).paymentMethod, "Card"); eq(PD.paymentMethodFrom("przelew"), "Transfer"); eq(PD.normalizeMethod("Bank transfer"), "Transfer");
+    ok(!OD.isOverdue({ id: 4, paymentStatus: "Issued", grossAmount: 100, dueDate: "2026-10-01", paymentMethod: "Card" }, "2026-10-30"), "a card payment is overdue");
+    ok(/data-invoice-subtitle="1"/.test(src) && !/\{\(CATEGORY_META\[inv\.category\] \|\| CATEGORY_META\.OTHER\)\.label\} · \{inv\.counterparty\?\.name/.test(src), "the type is repeated under the number");
+  });
+})();
+
+// ══ v7.59.0 — IMP-2: the import window's standard view ══
+(function v75900(){
+  console.log("\n══ v7.59.0 — IMP-2 ══");
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("IMP-2 (v7.59.0): every import row uses the same fixed columns (no row stretches its own), the headers name what is under them, each row says its state, and the counts by state sit above", () => {
+    ok(!/gridTemplateColumns: "26px 78px 1\.3fr 1fr 110px 130px 1\.6fr"/.test(src) && /minmax\(0, 1\.3fr\) minmax\(0, 0\.9fr\) 150px 140px minmax\(0, 1\.6fr\)/.test(src), "rows still size their own columns");
+    ok(/data-import-state="1"/.test(src) && /data-import-summary="1"/.test(src) && /"DATE · STATE", "SELLER", "NUMBER", "AMOUNTS", "CATEGORY", "LINK"/.test(src), "the state or the summary is missing");
+  });
+})();
+
+// ══ v7.60.0 — CAT-1 + ACC-3: one category list by source document; the accountant's codes ══
+(function v76000(){
+  console.log("\n══ v7.60.0 — CAT-1 / ACC-3 ══");
+  const OC = B("operationalCosts.js"); const fsx = require("fs"), px = require("path");
+  t("CAT-1 / ACC-3 (v7.60.0, owner 30 Oct): one list of cost categories, each with its source document and P/L line; an invoice is never offered salary, ZUS, taxes or bank fees; the accountant's account codes are a mapping in Settings › Company", () => {
+    const inv = OC.categoriesFor("invoice").map(c => c.key); ok(!inv.includes("salary") && !inv.includes("bank_fees") && !inv.includes("zus") && inv.includes("office_rent") && inv.includes("insurance"), "an invoice is offered a bank-only category: " + inv.join());
+    ok(OC.categoriesFor("bank").some(c => c.key === "bank_fees") && OC.categoriesFor("manual").length === OC.OPERATIONAL_COST_CATEGORIES.length, "the bank / manual lists are wrong");
+    ok(/data-account-codes="1"/.test(fsx.readFileSync(px.join(__dirname, "../src/Settings.tsx"), "utf8")), "no account codes in Settings");
+  });
+})();
+
+// ══ v7.61.0 — RPT-M: the month report for the accountant ══
+(function v76100(){
+  console.log("\n══ v7.61.0 — RPT-M ══");
+  const MR = B("monthReport.domain.js");
+  t("RPT-M (v7.61.0, owner approved 30 Oct): the month report — revenue less credit notes, costs by the owner's lines with account codes, open balances, VAT, checks", () => {
+    const r = MR.monthReport("2026-09", { accountCodes: { sales: "701", goods: "301" },
+      invoices: [{ id: 1, kind: "SALES", paymentStatus: "Issued", issueDate: "2026-09-10", netAmount: 1000, grossAmount: 1230, currency: "PLN", links: [] }, { id: 2, kind: "COST", category: "GOODS", paymentStatus: "Issued", issueDate: "2026-09-12", netAmount: 600, grossAmount: 600, currency: "PLN" }],
+      notes: [{ direction: "outgoing", noteType: "CREDIT", date: "2026-09-20", amountPLN: 100, invoiceId: 1 }], operationalCosts: [{ date: "2026-09-05", category: "office_rent", amountPLN: 50 }, { date: "2026-09-05", category: "bank_fees", amountPLN: 10 }] });
+    const pl = Object.fromEntries(r.pl.map(x => [x.line, x.pln])); eq(pl.revenue, 900); eq(pl.cargo, 600); eq(pl.overheads, 50); eq(pl.financial, 10); eq(r.result, 240);
+    eq(r.pl.find(x => x.line === "revenue").code, "701"); eq(r.vat.salesVatPLN, 230); eq(r.checks.find(c => /not linked to their SO/.test(c.check)).count, 1);
+  });
+})();
+
+// ══ v7.62.0 — ACC-2: the advance paid on a pro-forma settles the final invoice ══
+(function v76200(){
+  console.log("\n══ v7.62.0 — ACC-2 ══");
+  const AD = B("advances.domain.js");
+  t("ACC-2 (v7.62.0, owner 30 Oct — CargoX): an open advance proposes the final invoice it can settle — same company and currency, not the pro-forma, closest in amount", () => {
+    const adv = { id: 1, partyName: "CargoX d.o.o.", currency: "EUR", amount: 175, applied: [] };
+    const invs = [{ id: 10, number: "PF-1", isProforma: true, paymentStatus: "Issued", grossAmount: 175, currency: "EUR", counterparty: { name: "CargoX d.o.o." } },
+      { id: 11, number: "INV-2026-77", paymentStatus: "Issued", grossAmount: 175, currency: "EUR", counterparty: { name: "CargoX d.o.o." } },
+      { id: 12, number: "INV-9", paymentStatus: "Issued", grossAmount: 175, currency: "PLN", counterparty: { name: "CargoX d.o.o." } }];
+    eq(AD.finalInvoicesFor(adv, invs).map(i => i.number).join(), "INV-2026-77");
+  });
+})();
+
+// ══ v7.62.1 — registered invoices get their due date and payment method; the import rows grouped ══
+(function v76201(){
+  console.log("\n══ v7.62.1 ══");
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("v7.62.1 (DUE-1 / PAY-1 / IMP-2 completed): an invoice already registered gets its lines, a missing due date and a card / cash method from the next import — never over a value set by hand; the no-net warning sits in the row's state; rows grouped by state", () => {
+    ok(/patch\.dueDate = row\.dueDate;/.test(src) && /patch\.paymentMethod = row\.paymentMethod;/.test(src), "the due date or the payment method is not refreshed");
+    ok(/const rankOf = \(r: any\) =>/.test(src) && /Fakturownia sent no net or gross amount — check it there before posting/.test(src), "the rows are not grouped, or the warning is lost");
+  });
+})();
+
+// ══ v7.62.2 — the seller of a legal invoice: matched by NIP without its prefix, linkable, never retyped ══
+(function v76202(){
+  console.log("\n══ v7.62.2 ══");
+  const FI = B("fakturowniaImport.domain.js"); const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("v7.62.2 (owner 30 Oct, FS I/118/2026 with a blank seller): 'PL6010038651' on the company and '6010038651' on the invoice are one NIP; on a legal invoice the company can still be linked (same NIP or name), the printed name and NIP are kept", () => {
+    const c = FI.contactForSeller({ seller: "Marta Malek AGRO MALEK sp", sellerTaxNo: "6010038651" }, [{ id: 7, name: "Someone else", nip: "PL6010038651" }], { byName: false });
+    eq(c && c.id, 7, "the NIP with its PL prefix is not matched");
+    ok(/if \(legalLocked\) \{ if \(!c \|\| !sameCompany\(c\)\)/.test(src) && /counterparty: \{ \.\.\.\(f\.counterparty \|\| \{\}\), id: c\.id \}/.test(src), "a legal invoice cannot be linked to its company");
+  });
+})();
+
+// ══ v7.62.3 — the company's NIP and address filled on registered invoices ══
+(function v76203(){
+  console.log("\n══ v7.62.3 ══");
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8");
+  t("v7.62.3 (owner 30 Oct: '+ New company' prefilled for some companies, empty for others): an invoice that holds only the company's name gets its NIP and address from the next import — never over what is there", () => {
+    ok(/if \(tax && !cp\.taxNo && !cp\.nip\) patch\.counterparty = \{ \.\.\.cp, taxNo: tax \};/.test(src) && /patch\.counterparty = \{ \.\.\.\(patch\.counterparty \|\| cp\), addr \};/.test(src), "the company's NIP / address are not filled");
   });
 })();
 

@@ -13,6 +13,7 @@ import { localTodayISO, formatDMY } from "./dates";
 import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { settlementState } from "./invoicePlus.domain";   // v7.16.5 (A-RV-14): the SO view shows our payment state, not Fakturownia's flag
 import { Inp, LOCATION_TYPES, LifecycleBar, QualityBadge, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, useSalesData, lotColorationOf } from "./SalesOrders";
+import { PAYMENT_METHODS } from "./payments.domain";   // v7.57.0 (PAY-1)
 import { parseNum } from "./numbers";   // v7.42.0 (AUD3-B6)
 import { DatesChain } from "./DatesChain";   // v7.27.18 (A-D-4)
 import { soDatesChain } from "./datesChain.domain";   // v7.27.18 (A-D-4)
@@ -75,7 +76,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
               <div><Lbl>Due date</Lbl><Inp value={invoice.dueDate} onChange={e => sf("dueDate", e.target.value)} type="date" /></div>
               <div><Lbl>Payment method</Lbl>
                 <Sel value={invoice.paymentMethod} onChange={e => sf("paymentMethod", e.target.value)}>
-                  {["Transfer", "Cash", "Card", "Compensation", "Prepaid"].map(p => <option key={p}>{p}</option>)}
+                  {PAYMENT_METHODS.map(p => <option key={p}>{p}</option>)}
                 </Sel>
               </div>
             </div>
